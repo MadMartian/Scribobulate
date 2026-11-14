@@ -907,6 +907,52 @@ mod export_doc_tests {
         assert!(doc.has_unembedded_remote_images);
     }
 
+    /// TDD 2.21b — an `<img>`'s declared size reaches the model (a `<picture>`'s too, from
+    /// the fallback `<img>` after its `<source>`), and the HTML sink writes it.
+    #[test]
+    fn a_declared_img_size_reaches_the_model_and_the_html() {
+        let opts = RenderOptions {
+            doc_dir: None,
+            allow_unsafe_images: true,
+        };
+        let size = |w, h| {
+            Some(crate::renderer::DeclaredSize {
+                width: w,
+                height: h,
+            })
+        };
+        let bare = find_image(&build(
+            "<img src=\"https://e.com/a.png\" width=\"100\">\n",
+            &opts,
+        ))
+        .expect("an image");
+        assert_eq!(bare.declared, size(Some(100), None));
+        let pic = find_image(&build(
+            "<picture><source srcset=\"https://e.com/a.webp\"><img src=\"https://e.com/a.png\" height=\"40\"></picture>\n",
+            &opts,
+        ))
+        .expect("an image");
+        assert_eq!(pic.declared, size(None, Some(40)));
+        let md = find_image(&build("![a](https://e.com/a.png)\n", &opts)).expect("an image");
+        assert_eq!(md.declared, None);
+
+        let doc = build("<img src=\"https://e.com/a.png\" width=\"100\">\n", &opts);
+        let theme = crate::theme::active();
+        let ink = gtk::gdk::RGBA::BLACK;
+        let palette = crate::palette::Palette::from_base(
+            gtk::gdk::RGBA::WHITE,
+            ink,
+            ink,
+            gtk::gdk::RGBA::new(0.2, 0.5, 0.9, 1.0),
+            &theme,
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        assert!(
+            html.contains("style=\"width:100px;height:auto\" src=\"https://e.com/a.png\""),
+            "{html}"
+        );
+    }
+
     fn find_image(doc: &ExportDoc) -> Option<crate::export::ImageRef> {
         fn walk(bs: &[Block]) -> Option<crate::export::ImageRef> {
             for b in bs {

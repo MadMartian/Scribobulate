@@ -326,6 +326,16 @@
 - **And** an image narrower than the pane keeps its natural size, left-aligned — it is **not** stretched to fill the column
 - **And** this fit is decided **at 100% zoom**, and is then scaled by the zoom level (13.11) — so above 100% an image that had been fitted to the pane grows past it and the preview offers a horizontal scrollbar for it. Everything above describes the default view, which is where the no-scrollbar guarantee holds; a reader who has deliberately zoomed in has asked for the larger image and gets the scrollbar with it
 
+### 2.21b An `<img>`'s declared width and height size it in the preview
+- **Given** a raw-HTML `<img>` with a `width` and/or `height` attribute, as a bare tag or as a `<picture>`'s fallback
+- **When** it is rendered
+- **Then** the image is drawn that many CSS pixels wide and/or tall, scaled by the zoom level like every pixel metric (13.11); when only one is given the other follows the image's own aspect ratio, and when both are given both are taken as written
+- **And** the declared size is still clamped to the pane's width under 2.21 (aspect preserved), so `width="5000"` fits the pane rather than forcing a scrollbar at 100% zoom
+- **And** a value that is not a positive whole number of pixels (`100` or `100px`) — a percentage, `auto`, `0`, a negative, another unit — is ignored, and the image keeps its natural size on that axis
+- **And** a Markdown `![alt](src)` image, which carries no such attribute, is unchanged
+- **And** an HTML or PDF export carries the same declared size (at zoom 1.0), read by the same parse: the HTML `<img>` is written at that width or height with the other following its aspect, and the PDF draws it at that many CSS pixels converted to points, each still clamped to the column (HTML `max-width: 100%`, PDF page width)
+- **Rationale** an author who writes `width="100"` is almost always shrinking a large logo or badge to a sensible size, and a viewer that draws it at the pane's width reads as ignoring the author. The attribute only scales an image that was already admitted and decoded, so it adds no decode or memory cost
+
 ### 2.23 Rich image embeds — raw-HTML `<picture>` and `<img>`
 - **Given** a document with a raw-HTML `<picture>` element (ordered `<source srcset=…>` candidates followed by an `<img src=…>` fallback), or a bare `<img src=…>` element
 - **When** it is rendered
@@ -540,7 +550,7 @@
 - **Given** a document that opens with a front-matter block — YAML between `---` fences, or TOML between `+++` fences
 - **When** it is displayed in the preview
 - **Then** the block renders as a **collapsed disclosure** labelled *Frontmatter*, whose body is the metadata shown as a code block in its own dialect — the same summary line, the same fold, the same copy button and the same highlighting any disclosure and any fenced code block get, because they *are* those two renders rather than a third one written for this
-- **And** no fence line reaches the page as text under either fold state
+- **And** no fence line reaches the page as text under either fold state — the collapsed summary's dimmed snippet of the metadata included, which shows it as the author wrote it: no `+++` or `---` fence, and straight quotes left straight
 - **And** copying across the block yields the front matter the author wrote, fences included, with no `<details>` or summary label introduced
 - **And** the outline sidebar lists no heading for it, the word count does not count it, and an HTML or PDF export omits it entirely — these surfaces carry what the document *says*, and front matter is what it says about **itself**
 - **And** a document that merely opens with a horizontal rule is not front matter: the block must be closed, and its first line must carry a key rather than be blank
@@ -3270,6 +3280,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme file with invalid syntax, out-of-range spacing, or values containing stylesheet punctuation
 - **When** the app starts
 - **Then** it starts normally and renders legibly on a fallback theme — no crash, no broken layout, and no styling escaping the surface it was meant for
+- **And** a key a user file states with a value its key refuses (a `background` that is no colour, say) costs that key alone: a theme the app ships keeps its own value for it, never the desktop's — Sepia's dark ink must not land on a dark desktop's page
 
 ### 18.12 The chosen theme persists
 - **Given** Sepia is selected

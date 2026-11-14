@@ -4255,6 +4255,23 @@ mod gtk_integration_tests {
         }
     }
 
+    /// **Rubric 2.26c** — a `<details>` that is a list item's FIRST child sits on the
+    /// marker's own row: the summary line starts where the item starts, rather than on
+    /// the row after an empty one the bullet is drawn beside.
+    #[gtktest::test]
+    fn a_disclosure_first_in_a_list_item_shares_the_bullets_row() {
+        let md = "- one\n- <details>\n  <summary>Listed</summary>\n\n  body\n\n  </details>\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        assert!(!slice.contains("\n\n"), "no empty row in {slice:?}");
+        let marker = products.install.decor.list_markers[1].first_line;
+        let toggle = products.disclosure_toggles[0].summary_offset;
+        assert_eq!(
+            marker, toggle,
+            "bullet and summary share one row: {slice:?}"
+        );
+    }
+
     /// **Rubric 2.26d** — a `<details>` with no `<summary>` shows the default label
     /// and still folds.
     ///
