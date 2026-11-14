@@ -44,6 +44,39 @@ pub(crate) fn zoomed_extent(nat_w: i32, nat_h: i32, zoom: f64) -> Extent {
     }
 }
 
+/// [`zoomed_extent`] with an `<img>`'s declared `width`/`height` (CSS pixels, scaled by
+/// `zoom` like every pixel metric) standing in for the intrinsic size on the axes it
+/// states. One axis stated: the other follows the intrinsic aspect. Both: both are
+/// taken as written. Neither: [`zoomed_extent`] exactly. The pane clamp is the
+/// caller's, as for any image (TDD 2.21, 2.21b).
+pub(crate) fn declared_extent(
+    nat_w: i32,
+    nat_h: i32,
+    declared: Option<super::picture::DeclaredSize>,
+    zoom: f64,
+) -> Extent {
+    let (nat_w, nat_h) = (nat_w.max(1), nat_h.max(1));
+    let px = |n: i32| crate::theme::px(n, zoom).max(1);
+    match declared.map(|d| (d.width, d.height)) {
+        Some((Some(w), Some(h))) => Extent { w: px(w), h: px(h) },
+        Some((Some(w), None)) => {
+            let w = px(w);
+            Extent {
+                w,
+                h: keep_aspect(nat_w, nat_h, w),
+            }
+        }
+        Some((None, Some(h))) => {
+            let h = px(h);
+            Extent {
+                w: keep_aspect(nat_h, nat_w, h),
+                h,
+            }
+        }
+        _ => zoomed_extent(nat_w, nat_h, zoom),
+    }
+}
+
 /// `extent` reduced, aspect preserved, until it fits inside
 /// [`crate::limits::MAX_VECTOR_RASTER_PIXELS`]; unchanged when it already does.
 ///
@@ -491,5 +524,39 @@ mod extent_tests {
         let e = zoomed_extent(60_000, 40_000, 3.0);
         assert!(e.w > 0 && e.h > 0, "{e:?}");
         assert_eq!(fit_within(e, 900), Extent { w: 900, h: 600 });
+    }
+
+    /// TDD 2.21b — a declared `width`/`height` replaces the intrinsic size on the axes it
+    /// states, in CSS pixels scaled by zoom; one axis keeps the aspect; the pane clamp
+    /// then applies as to any image.
+    #[test]
+    fn a_declared_size_replaces_the_intrinsic_one_and_keeps_the_aspect() {
+        use crate::renderer::image::declared_extent;
+        use crate::renderer::picture::DeclaredSize as D;
+        let d = |width, height| Some(D { width, height });
+        // 400x200 natural.
+        assert_eq!(
+            declared_extent(400, 200, d(Some(100), None), 1.0),
+            Extent { w: 100, h: 50 }
+        );
+        assert_eq!(
+            declared_extent(400, 200, d(None, Some(100)), 1.0),
+            Extent { w: 200, h: 100 }
+        );
+        assert_eq!(
+            declared_extent(400, 200, d(Some(100), Some(100)), 1.0),
+            Extent { w: 100, h: 100 }
+        );
+        assert_eq!(
+            declared_extent(400, 200, d(Some(100), None), 2.0),
+            Extent { w: 200, h: 100 }
+        );
+        assert_eq!(
+            declared_extent(400, 200, None, 1.0),
+            zoomed_extent(400, 200, 1.0)
+        );
+        // Wider than the pane: clamped, aspect kept.
+        let wide = declared_extent(400, 200, d(Some(2000), None), 1.0);
+        assert_eq!(fit_within(wide, 800), Extent { w: 800, h: 400 });
     }
 }

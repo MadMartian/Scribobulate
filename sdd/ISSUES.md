@@ -67,7 +67,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
 | N | Any | Production | File ▸ Open from a slow mount never shows "Opening…": it is armed on link-follow only | Low |
-| Q | Any | Production | A rejected key in a user theme falls back to the desktop's page colour rather than the built-in theme's, which can leave Sepia ink invisible on a dark desktop | Medium |
 | R | Any | Production | Toggling a one-line disclosure at the document's end can throw the preview to the top: the full re-render's restore fails at maximum scroll | Medium |
 | U | Any | Production | Two launches in the same instant, one bare and one with a file, skip the session restore, and a later quit overwrites the saved session | Low |
 | V | Any | Production | Two live processes on one session snapshot to one swap file, so after a crash one process's edit is lost | Low |
@@ -77,10 +76,7 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
 | AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
-| AJ | Any | Production | `<img width="100">` is ignored: the image draws at the pane's width | Low |
-| AK | Any | Production | A `<details>` as a list item's first child puts the bullet on an empty row and the summary on the next | Low |
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
-| AM | Any | Production | The collapsed front-matter snippet shows the TOML `+++` fence and smart-quotes its strings | Low |
 | AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
@@ -514,15 +510,6 @@ TDD 1.4e: from a slow mount, 15–20 frames at 1.5 s and 4 s read delay never sh
 by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in "File the 1.0.0 dry run's
 deferrals…" (2026-11-14). No Known-issues line.
 
-## Q. A rejected key in a user theme falls back to the desktop's page colour, not the theme's
-
-**Severity**: Medium (Sepia's ink is unreadable on a dark desktop).
-
-TDD 18.11: a user `[themes.sepia]` with an invalid `background` takes the desktop's page
-colour (System), not Sepia's own. On a dark desktop that is Sepia's dark ink on dark grey,
-invisible (2/2, macOS); a light desktop gives a white page, which hides it. Evidence: 1.0.0
-dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
 ## R. Toggling a disclosure at the document's end can throw the preview to the top
 
 **Severity**: Medium (a visible jump; nothing is lost).
@@ -617,36 +604,12 @@ cairo-win32/DirectWrite font map in `src/export/pdf/`. Evidence: 1.0.0 dry run, 
 "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"PDF export on Windows
 does not embed a fallback font for Hangul — Korean text shows as boxes."*
 
-## AJ. `<img width="100">` is ignored
-
-**Severity**: Low (cosmetic).
-
-The image draws at the pane's width. No rubric covers HTML `width`/`height`. Evidence: 1.0.0
-dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AK. A `<details>` as a list item's first child puts the bullet on its own row
-
-**Severity**: Low (cosmetic).
-
-The bullet sits on an empty row and the summary on the next (`disclosure.md`, "Disclosure
-in a list item"); TDD 2.26c says a nested disclosure renders as at top level. The body
-indent is right. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
-
 ## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
 
 **Severity**: Low (cosmetic).
 
 Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AM. The collapsed front-matter snippet shows the `+++` fence and smart-quotes its strings
-
-**Severity**: Low (cosmetic).
-
-The collapsed snippet of TOML front matter shows its `+++` fence and smart-quotes its
-strings. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
 
 ## AN. On a dark Linux desktop, two toolbar icons come from the host theme
 

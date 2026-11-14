@@ -135,12 +135,16 @@ fn an_unparseable_heading_level_falls_back_to_the_bare_key() {
     let mut themes = Themes::builtin();
     themes.merge_over(
         Themes::parse_compiled(
-            "[themes.synthwave]\nheading_color_h1 = \"not a colour\"\n\
+            "[themes.novel]\nheading_color = \"#336699\"\nheading_font = \"Georgia, serif\"\n\
+                 heading_color_h1 = \"not a colour\"\n\
                  heading_font_h1 = \"}} * {{ color: red; }}\"\n",
         )
         .unwrap(),
     );
-    let sw = themes.resolve("synthwave");
+    // A theme the built-ins do not state: nothing for the merge to preserve, so this
+    // is the walk's own fall-back (a rejected key over a stated one is the merge's —
+    // `a_rejected_user_colour_keeps_the_built_in_themes_own`).
+    let sw = themes.resolve("novel");
     assert_eq!(
         crate::palette::to_hex_opaque(sw.heading_colors[0].expect("fell back")),
         crate::palette::to_hex_opaque(sw.heading_color.unwrap())

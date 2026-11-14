@@ -519,6 +519,7 @@ mod tests {
             alt: alt.to_string(),
             title: None,
             source: crate::export::ImageSource::Remote("https://example.invalid/b.png".into()),
+            declared: None,
         })
     }
 

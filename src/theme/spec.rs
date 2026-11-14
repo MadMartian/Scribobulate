@@ -36,6 +36,25 @@ pub(super) enum Value {
 }
 
 impl Value {
+    /// Would the typed parse for a key of `kind` take this value? The same parsers
+    /// `Sources` hands the walk, asked once at merge time.
+    pub(super) fn accepted_by(&self, kind: Kind) -> bool {
+        use super::{parse_color, sanitize_font_family};
+        use super::{LineStyle, MarkerGlyph, SceneAnchor};
+        let text = self.text();
+        match kind {
+            Kind::Color => text.and_then(parse_color).is_some(),
+            Kind::Font => text.and_then(sanitize_font_family).is_some(),
+            Kind::Glyph => text.and_then(MarkerGlyph::parse).is_some(),
+            Kind::Line => text.and_then(LineStyle::parse).is_some(),
+            Kind::Anchor => text.and_then(SceneAnchor::parse).is_some(),
+            Kind::Text => text.is_some(),
+            Kind::Sprite => self.sprite().is_some(),
+            Kind::Int => self.int().is_some(),
+            Kind::Float => self.float().is_some(),
+        }
+    }
+
     pub(super) fn text(&self) -> Option<&str> {
         match self {
             Value::Text(s) => Some(s),
@@ -192,8 +211,28 @@ impl ThemeSpec {
     /// One line, and that is the point: the hand-written merge list this replaced had
     /// one entry per key, and a key omitted from it compiled, passed, and silently
     /// dropped every user override of that key.
+    ///
+    /// **A value its key's parser would refuse does not displace one that parses.** A
+    /// user's `[themes.sepia] background = "nonsense"` used to replace Sepia's own
+    /// page colour, so the walk refused it and fell to `[themes.system]` — the
+    /// desktop's page, which on a dark desktop is Sepia's dark ink on dark grey
+    /// (TDD 18.11). The rejected key costs itself alone and the theme keeps what it
+    /// had. Where the base states nothing the value goes in regardless: the walk
+    /// reports the refusal there, and there is nothing to preserve.
     pub(crate) fn overlay(&mut self, other: ThemeSpec) {
-        self.vals.extend(other.vals);
+        for (name, value) in other.vals {
+            if let Some(key) = keys::lookup(&name) {
+                if !value.accepted_by(key.kind) && self.vals.contains_key(&name) {
+                    log::warn!(
+                        "theme: {name} = {} is not {} — the theme keeps its own value",
+                        value.authored(),
+                        expected(key.kind)
+                    );
+                    continue;
+                }
+            }
+            self.vals.insert(name, value);
+        }
     }
 
     pub(super) fn get(&self, spelling: &str) -> Option<&Value> {

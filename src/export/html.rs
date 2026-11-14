@@ -390,7 +390,23 @@ fn wrap(out: &mut String, tag: &str, attrs: &str, v: &[Inline], page: &Page<'_>)
     let _ = write!(out, "</{tag}>");
 }
 
+/// The inline `style` an `<img>`'s declared size becomes (TDD 2.21b), empty when it
+/// declared none. Inline so it outranks the sheet's `height: auto`; the sheet's
+/// `max-width: 100%` still clamps it, and `height: auto` / `aspect-ratio` keep the aspect
+/// through that clamp.
+fn declared_style(img: &ImageRef) -> String {
+    match img.declared.map(|d| (d.width, d.height)) {
+        Some((Some(w), Some(h))) => {
+            format!(" style=\"width:{w}px;height:auto;aspect-ratio:{w}/{h}\"")
+        }
+        Some((Some(w), None)) => format!(" style=\"width:{w}px;height:auto\""),
+        Some((None, Some(h))) => format!(" style=\"height:{h}px;width:auto\""),
+        _ => String::new(),
+    }
+}
+
 fn image_html(img: &ImageRef, out: &mut String) {
+    let style = declared_style(img);
     let alt = escape_attr(&img.alt);
     let title = img
         .title
@@ -404,14 +420,14 @@ fn image_html(img: &ImageRef, out: &mut String) {
             // the only reason anyone exported it (TDD 25.12).
             let _ = write!(
                 out,
-                "<img alt=\"{alt}\"{title} src=\"data:{mime};base64,{}\">",
+                "<img alt=\"{alt}\"{title}{style} src=\"data:{mime};base64,{}\">",
                 base64(bytes)
             );
         }
         ImageSource::Remote(url) => {
             let _ = write!(
                 out,
-                "<img alt=\"{alt}\"{title} src=\"{}\">",
+                "<img alt=\"{alt}\"{title}{style} src=\"{}\">",
                 escape_attr(url)
             );
         }

@@ -179,6 +179,9 @@ pub(crate) struct ImageRef {
     pub(crate) alt: String,
     pub(crate) title: Option<String>,
     pub(crate) source: ImageSource,
+    /// The `<img>`'s declared `width`/`height` (TDD 2.21b), parsed by the preview's own
+    /// scanner. Always `None` for a Markdown image.
+    pub(crate) declared: Option<crate::renderer::DeclaredSize>,
 }
 
 // `Align` and `align_of` moved to `crate::mdtable` so the PREVIEW can name them too:

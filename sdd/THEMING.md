@@ -66,6 +66,13 @@ key exists says what type it takes, how many values it carries and whether it na
 sprite, so validation, the merge, the sprite walk and the per-level fallback all read
 one list instead of four that can drift apart.
 
+**Costing a key alone includes costing it against the shipped theme.** A user file's
+value its key's parser refuses (`[themes.sepia] background = "nonsense"`) does not
+displace the built-in's own value in the merge (`ThemeSpec::overlay`); were it kept, the
+walk would refuse it and fall to `[themes.system]` — the desktop's page, under Sepia's
+dark ink (TDD 18.11). A theme the built-ins do not state has nothing to keep, and the
+walk's own fall-through applies.
+
 ## Search path
 
 [SCHEMA.md § Search path](SCHEMA.md#search-path) holds the three-row table and the
