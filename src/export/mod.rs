@@ -365,7 +365,7 @@ pub(crate) enum Block {
     Rule,
 }
 
-/// One comment-bearing annotation, in document order.
+/// One annotation (a highlight, commented or bare, or a point comment), in document order.
 ///
 /// Membership is [`crate::annotate::Annotation::is_listed`]'s — the same predicate the
 /// margin chips and the annotations viewer use — so the export cannot disagree with

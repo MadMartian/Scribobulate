@@ -36,13 +36,14 @@ Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deseru
 mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit
 voluptatem accusantium doloremque laudantium, totam rem aperiam.
 
-## 2. Things that must NOT appear in the viewer
+## 2. The kinds the viewer lists differently
 
-Everything in this section renders in the document but must be **absent** from the
-annotations list — the list shows only comment-bearing annotations (TDD 20.2).
+The suggested-edit kinds below render in the document but must be **absent** from the
+annotations list (TDD 20.2). The bare highlight is the exception that is listed: a row
+with its claim and no comment, and a chip (TDD 17.67).
 
 - A bare highlight with no comment: the sky is {==blue==} today. (Renders highlighted;
-  it is a formatting feature, not an annotation — no row, no chip.)
+  listed as a row showing "blue" alone, with a chip.)
 - An insertion: we should {++add a staging gate++} here.
 - A deletion: remove {--the manual approval step--} from the flow.
 - A substitution: change the cache TTL from {~~30 seconds~>5 seconds~~}.

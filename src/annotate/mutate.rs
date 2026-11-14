@@ -192,9 +192,19 @@ pub(crate) fn edit_comment(
     // Total for the same reason as `remove_annotation` — see the note there.
     let head = source.get(..comment_body.start)?;
     let tail = source.get(comment_body.end..)?;
-    let mut out = String::with_capacity(source.len() + new_comment.len());
+    let mut out = String::with_capacity(source.len() + new_comment.len() + 6);
     out.push_str(head);
+    // A bare highlight has no comment to replace: its "body" is the empty range just past
+    // `==}`, flanked by no `{>>`/`<<}`, so the comment is written whole (TDD 17.67).
+    let bare = comment_body.is_empty()
+        && !(head.ends_with(COMMENT_OPEN) && tail.starts_with(COMMENT_CLOSE));
+    if bare {
+        out.push_str(COMMENT_OPEN);
+    }
     out.push_str(&sanitize_comment(new_comment));
+    if bare {
+        out.push_str(COMMENT_CLOSE);
+    }
     out.push_str(tail);
     Some(out)
 }
@@ -600,6 +610,31 @@ mod merged_comment_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TDD 17.67: a bare highlight's Edit target is the empty range past `==}`, and
+    /// the comment is written whole there; an existing comment's body is still replaced
+    /// in place, empty or not.
+    #[test]
+    fn editing_a_bare_highlight_writes_a_whole_comment_after_it() {
+        let md = "A {==claim==} here.";
+        let at = md.find("==}").unwrap() + 3;
+        assert_eq!(
+            edit_comment(md, at..at, " the answer ").as_deref(),
+            Some("A {==claim==}{>>the answer<<} here.")
+        );
+        let with = "A {==claim==}{>>old<<} here.";
+        let body = with.find("old").unwrap();
+        assert_eq!(
+            edit_comment(with, body..body + 3, "new").as_deref(),
+            Some("A {==claim==}{>>new<<} here.")
+        );
+        let empty = "A {==claim==}{>><<} here.";
+        let body = empty.find("<<}").unwrap();
+        assert_eq!(
+            edit_comment(empty, body..body, "new").as_deref(),
+            Some("A {==claim==}{>>new<<} here.")
+        );
+    }
 
     /// TDD 17.59: Remove undoes what a comment written after a block added — its line,
     /// and the blank line that set it off — so the file is as it was.

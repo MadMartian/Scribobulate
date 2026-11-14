@@ -18,7 +18,7 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.65 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.69 |
 | 18 | Preview reading themes | 18.1 – 18.58 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
@@ -3177,6 +3177,27 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** turning back scrolls that text again before the list; a touchpad gesture that has started moving the list keeps moving it until the gesture ends, even as another row's text slides under the pointer
 - **And** where the toolkit already hands the wheel from inner text to the list itself (GTK 4.20.1 and later, so the macOS and Windows builds), its own behaviour is what the reader gets
 
+### 17.67 A highlight with no comment is an annotation with an empty comment
+- **Given** a document containing a bare `{==the sky is green==}` — CriticMarkup's highlight on its own, with no `{>>…<<}` after it — beside a highlight that carries a comment
+- **When** it is shown in the preview
+- **Then** the words appear with the same coloured highlight as 17.1 and the `{==…==}` delimiters do not, exactly as for a commented claim
+- **And** the bare highlight has a margin marker like a commented one, and its card shows the claim and no comment text
+- **And** the annotations viewer lists it as a row with the claim and an empty comment, beside the commented annotations (20.2), and activating the row opens that card (20.4)
+- **And** Edit on that card, typing a comment and saving, writes `{>>comment<<}` straight after the `==}` and nothing else — the highlight is then an ordinary commented one; Remove strips the delimiters and keeps the words (17.8)
+- **And** the export (25.13) draws the claim highlighted and lists it in the annotations summary by its claim alone, with no comment aside, no margin note and no empty paragraph
+
+### 17.68 A comment above a paragraph has its marker beside that paragraph
+- **Given** a comment written on a line of its own, after a blank line and directly above the paragraph it introduces (`First.` blank line `{>>about the next<<}` newline `Second.`)
+- **When** the document is shown in the preview
+- **Then** the comment's margin marker sits beside the first line of `Second.`, not beside `First.`
+- **And** a comment the app wrote after a block (17.59) keeps its marker beside that block, as does one followed by a blank line, one in the middle of a paragraph, and one with text on its own line (`{>>c<<}Second.`), whose marker was already beside that text
+
+### 17.69 A card and a row quote a claim as the page shows it
+- **Given** a highlighted claim containing Markdown — `{==**bold** and [a link](https://example.com) and `code`==}{>>note<<}`, or `==marked==`, `^sup^`, `~sub~` or `~~struck~~` text
+- **When** its margin card is opened, its row is read in the annotations viewer, or it is exported
+- **Then** each quotes `bold and a link and code` — the words the reader sees, with no asterisks, brackets, URL, backticks or tight-construct delimiters — and all three quote it identically
+- **And** the viewer's filter (20.24) matches and highlights within that same text
+
 ## 18. Preview reading themes
 
 The preview pane's purpose is reading. A *reading theme* restyles everything the
@@ -3706,18 +3727,18 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 > A collapsible sidebar section, beneath the outline, lists the document's
 > annotations (CriticMarkup comments) and navigates to them.
 
-### 20.1 The viewer lists every comment-bearing annotation, in document order
-- **Given** a document containing point comments and comment-bearing highlights scattered through it
+### 20.1 The viewer lists every annotation, in document order
+- **Given** a document containing point comments and highlights, commented or bare, scattered through it
 - **When** the annotations viewer is shown
-- **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only)
+- **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only; a bare highlight shows the claim under an empty comment, 17.67)
 
-### 20.2 Comment-less highlights and inert kinds are not listed
+### 20.2 Inert kinds are not listed, and a bare highlight is
 - **Given** a document containing a bare `{==highlight==}` (no comment) and inert kinds (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`) alongside real annotations
 - **When** the viewer is shown
-- **Then** only comment-bearing annotations appear — a bare highlight is a rendering feature, not an annotation — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **Then** only highlights (commented or bare, 17.67) and point comments appear — the suggested-edit kinds have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
 
 ### 20.3 An empty or annotation-less document shows a placeholder, not an error
-- **Given** a document with no comment-bearing annotations
+- **Given** a document with no annotations
 - **When** the viewer is shown
 - **Then** it shows a muted "No annotations" placeholder and the application does not error
 
@@ -3735,7 +3756,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** the keyboard focus **stays in the list** across the navigation, so the next arrow press moves to the next row: browsing the list is a sequence of presses, not one press per trip through the Tab order. (The comment card the navigation opens therefore does *not* take focus — unlike a card opened by clicking its margin chip or by the Next/Previous Annotation commands, where the reader has asked to act on that one annotation and the card's own Escape/Edit/Remove must be reachable.)
 
 ### 20.6 Navigation resolves the correct annotation even when membership isn't 1:1
-- **Given** a document where a bare highlight or inert kind sits *before* a comment-bearing annotation (so the annotation's list position differs from its chip's position)
+- **Given** a document where an inert kind sits *before* an annotation (so the annotation's list position differs from its chip's position)
 - **When** the user activates that annotation's row
 - **Then** the document navigates to *that* annotation — never a neighbor — because navigation keys on the annotation's source span identity, not a positional row index
 
@@ -4365,6 +4386,7 @@ up doing.
 - **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
 - **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
+- **And** a bare highlight (17.67) is exported highlighted and listed by its claim alone: it has no comment, so it gets no aside or margin note and no empty paragraph in the summary
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export

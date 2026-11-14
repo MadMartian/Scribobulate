@@ -108,7 +108,12 @@ fn emit_markup(
                 if !*tail {
                     continue;
                 }
-                if let Some(ann) = doc.annotations.get(*idx) {
+                // A bare highlight has no comment, so no margin note (TDD 17.67).
+                if let Some(ann) = doc
+                    .annotations
+                    .get(*idx)
+                    .filter(|ann| !ann.comment.is_empty())
+                {
                     // TDD 18.19: the chip's colour keys, applied to the note's
                     // background/ink. Empty unless the theme sets at least one, so a
                     // theme that sets neither renders this BYTE-IDENTICAL to before
@@ -350,6 +355,22 @@ mod markup_tests {
         assert!(out.contains("background=\"#1a334d\""), "{out}");
         assert!(out.contains("foreground=\"#ffffff\""), "{out}");
         assert!(out.contains("[my note]"), "{out}");
+    }
+
+    /// TDD 17.67: a bare highlight is drawn as a claim and carries no `[]` note.
+    #[test]
+    fn a_bare_highlights_claim_carries_no_margin_note() {
+        let theme = crate::theme::Themes::builtin().resolve("system");
+        let d = doc::build("{==claim==}\n", &RenderOptions::default());
+        let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
+            panic!("expected one paragraph: {:?}", d.blocks);
+        };
+        let out = inline_markup(inlines, &d, &theme, None);
+        assert!(out.contains("claim"), "{out}");
+        assert!(
+            !out.contains('['),
+            "no note for a comment-less claim: {out}"
+        );
     }
 
     /// TDD 18.18: the PDF/HTML export markup sink is the THIRD representation of

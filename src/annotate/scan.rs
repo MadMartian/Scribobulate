@@ -93,24 +93,81 @@ pub(crate) struct Annotation {
 }
 
 impl Annotation {
-    /// Whether this annotation is a **comment-bearing** annotation — the one and
+    /// Whether this annotation is one the reader meets as an annotation — the one and
     /// only definition of "is an annotation" shared by the preview's margin-chip
-    /// builder (`preview::build::build_markers`) and the annotations viewer's list
-    /// builder (`annotations::extract_entries`). Sharing one predicate is what keeps
-    /// the two from drifting: if the list and the chips disagreed on membership, a
-    /// viewer row could navigate to a chip that doesn't exist, or a chip could have
-    /// no row (TDD 20.2).
+    /// builder (`preview::build::build_markers`), the annotations viewer's list
+    /// builder (`annotations::extract_entries`) and the export. Sharing one predicate
+    /// is what keeps them from drifting: if the list and the chips disagreed on
+    /// membership, a viewer row could navigate to a chip that doesn't exist, or a chip
+    /// could have no row (TDD 20.2).
     ///
-    /// True for a `Highlight` that carries a comment (`{==claim==}{>>comment<<}`) and
-    /// for a point `Comment` (`{>>comment<<}`). False for a bare `{==highlight==}` —
-    /// a rendering feature, not an annotation, like bold — and for the v1-inert
-    /// suggested-edit kinds (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`), which have no
-    /// chip and no defined presentation (deferred, not designed out).
+    /// True for every `Highlight` — `{==claim==}{>>comment<<}` and the bare
+    /// `{==claim==}`, which carries no comment yet (TDD 17.67) — and for a point
+    /// `Comment` (`{>>comment<<}`). False for the v1-inert suggested-edit kinds
+    /// (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`), which have no chip and no defined
+    /// presentation (deferred, not designed out).
     pub(crate) fn is_listed(&self) -> bool {
-        matches!(self.kind, AnnKind::Highlight | AnnKind::Comment)
-            && self.comment.is_some()
-            && self.src_comment_body.is_some()
+        match self.kind {
+            AnnKind::Highlight => true,
+            AnnKind::Comment => self.comment.is_some() && self.src_comment_body.is_some(),
+            _ => false,
+        }
     }
+}
+
+/// The cleaned byte offset the margin chip of `ann` sits beside.
+///
+/// For everything but a point comment that is `cleaned_content`'s own anchor (the end of
+/// a claim). A point comment written on a line of its own, directly above the paragraph
+/// it comments on —
+///
+/// ```text
+/// Previous paragraph.
+///
+/// {>>about the next one<<}
+/// The paragraph it is about.
+/// ```
+///
+/// — leaves its cleaned offset in the blank gap AFTER the previous block, and a gap
+/// resolves to the nearest block before it, so the chip sat beside `Previous paragraph.`
+/// (TDD 17.68). It belongs to the text it introduces, so it moves to that text's first
+/// byte. The shape is exact: a blank line (or the document's start) above the comment's
+/// line, and a line of text directly below with no blank line between. A comment the
+/// app writes after a block (TDD 17.59) is followed by a blank line or sits directly
+/// under the block's last line, so it keeps the preceding block, which is what it is
+/// about.
+pub(crate) fn chip_anchor(original: &str, ann: &Annotation) -> usize {
+    let anchor = ann.cleaned_content.start.raw();
+    if ann.kind != AnnKind::Comment {
+        return anchor;
+    }
+    let (start, end) = (ann.src_span.start.raw(), ann.src_span.end.raw());
+    let container = |c: char| matches!(c, ' ' | '\t' | '>');
+    let (Some(head), Some(tail)) = (original.get(..start), original.get(end..)) else {
+        return anchor;
+    };
+    let line_start = head.rfind('\n').map_or(0, |i| i + 1);
+    let own_line = head[line_start..].chars().all(container);
+    let blank_above = line_start == 0 || {
+        let above = head[..line_start - 1].trim_end_matches('\r');
+        let above_start = above.rfind('\n').map_or(0, |i| i + 1);
+        above[above_start..].chars().all(container)
+    };
+    if !own_line || !blank_above {
+        return anchor;
+    }
+    let after_comment = tail.trim_start_matches([' ', '\t']);
+    let Some(next_line) = after_comment
+        .strip_prefix("\r\n")
+        .or_else(|| after_comment.strip_prefix('\n'))
+    else {
+        return anchor;
+    };
+    let text = next_line.trim_start_matches(container);
+    if text.is_empty() || text.starts_with(['\r', '\n']) {
+        return anchor;
+    }
+    anchor + (tail.len() - text.len())
 }
 
 /// The result of a pre-parse extraction pass over a Markdown source.
@@ -966,5 +1023,65 @@ mod tests {
         let e = extract(src);
         assert_eq!(e.annotations.len(), 0, "a blank line ends the construct");
         assert_eq!(e.cleaned, src, "a rejected construct survives verbatim");
+    }
+}
+
+#[cfg(test)]
+mod chip_anchor_tests {
+    use super::{chip_anchor, extract};
+
+    /// The anchor of the document's FIRST annotation, and the cleaned text it indexes.
+    fn anchor_in(md: &str) -> (usize, String) {
+        let ex = extract(md);
+        (chip_anchor(md, &ex.annotations[0]), ex.cleaned)
+    }
+
+    /// TDD 17.68: an own-line comment above a paragraph anchors at the paragraph.
+    #[test]
+    fn an_own_line_comment_anchors_at_the_text_directly_below_it() {
+        let (at, cleaned) = anchor_in("First.\n\n{>>about next<<}\nSecond.\n");
+        assert_eq!(&cleaned[at..], "Second.\n");
+        let (at, cleaned) = anchor_in("{>>at the very top<<}\nOpening.\n");
+        assert_eq!(&cleaned[at..], "Opening.\n");
+        let (at, cleaned) = anchor_in("First.\r\n\r\n{>>c<<}\r\nSecond.\r\n");
+        assert_eq!(&cleaned[at..], "Second.\r\n");
+        // Inside a quote, past the `> ` the next line carries.
+        let (at, cleaned) = anchor_in("> First.\n>\n> {>>c<<}\n> Second.\n");
+        assert_eq!(&cleaned[at..], "Second.\n");
+    }
+
+    #[test]
+    fn every_other_placement_keeps_the_cleaned_offset() {
+        for md in [
+            // Text on the comment's own line: already at the paragraph's start.
+            "First.\n\n{>>c<<}Second.\n",
+            // After a block, as the app writes one (TDD 17.59): a blank line follows...
+            "```\nx\n```\n{>>c<<}\n\nNext.\n",
+            // ...or the comment sits directly under the block's last line.
+            "```\nx\n```\n{>>c<<}\nNext.\n",
+            // Mid-paragraph on a line of its own.
+            "Para line.\n{>>c<<}\nmore of it.\n",
+            // Trailing: nothing below.
+            "First.\n\n{>>c<<}\n",
+            // A blank line between the comment and the text.
+            "First.\n\n{>>c<<}\n\nSecond.\n",
+        ] {
+            let ex = extract(md);
+            assert_eq!(
+                chip_anchor(md, &ex.annotations[0]),
+                ex.annotations[0].cleaned_content.start.raw(),
+                "{md:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_highlight_keeps_the_end_of_its_claim() {
+        let md = "First.\n\n{==claim==}{>>c<<}\nSecond.\n";
+        let ex = extract(md);
+        assert_eq!(
+            chip_anchor(md, &ex.annotations[0]),
+            ex.annotations[0].cleaned_content.start.raw()
+        );
     }
 }

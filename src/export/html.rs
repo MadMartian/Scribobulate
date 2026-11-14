@@ -66,11 +66,16 @@ pub(crate) fn render(doc: &ExportDoc, palette: &Palette, theme: &Theme) -> Strin
     if !doc.annotations.is_empty() {
         out.push_str("<section class=\"annotations\">\n<h2>Annotations</h2>\n<ol>\n");
         for ann in &doc.annotations {
+            // A bare highlight has no comment: its row is the claim alone (TDD 17.67).
+            let comment = if ann.comment.is_empty() {
+                String::new()
+            } else {
+                format!("<p>{}</p>", escape(&ann.comment))
+            };
             let _ = writeln!(
                 out,
-                "<li><blockquote class=\"claim\">{}</blockquote><p>{}</p></li>",
+                "<li><blockquote class=\"claim\">{}</blockquote>{comment}</li>",
                 escape(&ann.claim),
-                escape(&ann.comment)
             );
         }
         out.push_str("</ol>\n</section>\n");
@@ -359,7 +364,13 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
                 if !*tail {
                     continue;
                 }
-                if let Some(ann) = page.doc.annotations.get(*idx) {
+                // A bare highlight has no comment, so no aside (TDD 17.67).
+                if let Some(ann) = page
+                    .doc
+                    .annotations
+                    .get(*idx)
+                    .filter(|ann| !ann.comment.is_empty())
+                {
                     let _ = write!(
                         out,
                         "<aside class=\"comment\"><a href=\"#claim-{}\">{}</a> {}</aside>",
@@ -2164,6 +2175,20 @@ mod html_sink_tests {
         assert!(out.contains("class=\"claim\""), "{out}");
         assert!(out.contains("my comment"), "{out}");
         assert!(out.contains("<section class=\"annotations\">"), "{out}");
+    }
+
+    #[test]
+    fn a_bare_highlight_exports_as_a_claim_with_no_aside_and_no_empty_paragraph() {
+        // TDD 17.67: highlighted in the page, listed in the summary by its claim alone.
+        let out = html_of("The {==claim==} here.\n");
+        assert!(out.contains("class=\"claim\""), "{out}");
+        assert!(!out.contains("<aside"), "no comment, no aside: {out}");
+        assert!(out.contains("<section class=\"annotations\">"), "{out}");
+        assert!(
+            out.contains("<blockquote class=\"claim\">claim</blockquote></li>"),
+            "{out}"
+        );
+        assert!(!out.contains("<p></p>"), "{out}");
     }
 
     /// TDD 18.21 / 25.3 — the artefact shows the per-level heading colour and face the

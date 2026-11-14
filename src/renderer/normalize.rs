@@ -149,6 +149,14 @@ impl<'a> NormalizedMd<'a> {
         Parser::new_ext(&self.0, md_options())
     }
 
+    /// [`parse`](Self::parse) with each event's byte range in the normalised text, for a
+    /// caller that keys a side table (the tight-construct scan) by event start.
+    pub(crate) fn parse_with_ranges(
+        &self,
+    ) -> impl Iterator<Item = (pulldown_cmark::Event<'_>, std::ops::Range<usize>)> {
+        self.parse().into_offset_iter()
+    }
+
     /// As [`parse`](Self::parse), configured with [`as_written_options`]: the file as
     /// other tools read it.
     pub(crate) fn parse_as_written(&self) -> Parser<'_> {

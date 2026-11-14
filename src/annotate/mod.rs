@@ -33,8 +33,50 @@ pub(crate) use mutate::{
     edit_comment, insert_landed_point, insert_or_extend_highlight, merged_comment_for,
     remove_annotation,
 };
-pub(crate) use scan::{cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation};
+pub(crate) use scan::{
+    chip_anchor, cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation,
+};
 pub(crate) use written::holds_block_break;
+
+/// A claim's text as the page SHOWS it: the run of cleaned source the highlight covers
+/// with its Markdown read, not quoted. `**bold claim**` is `bold claim`, a link is its
+/// label, a code span its code, and the tight constructs this crate scans itself
+/// (`==x==`, `~~x~~`, `^x^`, `~x~`) lose their delimiters, exactly as the preview drew
+/// them (TDD 17.69).
+///
+/// The ONE reduction every surface that quotes a claim takes — the margin chip's card,
+/// the annotations viewer's rows and the export's summary — so they cannot quote the same
+/// claim three ways. Per-event rendered text comes from the block-scope [`BlockScripts`]
+/// the renderer cuts runs with, so a fence whose two halves sit in different events
+/// (`~~a **bold** b~~`) is stripped as the page strips it.
+pub(crate) fn plain_claim(raw: &str) -> String {
+    use pulldown_cmark::Event;
+    // Read the way every document is: normalised first, so the scan and the parse index
+    // one text.
+    let md = crate::renderer::NormalizedMd::new(raw);
+    let scripts = crate::renderer::BlockScripts::scan(md.as_str());
+    let mut out = String::with_capacity(raw.len());
+    for (event, range) in md.parse_with_ranges() {
+        match event {
+            Event::Text(text) => scripts.push_rendered_text(range.start, &text, &mut out),
+            Event::Code(code) => out.push_str(&code),
+            Event::SoftBreak | Event::HardBreak => out.push(' '),
+            // Structure and markup the page shows as no words of the claim's own: a
+            // tag's start and end (its text arrives as `Text`), a rule, a task box, raw
+            // HTML and footnote or math markers (math is off in `md_options`).
+            Event::Start(_)
+            | Event::End(_)
+            | Event::Rule
+            | Event::TaskListMarker(_)
+            | Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::FootnoteReference(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_) => {}
+        }
+    }
+    out
+}
 
 /// Chars of `run[..upto]` that survive into the rendered buffer: everything except
 /// the **delimiters** of the tight constructs the renderer strips (`==mark==`,
@@ -269,5 +311,36 @@ mod highlight_map_tests {
         let cleaned = "a ==m== tail";
         let evs = [(0usize, 8usize, 0i32, 4i32), (8, 12, 4, 8)];
         assert_eq!(map(cleaned, 2, 12, &evs), vec![(2, 4), (4, 8)]);
+    }
+}
+
+#[cfg(test)]
+mod plain_claim_tests {
+    use super::plain_claim;
+
+    /// TDD 17.69: the page's reading of the claim, not the source's spelling of it.
+    #[test]
+    fn markdown_is_read_not_quoted() {
+        assert_eq!(plain_claim("plain words"), "plain words");
+        assert_eq!(
+            plain_claim("a **bold** and *em* word"),
+            "a bold and em word"
+        );
+        assert_eq!(plain_claim("[a link](https://x.test) here"), "a link here");
+        assert_eq!(plain_claim("use `code` now"), "use code now");
+        assert_eq!(plain_claim("![alt text](i.png) shown"), "alt text shown");
+    }
+
+    #[test]
+    fn the_tight_constructs_lose_their_delimiters() {
+        assert_eq!(plain_claim("a ==marked== b"), "a marked b");
+        assert_eq!(plain_claim("x^2^ and H~2~O"), "x2 and H2O");
+        // A fence whose halves sit in different events, as the page strips it.
+        assert_eq!(plain_claim("~~a **bold** b~~ end"), "a bold b end");
+    }
+
+    #[test]
+    fn a_line_break_reads_as_a_space() {
+        assert_eq!(plain_claim("one\ntwo"), "one two");
     }
 }
