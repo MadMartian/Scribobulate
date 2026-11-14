@@ -1634,9 +1634,9 @@ and this file is just the run-sheet.
 - [ ] Save a document containing a `\0` byte or invalid UTF-8 pasted from
   another app → doesn't panic; either sanitizes or errors cleanly.
   **And OPEN one from disk (TDD 1.4a, 5.5; this was DATA LOSS):** write
-  `printf '# Title\n\nbefore\0after\n\nlast line\n' > nul.md` (*Windows*:
-  `[IO.File]::WriteAllBytes("$PWD\nul.md", [Text.Encoding]::UTF8.GetBytes("# Title`n`nbefore`0after`n`nlast line`n"))`),
-  record `sha256sum nul.md` / `Get-FileHash`, and open it (CLI and File ▸ Open)
+  `printf '# Title\n\nbefore\0after\n\nlast line\n' > nulbyte.md` (*Windows*:
+  `[IO.File]::WriteAllBytes("$PWD\nulbyte.md", [Text.Encoding]::UTF8.GetBytes("# Title`n`nbefore`0after`n`nlast line`n"))`),
+  record `sha256sum nulbyte.md` / `Get-FileHash`, and open it (CLI and File ▸ Open)
   → the tab shows **"Refused to open file"** naming a NUL byte at byte 15, it
   is **not** marked unsaved (no `•`), Save is disabled, and Ctrl+S changes
   nothing: the hash is unchanged. The pre-fix signature was a tab already

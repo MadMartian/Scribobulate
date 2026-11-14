@@ -2,7 +2,7 @@
 
 Scribobulate is built with AI, and I am not going to be coy about it: the
 overwhelming majority of the code, tests, and documentation in this repository was
-written by AI agents working under my direction, and 95 of its 133 commits carry a
+written by AI agents working under my direction, and 595 of its 668 commits carry a
 `Co-Authored-By: Claude` trailer to say so. If you are reading this, you probably
 work the same way. Here is the process I use, and the evidence that it holds up.
 
@@ -68,7 +68,7 @@ writing to somebody else's server would undo all three at once.
   If you want to know why the code is shaped the way it is, the reasoning is
   sitting in the repository for you to read.
 - **The hard-won findings are public too.**
-  [`sdd/ANTI-PATTERNS.md`](sdd/ANTI-PATTERNS.md) has 312 entries, and each one is
+  [`sdd/ANTI-PATTERNS.md`](sdd/ANTI-PATTERNS.md) has 365 numbered entries, and each one is
   earned the same way: reproduce the failure, trace the root cause (often into the
   GTK C source), and land the fix with a test that pins it. Every entry in there
   has been measured. The transferable half of that knowledge feeds a GTK4/gtk-rs
@@ -90,20 +90,23 @@ This is the part I care about most, because a green test run is where the work
 starts. The gates below are mandatory, and the ones an agent would most like to
 skip are the ones written down hardest.
 
-- **Behaviour is pinned before it is built.** [`sdd/TDD.md`](sdd/TDD.md) holds 476
+- **Behaviour is pinned before it is built.** [`sdd/TDD.md`](sdd/TDD.md) holds 647
   Given/When/Then rubrics, and a change that introduces behaviour with no rubric
   is incomplete by policy.
-- **Roughly 1,350 automated tests** run under `cargo test` plus a GTK integration
-  suite. A test may never be `#[cfg]`'d out per platform, because a compiled-out
+- **Roughly 2,500 automated tests** run under `cargo test` plus a GTK integration
+  suite of about 800 more. A test may never be `#[cfg]`'d out per platform, because a compiled-out
   test is a deleted test that still reports green.
 - **Every regression is locked down in two independent areas** (POLICY § Testing):
   an automated test *and* a `tests/MANUAL-TEST.md` check that drives the exact
   broken scenario against the running application. Both areas are mandatory. The
   unit test proves the decision; the manual run proves the pixels. A correct
   decision that never reached the widget passes the first one and still fails you.
-- **The manual plan gets run.** The most recent full pass drove about 200 checks
-  against the real binary under an isolated compositor and reported no hard
-  failures.
+- **The manual plan gets run.** The v1.0.0 readiness pass drove the whole plan —
+  about 750 checks per platform — against the installed release artefacts on Linux,
+  macOS and Windows. It found 14 defects worth fixing before the release (one of
+  them a data-loss path) and every one was fixed, re-built, re-installed and
+  re-driven on all three platforms before the tag; what it found and deferred is in
+  the release notes' Known issues.
 - **Categories of change have completeness matrices.** [`sdd/CAM.md`](sdd/CAM.md)
   forces a new command to account for every surface (menu, toolbar, accelerator,
   overlay), and new markup to account for every context it can appear in. These
@@ -144,7 +147,7 @@ I am one person with a fleet of agents, so here is where my confidence runs out.
 - The gates above did not descend from heaven. I built them by reading AI output
   myself, finding what broke, and turning each lesson into a rubric, a
   deterministic evaluation harness, or a policy rule. The agents are productive
-  because that scaffolding exists, and the 312 entries in the anti-pattern
+  because that scaffolding exists, and the 365 entries in the anti-pattern
   register are what it cost to put up.
 
 ## The short version

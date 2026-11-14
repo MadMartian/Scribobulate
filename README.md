@@ -13,8 +13,9 @@ models), and live-reloads files the instant an agent changes them on disk.
 
 ![Scribobulate](data/icons/scalable/apps/com.extollit.scribobulate.svg "Scribobulate")
 
-> **Status: pre-release, and capable.** Rendering, the editing pane (with live
-> split-preview), live reload, and conflict handling all work today —
+> **Status: released — v1.0.0** ([downloads](https://github.com/MadMartian/Scribobulate/releases/latest):
+> `.deb`, `.rpm`, `.dmg`, Windows installer). Rendering, the editing pane (with live
+> split-preview), live reload, and conflict handling are all in —
 > Scribobulate opens and displays full-fidelity Markdown (tables,
 > syntax-highlighted code, task lists, images) at 0 MiB VRAM / ~80 MiB RAM as a
 > single-instance multi-window, multi-tab app, reloads files as they change on disk, and
@@ -171,7 +172,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
 
 ### Linux
 
-Install the package — no Rust toolchain, no development libraries:
+Download the package from the [latest release](https://github.com/MadMartian/Scribobulate/releases/latest)
+and install it — no Rust toolchain, no development libraries:
 
 ```bash
 sudo apt install ./scribobulate_1.0.0_amd64.deb     # Debian, Ubuntu
