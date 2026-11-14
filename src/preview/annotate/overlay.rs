@@ -678,6 +678,22 @@ pub(crate) fn wire_annotation_overlay(
                 )
             };
             pop.popdown();
+            // Kept out of existing comments, as the editor card is (TDD 17.59). A preview
+            // selection cannot normally reach a comment's text, which the preview does
+            // not show; this keeps the two cards on one rule.
+            let refused = crate::window::host_window(&v)
+                .and_then(|w| crate::window::document_source(&w))
+                .is_some_and(|source| {
+                    pending
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|target| target.is_refused(&source))
+                });
+            if refused {
+                pending.borrow_mut().take();
+                crate::window::announce_annotation_refused(&v);
+                return;
+            }
             // Pre-populate with the comment(s) this annotation will MERGE.
             // `insert_or_extend_highlight` deliberately extends rather than nests — it
             // replaces every intersecting construct, `{>>comment<<}` included, with the

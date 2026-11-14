@@ -48,6 +48,104 @@ pub(crate) enum Landing {
     Highlight(Range<usize>),
     /// Write a point comment here instead.
     Point(Slot),
+    /// Write nothing: the selection lies wholly inside an existing comment (or inside
+    /// markup that shows no text), and a comment's text is not annotatable.
+    Refused,
+}
+
+/// Every CriticMarkup delimiter (`{==` `==}` `{>>` `<<}` `{++` `++}` `{--` `--}` `{~~`
+/// `~~}`) is three bytes; [`shown`] reads a construct's visible text off that.
+const DELIM_LEN: usize = super::mutate::HL_OPEN.len();
+
+/// The ORIGINAL bytes of `mark` that the reader sees: a highlight's claim, an insertion's
+/// or deletion's text, a substitution's new side. `None` for a point comment.
+fn shown(mark: &super::Annotation) -> Option<Range<usize>> {
+    let (s, e) = (mark.src_span.start.raw(), mark.src_span.end.raw());
+    let len = mark.cleaned_content.end.raw() - mark.cleaned_content.start.raw();
+    match mark.kind {
+        super::AnnKind::Comment => None,
+        // `{~~old~>new~~}`: the new side ends at the closer.
+        super::AnnKind::Substitution => Some(e - DELIM_LEN - len..e - DELIM_LEN),
+        _ => Some(s + DELIM_LEN..s + DELIM_LEN + len),
+    }
+}
+
+/// The whole `{>>…<<}` of `mark`, delimiters included, if it has one.
+fn comment_of(mark: &super::Annotation) -> Option<Range<usize>> {
+    let body = mark.src_comment_body.as_ref()?;
+    Some(body.start - DELIM_LEN..body.end + DELIM_LEN)
+}
+
+/// Where a claim over `range` may start and end (TDD 17.59): **never inside another
+/// mark's delimiters, inside a comment, or part-way through a suggested edit**.
+///
+/// Writing `{==`/`==}` at any of those places corrupts the mark: CriticMarkup does not
+/// nest, so the scanner reads the first `==}` after `{==` as the claim's end and
+/// everything between as literal text. A selection ending where `{++` begins wrote
+/// `{==…{++==}{>>…<<}…++}` — the preview's selection end maps PAST markup cleaned away
+/// at that offset (`cleaned_to_original`), so the end landed between `{++` and its text —
+/// and a selection inside a comment's text wrote the new claim into the comment.
+///
+/// So each end that falls strictly inside a mark is moved out of it: back to the mark's
+/// start when the selection took none of its visible text (it began before the mark and
+/// ends at or before the text), forward to its end when it took some — the mark is then
+/// enclosed whole. A highlight's own claim text is the one interior left alone: a
+/// selection reaching into it extends that highlight (`insert_or_extend_highlight`).
+/// `None` when the selection lies wholly inside one comment (its text, its delimiters,
+/// or the whole of it), or snaps to nothing: there is no text to annotate.
+fn claim_span(marks: &[super::Annotation], range: Range<usize>) -> Option<Range<usize>> {
+    let inside_comment = |m: &super::Annotation| {
+        let whole = if m.kind == super::AnnKind::Comment {
+            Some(m.src_span.start.raw()..m.src_span.end.raw())
+        } else {
+            comment_of(m)
+        };
+        whole.is_some_and(|c| c.start <= range.start && range.end <= c.end)
+    };
+    if marks.iter().any(inside_comment) {
+        return None;
+    }
+    let mut out = range.clone();
+    for m in marks {
+        let (s, e) = (m.src_span.start.raw(), m.src_span.end.raw());
+        let shown = shown(m);
+        let claim = shown
+            .clone()
+            .filter(|_| m.kind == super::AnnKind::Highlight);
+        if s < range.start && range.start < e {
+            let x = range.start;
+            out.start = if claim.as_ref().is_some_and(|c| c.start <= x && x < c.end) {
+                x
+            } else if range.end > e && shown.as_ref().is_none_or(|v| x >= v.end) {
+                e
+            } else {
+                s
+            };
+        }
+        if s < range.end && range.end < e {
+            let x = range.end;
+            out.end = if claim.as_ref().is_some_and(|c| c.start < x && x <= c.end) {
+                x
+            } else if range.start < s && shown.as_ref().is_none_or(|v| x <= v.start) {
+                s
+            } else {
+                e
+            };
+        }
+    }
+    (out.start < out.end).then_some(out)
+}
+
+/// Whether `range` holds a whole mark that is not a highlight. A highlight cannot be
+/// written around one — the mark would read as literal text inside the claim — so such a
+/// claim lands as a point comment at its end instead (the rule `insert_or_extend_highlight`
+/// already applies when a merge would enclose a suggested edit).
+pub(crate) fn encloses_mark(marks: &[super::Annotation], range: &Range<usize>) -> bool {
+    marks.iter().any(|m| {
+        m.kind != super::AnnKind::Highlight
+            && range.start <= m.src_span.start.raw()
+            && m.src_span.end.raw() <= range.end
+    })
 }
 
 /// A point comment's place: `before`, then `{>>comment<<}`, then `after`, inserted at
@@ -223,8 +321,22 @@ fn after_block(source: &str, block: &Block) -> Slot {
 /// Where a highlight over `range` lands. A highlight touching a block it must not
 /// enter becomes a comment after that block; one touching math or a code span widens to
 /// cover it, and becomes a comment after a block if the widened range touches one.
+///
+/// The selection is first kept out of every existing mark ([`claim_span`]); one lying
+/// wholly inside a comment is [`Landing::Refused`].
 pub(crate) fn for_highlight(source: &str, range: Range<usize>) -> Landing {
-    highlight_in(source, &scan(source), range)
+    let marks = super::extract(source).annotations;
+    let Some(range) = claim_span(&marks, range) else {
+        return Landing::Refused;
+    };
+    match highlight_in(source, &scan(source), range) {
+        // Widening over math or a code span can carry an end into a mark that holds
+        // it, so the ends are kept out of marks once more.
+        Landing::Highlight(range) => {
+            Landing::Highlight(claim_span(&marks, range.clone()).unwrap_or(range))
+        }
+        other => other,
+    }
 }
 
 /// [`for_highlight`] over what `scan` read.
@@ -324,6 +436,7 @@ mod tests {
         match landing {
             Landing::Highlight(r) => crate::annotate::insert_or_extend_highlight(md, r, "c"),
             Landing::Point(slot) => crate::annotate::insert_landed_point(md, slot, "c"),
+            Landing::Refused => md.to_string(),
         }
     }
 
@@ -602,5 +715,136 @@ mod tests {
         assert_eq!(remove_point(md), "para\npara2\n");
         let md = "para\n\n{>>c<<}\n\npara2\n";
         assert_eq!(remove_point(md), "para\n\npara2\n");
+    }
+
+    /// Annotate source bytes `range` the way the apply path does; `Refused` leaves the
+    /// file as it was.
+    fn annotate_range(md: &str, range: Range<usize>) -> String {
+        apply(md, for_highlight(md, range))
+    }
+
+    /// Defect (a) (TDD 17.59): a selection strictly inside an existing comment's text —
+    /// a highlight's or a point comment's — wrote the new markup INTO that comment and
+    /// changed its text. A comment's text is not annotatable: refused, file unchanged.
+    /// Pre-fix: `…{>>and {==the reply==}{>>c<<}<<}…` (and the point-comment twin).
+    #[test]
+    fn a_selection_inside_a_comment_is_refused() {
+        let md = "The claim {==is here==}{>>and the reply<<} and {>>a point note<<} end.";
+        for word in ["the reply", "point", "{>>a point note<<}", ">>and"] {
+            let at = md.find(word).unwrap();
+            assert_eq!(
+                for_highlight(md, at..at + word.len()),
+                Landing::Refused,
+                "{word:?} lies inside a comment"
+            );
+            assert_eq!(annotate_range(md, at..at + word.len()), md);
+        }
+    }
+
+    /// Defect (b): a PREVIEW selection ending where `{++…++}` begins maps its end past
+    /// the cleaned-away `{++` (the inserted text starts at that cleaned offset), so the
+    /// end landed between `{++` and its text. Pre-fix: `say {==hello {++==}{>>c<<}there++} now`,
+    /// shown in the preview as a literal `{++`. The selection took none of the inserted
+    /// text, so the mark is excluded.
+    #[test]
+    fn a_selection_ending_where_an_insertion_begins_excludes_it() {
+        let md = "say hello {++there++} now";
+        let start = md.find("hello").unwrap();
+        let past_opener = md.find("there").unwrap();
+        assert_eq!(
+            annotate_range(md, start..past_opener),
+            "say {==hello ==}{>>c<<}{++there++} now"
+        );
+    }
+
+    /// The clean-adjacent case, as the editor produces it: the selection ends exactly at
+    /// `{++`, and the insertion stays outside the claim, byte for byte.
+    #[test]
+    fn a_selection_ending_right_before_an_insertion_leaves_it_alone() {
+        let md = "say hello {++there++} now";
+        let start = md.find("hello").unwrap();
+        assert_eq!(
+            annotate_range(md, start..md.find("{++").unwrap()),
+            "say {==hello ==}{>>c<<}{++there++} now"
+        );
+    }
+
+    /// A selection enclosing a whole suggested edit or point comment, or reaching part-way
+    /// into one, takes the whole mark — and since a highlight around a mark would read the
+    /// mark as literal text (CriticMarkup does not nest), the comment lands at the end
+    /// of the enclosed span as a point comment. Every mark keeps every byte. Pre-fix: the
+    /// mark was wrapped (`{==hello {++there++} now==}`) or split (`{==hello {++th==}…`).
+    #[test]
+    fn a_selection_over_a_mark_never_wraps_or_splits_it() {
+        for (md, from, to, want) in [
+            // Encloses the whole insertion.
+            (
+                "say hello {++there++} now",
+                "hello",
+                "now",
+                "say hello {++there++} now{>>c<<}",
+            ),
+            // Ends inside the inserted text: snaps out to the insertion's end.
+            (
+                "say hello {++there++} now",
+                "hello",
+                "ere++",
+                "say hello {++there++}{>>c<<} now",
+            ),
+            // Starts inside a deletion's text, ends after it: snaps back to its start.
+            (
+                "say {--hello--} there now",
+                "llo",
+                " now",
+                "say {--hello--} there now{>>c<<}",
+            ),
+            // Wholly inside a substitution's new side: the whole substitution.
+            (
+                "a {~~old~>new~~} b",
+                "ne",
+                "ne",
+                "a {~~old~>new~~}{>>c<<} b",
+            ),
+            // Encloses a point comment.
+            ("x a {>>n<<} b y", "a", " b", "x a {>>n<<} b{>>c<<} y"),
+        ] {
+            let start = md.find(from).unwrap();
+            let end = md.find(to).unwrap() + to.len();
+            assert_eq!(
+                annotate_range(md, start..end),
+                want,
+                "{md:?} {from:?}..{to:?}"
+            );
+        }
+    }
+
+    /// The one interior a claim may reach into is a highlight's own claim text, which
+    /// extends that highlight; an end in the highlight's COMMENT extends it whole. Both
+    /// held before this rule (the merge reads the selection in cleaned text); pinned so
+    /// the snap never takes the claim-text interior away from the merge.
+    #[test]
+    fn a_selection_into_a_highlight_extends_it() {
+        let md = "a b {==cd==}{>>n<<} e";
+        let start = md.find('b').unwrap();
+        let into_claim = md.find('d').unwrap();
+        assert_eq!(
+            annotate_range(md, start..into_claim),
+            "a {==b cd==}{>>c<<} e"
+        );
+        let into_comment = md.find(">>n").unwrap() + 3;
+        assert_eq!(
+            annotate_range(md, start..into_comment),
+            "a {==b cd==}{>>c<<} e"
+        );
+    }
+
+    /// A selection that merely CROSSES inline Markdown keeps wrapping it verbatim
+    /// (TDD 25.13 relies on `{==a **bold** word==}`): the rule is about CriticMarkup.
+    #[test]
+    fn a_selection_across_inline_markdown_still_wraps_it() {
+        assert_eq!(
+            annotate("a **bold** word here", "**bold** word"),
+            "a {==**bold** word==}{>>c<<} here"
+        );
     }
 }

@@ -131,6 +131,17 @@ pub(crate) fn wire_editor_annotate_card(
             let buf = editor.buffer();
             let source = crate::saferizer::BufferText::of(&buf).into_string();
             *pending.borrow_mut() = capture_editor_selection(&source, a.offset(), b.offset());
+            // A selection wholly inside an existing comment is not annotatable: say so
+            // rather than raising a card whose commit would write nothing (TDD 17.59).
+            if pending
+                .borrow()
+                .as_ref()
+                .is_some_and(|target| target.is_refused(&source))
+            {
+                pending.borrow_mut().take();
+                crate::window::announce_annotation_refused(&editor);
+                return;
+            }
             // Pre-populate with the comments this annotation is about to MERGE, so a
             // destructive merge is visible and user-controlled instead of silent
             // (the preview-side sibling of this card does the same). `insert_or_extend_highlight`
