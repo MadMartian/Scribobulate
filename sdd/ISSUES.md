@@ -67,7 +67,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
 | N | Any | Production | File ▸ Open from a slow mount never shows "Opening…": it is armed on link-follow only | Low |
-| R | Any | Production | Toggling a one-line disclosure at the document's end can throw the preview to the top: the full re-render's restore fails at maximum scroll | Medium |
 | W | Any | Production | Each window open/close cycle retains ~0.6 MB, linearly, with no plateau | Medium |
 | Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
@@ -78,16 +77,14 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
-| AR | Any | Production | An external reload landing during a narrowing drag re-anchors near the top | Low |
-| AS | Any | Production | The first outline click into a collapsed block expands it but does not scroll the heading to the top | Low |
 | AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
 | AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
 | AV | Linux | Production | On X11, a middle-click paste on a blank line, past a line's end or on the empty last line is dropped | Low |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
-| BD | Any | Production | A `--` on the command line opens as an empty tab named `--` | Low |
 | BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
+| BI | Linux | Test | The XInclude screen's bounded-time test took 21.1 s against its 20 s bound in the coverage step on the GitHub Linux runner | Low |
 
 ## Closed issues
 
@@ -508,18 +505,6 @@ TDD 1.4e: from a slow mount, 15–20 frames at 1.5 s and 4 s read delay never sh
 by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in "File the 1.0.0 dry run's
 deferrals…" (2026-11-14). No Known-issues line.
 
-## R. Toggling a disclosure at the document's end can throw the preview to the top
-
-**Severity**: Medium (a visible jump; nothing is lost).
-
-TDD 2.26h: a one-line disclosure the fold splice refuses (its body literal text in the
-opening raw-HTML block) takes the full re-render, and only at maximum scroll does the
-restore fail. Intermittent (4/5 after an outline jump to the end; Windows +79 px on 2/9);
-likeliest a race between the outline jump's far-scroll re-issue and the re-render's
-restore — adjustment-lifecycle work, research first. Evidence: 1.0.0 dry run, filed in "File
-the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Toggling a disclosure at the
-very end of a document can jump the preview to the top."*
-
 ## W. Each window open/close cycle retains ~0.6 MB
 
 **Severity**: Medium (unbounded retention).
@@ -619,22 +604,6 @@ different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. 
 *"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
 press ⌥2 or File ▸ Reload."*
 
-## AR. A reload landing during a narrowing drag re-anchors near the top
-
-**Severity**: Low.
-
-TDD 7.15: an external reload landing mid-drag re-anchors near the top; resize alone and
-reload alone both hold. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's
-deferrals…" (2026-11-14). No Known-issues line.
-
-## AS. The first outline click into a collapsed block expands it but does not scroll
-
-**Severity**: Low (a second click works).
-
-TDD 12.22 (4/4): the block expands but the heading is not scrolled to the top; a second
-click does. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line. **Not reproduced on Linux** (GTK 4.6.9, 2026-11-14): `disclosure.md` in Preview and Split, from the top and after Ctrl+End, at 900×720 and 1400×980, and a ~1,900-line far target — the first click landed the heading at the top every time. Platform still to be established on Windows or macOS before any change.
-
 ## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
 
 **Severity**: Low (harness only).
@@ -675,15 +644,6 @@ dry run's deferrals…" (2026-11-14). No Known-issues line.
 TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
 the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
-## BD. A `--` on the command line opens as a document
-
-**Severity**: Low.
-
-TDD 8.8: an extra empty tab named `--` opens beside the file; `-- --help` forwarded to a
-running primary opens both. Needs a GLib argument-handling answer first. Evidence: 1.0.0 dry
-run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"A `--` on
-the command line opens an empty tab named `--` — leave it out."*
-
 ## BG. A 3000-item nested list stalls first render for about a minute
 
 **Severity**: Low.
@@ -701,6 +661,20 @@ Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 
 the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
 Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
 Known-issues line.
+
+## BI. The XInclude screen's bounded-time test overran its bound once on CI
+
+**Severity**: Low (a red pipeline; no user effect).
+
+`imagedecode::xinclude::tests::cap_sized_runs_of_declarations_are_screened_in_bounded_time`
+failed in step 5c (coverage, instrumented build) on the GitHub Linux runner: "xml
+declarations with no `?>`: 21.113728538s" against a 20 s bound (run 43636725601,
+2026-11-14, branch `bug/1.0.0-deferrals`, which does not touch `src/imagedecode/`). The local
+Linux pipeline on the same tree passed, and the six preceding `master` runs were green.
+Before changing anything, measure the shape's time in the coverage build locally and on CI:
+either the bound is too tight for an instrumented build on a shared runner, or the screen's
+cost on that shape is closer to quadratic than the test assumes (a security question —
+read CVE.md's header and ScrSEC-1 first).
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

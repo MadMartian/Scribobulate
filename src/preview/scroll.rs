@@ -463,11 +463,94 @@ pub(crate) fn restore_preview_scroll_to_line_fresh(sw: &ScrolledWindow, line: i3
     restore_textview_scroll_to_line_progressive(sw, &view, line);
 }
 
+/// Restore a scroller to `line` after its view's buffer was **emptied and refilled in
+/// place** — the full re-render of a disclosure toggle the fold splice refused (TDD
+/// 2.26h). Neither restore above fits that shape alone: the widget and its adjustment
+/// survive (so [`restore_preview_scroll_to_line_fresh`]'s premise of a brand-new view
+/// fails) while every line height is unvalidated (so the warm one-shot
+/// [`restore_preview_scroll_to_line`] stops part-way on a far target, GTK4Rs/AP-115,
+/// GTK4Rs/AP-260).
+///
+/// It also owes what a rebuilt widget never needed: a scroll that was parked INSIDE GTK
+/// before the rebuild is still parked. An outline jump scrolls to the persistent
+/// `scrib-outline-target` mark; GTK keeps that request until the next
+/// `scroll_to_mark` replaces it, the whole-buffer delete moved the mark to offset 0, and
+/// the request then fires to the TOP of the document once the layout validates — after
+/// this restore, which it overwrites. So the mark is moved to the reader's line and
+/// scrolled to once, which replaces the stale request with a correct one, and the
+/// progressive restore then carries the view the rest of the way.
+pub(crate) fn restore_refilled_preview_to_line(sw: &ScrolledWindow, line: i32) {
+    let Some(view) = sw.child().and_then(|c| c.downcast::<TextView>().ok()) else {
+        return;
+    };
+    let buffer = view.buffer();
+    let target = line.clamp(0, (buffer.line_count() - 1).max(0));
+    if let Some(mark) = buffer.mark(crate::codeview::OUTLINE_TARGET_MARK) {
+        let iter = buffer
+            .iter_at_line(target)
+            .unwrap_or_else(|| buffer.end_iter());
+        buffer.move_mark(&mark, &iter);
+        #[expect(clippy::disallowed_methods)] // deliberate raw call — see clippy.toml
+        view.scroll_to_mark(&mark, 0.0, true, 0.0, 0.0);
+    }
+    if line > 0 {
+        restore_textview_scroll_to_line_progressive(sw, &view, line);
+    }
+}
+
+/// The generation of the newest progressive restore issued on a view: a restore that
+/// finds a newer one has superseded it retires itself (GTK4Rs/AP-172 — "am I still
+/// current?", never "is the slot empty?").
+const FAR_RESTORE_GENERATION: crate::saferizer::qdata_key::QdataKey<u64> =
+    crate::saferizer::qdata_key::QdataKey::new("scrib-far-restore-generation");
+
+/// The line the newest progressive restore on a view is travelling to, until it settles.
+const FAR_RESTORE_IN_FLIGHT: crate::saferizer::qdata_key::QdataKey<Option<i32>> =
+    crate::saferizer::qdata_key::QdataKey::new("scrib-far-restore-in-flight");
+
+/// The line a progressive restore on `view` is still travelling to, `None` once it has
+/// settled or when none was issued. A geometry change that lands meanwhile joins this
+/// driver ([`CodePreviewView::reanchor_to_reading_line`]) instead of starting a second
+/// writer over the same adjustment.
+pub(crate) fn far_restore_in_flight(view: &impl IsA<TextView>) -> Option<i32> {
+    FAR_RESTORE_IN_FLIGHT
+        .get(view.upcast_ref::<TextView>())
+        .flatten()
+}
+
+/// Re-issue the progressive restore still travelling to `target` on `sw`'s view, so it
+/// re-reads heights a geometry change has just invalidated. The caller learned `target`
+/// from [`far_restore_in_flight`]; this is the same restore under a new generation, not a
+/// second navigation, hence it is not one of the banned line seams.
+pub(crate) fn rejoin_far_restore(sw: &ScrolledWindow, target: i32) {
+    if let Some(view) = sw.child().and_then(|c| c.downcast::<TextView>().ok()) {
+        restore_textview_scroll_to_line_progressive(sw, &view, target);
+    }
+}
+
+/// Whether the progressive restore holding `mine` is still the newest one issued
+/// (`newest`). Split out so the rule is testable without a view.
+fn restore_is_current(mine: u64, newest: Option<u64>) -> bool {
+    newest == Some(mine)
+}
+
 /// The progressive, `notify::upper`-driven far-restore core (see
 /// [`restore_preview_scroll_to_line_fresh`]).
 fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextView, line: i32) {
     let buffer = view.buffer();
     let target = line.clamp(0, (buffer.line_count() - 1).max(0));
+    // Take over from any earlier restore on this view, and tell the view where the
+    // reader is going so a resize landing before this settles re-anchors HERE and not
+    // at whatever the transiently clamped viewport reads (TDD 7.15).
+    let generation = FAR_RESTORE_GENERATION
+        .get(view)
+        .unwrap_or(0)
+        .wrapping_add(1);
+    FAR_RESTORE_GENERATION.set(view, generation);
+    FAR_RESTORE_IN_FLIGHT.set(view, Some(target));
+    if let Some(cpv) = view.downcast_ref::<CodePreviewView>() {
+        cpv.adopt_programmatic_target(target);
+    }
     let iter = buffer
         .iter_at_line(target)
         .unwrap_or_else(|| buffer.end_iter());
@@ -487,7 +570,8 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
     // cycle and strand the whole preview subtree.
     let view_weak = view.downgrade();
     let sw_weak = sw.downgrade();
-    let apply = Rc::new(move || -> bool {
+    let supersession_view = view.downgrade();
+    let step = move || -> bool {
         let (Some(view), Some(sw)) = (view_weak.upgrade(), sw_weak.upgrade()) else {
             return true; // widget gone (a later reload replaced it) — stop
         };
@@ -519,6 +603,21 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
         crate::saferizer::scrollpos::jump(&vadj, value.clamp(0.0, max)); // NON-animating
         let (top, _) = view.line_at_y(ViewportTopIter::top_y_for_value(&view, vadj.value()));
         top.line() == target || vadj.value() >= max
+    };
+    // The one driver: a newer restore on this view (a resize's re-anchor, a second
+    // toggle) retires this one, and a settled one reports itself no longer in flight.
+    let apply = Rc::new(move || -> bool {
+        let Some(view) = supersession_view.upgrade() else {
+            return true;
+        };
+        if !restore_is_current(generation, FAR_RESTORE_GENERATION.get(&view)) {
+            return true; // superseded — its successor owns the adjustment now
+        }
+        let settled = step();
+        if settled {
+            FAR_RESTORE_IN_FLIGHT.set(&view, None);
+        }
+        settled
     });
 
     // Self-disconnecting notify::upper subscription: re-apply on each validation
@@ -911,5 +1010,21 @@ mod gtk_integration_tests {
             buf_b,
             "the view still shows buffer B — the guarded restore never resolved the orphaned mark"
         );
+    }
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+
+    /// A progressive restore keeps driving only while it is the newest one issued on its
+    /// view: a resize's re-anchor or a second toggle starts a successor, and two writers
+    /// over one adjustment is the defect (TDD 7.15). A view that never issued one has no
+    /// newest, and nothing is current there.
+    #[test]
+    fn a_progressive_restore_is_current_only_while_it_is_the_newest_on_its_view() {
+        assert!(restore_is_current(3, Some(3)));
+        assert!(!restore_is_current(3, Some(4)));
+        assert!(!restore_is_current(3, None));
     }
 }
