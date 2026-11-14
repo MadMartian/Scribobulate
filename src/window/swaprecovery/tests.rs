@@ -376,6 +376,35 @@ fn a_snapshot_no_restored_tab_claims_is_still_recovered() {
     });
 }
 
+/// TDD 23.9: with no saved session the window holds only its blank Untitled tab, and
+/// revealing a recovered document is not a navigation — Back must stay disabled rather
+/// than lead onto the blank tab.
+///
+/// Mutation: dropping the `nav_suppress` in `reopen_recovered` enables Back.
+#[gtktest::test]
+fn revealing_a_recovered_document_leaves_no_history() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let app =
+            super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.rec23_9");
+        let win = new_window(&app, "IT", "", None);
+        seed_swap(
+            dir.path(),
+            &header(DocId::generate(), None, b""),
+            "recovered and unsaved",
+        );
+
+        gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
+
+        assert_eq!(winstate::tabs_for_window(&win).len(), 2, "a tab was opened");
+        assert!(
+            !winstate::nav_can(&win, winstate::NavDir::Back),
+            "Back must not lead onto the blank Untitled tab"
+        );
+        assert!(!winstate::nav_can(&win, winstate::NavDir::Forward));
+    });
+}
+
 /// **TDD 22.17: reopening the crashed document by name recovers into THAT tab, not a
 /// second one.**
 ///

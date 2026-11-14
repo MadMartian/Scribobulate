@@ -67,7 +67,7 @@
 //! state files not**.
 
 pub(crate) mod budget;
-mod content;
+pub(crate) mod content;
 mod pool;
 pub(crate) mod rename;
 

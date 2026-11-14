@@ -238,6 +238,9 @@ The scan's one other deletion is a readable `.swap` of ours, not owned by a live
 instance, whose body is byte-for-byte the content of the file its `path` names: it holds
 nothing to recover, and kept, it would be recovered again on every launch (TDD 22.19).
 
+A body containing a NUL byte is refused as malformed, as the document readers refuse a
+NUL (TDD 1.4a): the file is kept, not recovered and not deleted.
+
 A future version bump is readable-by-refusal: a file whose version this build does not
 understand is left untouched for the build that does.
 
@@ -271,6 +274,11 @@ A session file written before this table existed carries `width` / `height` at t
 A window that has a `[windows.place]` table keeps the place's size, whatever stray
 top-level `width` / `height` it also carries. A top-level value that is not an integer
 size is skipped for that window and logged at `warn`.
+
+A `sidebar_split` under `[windows.chrome]` that is not a number (a string, a boolean, a
+table) is read as the even split, `0.5`, logged at `warn`: it costs that window its
+remembered divider, never the session. A number of any magnitude is accepted as read and
+made harmless where it is used (TDD 20.21).
 
 ## Reading-theme file (`themes.toml`)
 

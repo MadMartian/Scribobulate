@@ -131,10 +131,10 @@ pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;
 pub(crate) use navhistory::{departure_stamp, traversal_to, NavDir, NavHistory, NavPlace, NavSpot};
 pub(crate) use registry::{
-    add_tab, alloc_tab_id, chrome, nav_can, nav_current, nav_degrade_stale_headings, nav_record,
-    nav_record_jump, nav_step, nav_suppress, register, rehome_tab, remove_tab, set_active_tab,
-    state, tab_by_content_box, tab_by_id, tab_count, tab_for_descendant, tab_placement,
-    tabs_for_window, unregister,
+    add_tab, alloc_tab_id, chrome, nav_can, nav_current, nav_degrade_stale_headings, nav_hold,
+    nav_record, nav_record_jump, nav_step, nav_suppress, register, rehome_tab, remove_tab,
+    set_active_tab, state, tab_by_content_box, tab_by_id, tab_count, tab_for_descendant,
+    tab_placement, tabs_for_window, unregister,
 };
 pub(crate) use scrollsync::{ScrollDriver, ScrollSync};
 pub(crate) use selfdelete::SelfDeleteGuard;

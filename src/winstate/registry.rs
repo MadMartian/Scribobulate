@@ -248,6 +248,33 @@ impl Drop for NavSuppressGuard {
     }
 }
 
+/// Open a scope in which page switches on `window` leave its history exactly as it is —
+/// for a tour that ends back on the tab it began on and cannot remove a tab (Save All,
+/// TDD 23.9). Unlike [`nav_suppress`] the cursor does not follow, so no stop is
+/// overwritten or collapsed on the way. Released on drop.
+#[must_use = "the scope ends when the guard drops; binding it to `_` ends it immediately"]
+pub(crate) fn nav_hold(window: &ApplicationWindow) -> NavHoldGuard {
+    with_nav(window, |nav| nav.hold());
+    NavHoldGuard {
+        window: window_id(window),
+    }
+}
+
+/// The live scope [`nav_hold`] opens.
+pub(crate) struct NavHoldGuard {
+    window: WindowId,
+}
+
+impl Drop for NavHoldGuard {
+    fn drop(&mut self) {
+        WINDOWS.with(|m| {
+            if let Some(entry) = m.borrow().get(&self.window) {
+                entry.nav.borrow_mut().unhold();
+            }
+        });
+    }
+}
+
 /// Drop every history entry for `tab_id` in whichever window's history holds it
 /// (TDD 23.8). Private: it is called only from [`remove_tab`]/[`rehome_tab`], the
 /// two places a tab stops belonging to a window, so no caller can forget it.
