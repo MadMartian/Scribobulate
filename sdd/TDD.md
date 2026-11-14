@@ -1807,6 +1807,8 @@
 - **Then** the Format commands — and the caret overlay that appears over the match — stay **enabled**: the find bar is a sticky transient surface, like the Format toolbar, so it does not disable the focus-gated commands
 - **And when** the user switches to preview via the **View menu** (keyboard focus stays in the menubar the whole time)
 - **Then** the Format commands still disable — disabling in preview is gated on the view mode, not only on focus, so the menu-driven switch greys every Format surface together (menu, toolbar, overlay, heading control), consistent with the toolbar
+- **And when** a menu-bar command (View ▸ Swap Panes, say) has left the keyboard focus on the menu bar, and the user then switches to another tab and back to one in Split or Edit mode
+- **Then** the Format commands are enabled again without a click into the editor: the menu bar is a sticky surface, so the editor's last focus still stands, and a round trip through a tab that shows no editor must not lose it
 
 ### 10.7 Accelerators apply the markup
 - **Given** edit or split mode with editor focus

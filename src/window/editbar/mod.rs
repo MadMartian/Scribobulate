@@ -50,7 +50,9 @@ use edit::*;
 // The window-facing surface (brought into `window` scope by `window/mod.rs`'s
 // `use editbar::*`, and reachable qualified as `editbar::…`).
 pub(crate) use edit::apply_format;
-pub(crate) use focusgate::{setup_editor_focus_gate, sync_gate_to_pane_focus};
+pub(crate) use focusgate::{
+    restore_remembered_gate, setup_editor_focus_gate, sync_gate_to_pane_focus,
+};
 pub(crate) use formatbar::{build_format_bar, format_items};
 pub(crate) use insert::{go_to_line, insert_image, insert_link, insert_table};
 pub(crate) use listindent::wire_list_indent_keys;

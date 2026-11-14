@@ -120,6 +120,21 @@ pub(crate) fn sync_gate_to_pane_focus(window: &ApplicationWindow) -> bool {
     true
 }
 
+/// Re-derive the gate for a tab switch that left the focus on a sticky surface (the menu
+/// bar after any menu-bar command): neither pane holds it, so [`sync_gate_to_pane_focus`]
+/// changed nothing, yet the switch's per-tab mode reset may have shut the gate for a tab
+/// that showed no editor. The gate's last real decision still describes the reader, so it
+/// is read back, for the tab now shown (TDD 10.6a). Not itself a decision, so it records
+/// nothing.
+pub(crate) fn restore_remembered_gate(window: &ApplicationWindow) {
+    let remembered =
+        crate::winstate::chrome(window).is_some_and(|ch| ch.editor_gate_remembered.get());
+    apply_gate(
+        window,
+        crate::winstate::editor_gate_after_switch(current_mode(window), remembered),
+    );
+}
+
 /// `focus` is `anc` or inside it.
 fn within(focus: &gtk::Widget, anc: &gtk::Widget) -> bool {
     focus == anc || focus.is_ancestor(anc)
@@ -129,6 +144,15 @@ fn within(focus: &gtk::Widget, anc: &gtk::Widget) -> bool {
 /// the caret overlay: focus genuinely left the editor (and not into the overlay card,
 /// which the transient-surface check above treats as still editing).
 fn set_gate(window: &ApplicationWindow, enabled: bool) {
+    // A real decision: remember it for `restore_remembered_gate`.
+    if let Some(ch) = crate::winstate::chrome(window) {
+        ch.editor_gate_remembered.set(enabled);
+    }
+    apply_gate(window, enabled);
+}
+
+/// Write the gated actions' enabled state, and dismiss the caret overlay on close.
+fn apply_gate(window: &ApplicationWindow, enabled: bool) {
     set_action_enabled(window, "format", enabled);
     set_action_enabled(window, "go-to-line", enabled);
     if !enabled {
@@ -167,8 +191,52 @@ mod gtk_integration_tests {
     /// Format stayed off until the focus left the editor and came back.
     #[gtktest::test]
     fn switching_back_to_a_tab_whose_editor_had_focus_keeps_format_enabled() {
-        let app = test_app_suffixed("fmtgate-tabswitch");
+        round_trip_keeps_format_enabled("fmtgate-tabswitch", false);
+    }
+
+    /// TDD 10.6a: the same round trip when a sticky surface holds the focus.
+    ///
+    /// Every menu-bar command (View > Swap Panes is the reported one) ends with the
+    /// focus on the menu bar rather than back in the editor, and the gate is sticky
+    /// there, so it stays open. A round trip through a tab that shows no editor then
+    /// closed it (`apply_mode_action_state` forces it off for that tab) and nothing
+    /// could reopen it: the focus was in no pane, and the tab stack hands the focus
+    /// back only when the outgoing page held it. The Bold button stands in for the
+    /// menu bar here; both are sticky surfaces the gate leaves alone.
+    #[gtktest::test]
+    fn switching_back_to_a_tab_keeps_format_enabled_while_a_sticky_surface_holds_focus() {
+        round_trip_keeps_format_enabled("fmtgate-tabswitch-sticky", true);
+    }
+
+    /// The toolbar button for `win.format::<target>`, found by walking the live tree.
+    fn find_format_button(w: &gtk::Widget, target: &str) -> Option<gtk::Widget> {
+        if let Some(b) = w.downcast_ref::<gtk::Button>() {
+            if b.action_name().as_deref() == Some("win.format")
+                && b.action_target_value()
+                    .and_then(|v| v.str().map(str::to_string))
+                    .as_deref()
+                    == Some(target)
+            {
+                return Some(w.clone());
+            }
+        }
+        let mut c = w.first_child();
+        while let Some(ch) = c {
+            if let Some(found) = find_format_button(&ch, target) {
+                return Some(found);
+            }
+            c = ch.next_sibling();
+        }
+        None
+    }
+
+    fn round_trip_keeps_format_enabled(suffix: &str, sticky_focus: bool) {
+        let app = test_app_suffixed(suffix);
         let win = new_window(&app, "IT-fmtgate-tabs", "# A\n\nThe quick brown fox.", None);
+        app.change_action_state(
+            &crate::window::toolbarchrome::section_action("format"),
+            &true.to_variant(),
+        );
         change_action_state(&win, "view-mode", &"split".to_variant());
         win.present();
         settle();
@@ -194,6 +262,19 @@ mod gtk_integration_tests {
             "precondition: editor focus opens the gate"
         );
 
+        if sticky_focus {
+            // A menu-bar command leaves the focus on a sticky surface; the editor keeps
+            // its selection. The gate must stay open through that.
+            let bold = find_format_button(&win.child().expect("window child"), "bold")
+                .expect("a win.format::bold button is somewhere in the toolbar");
+            bold.grab_focus();
+            settle();
+            assert!(
+                format_enabled(&win),
+                "precondition: a sticky surface leaves the gate open"
+            );
+        }
+
         let tab_b = crate::winstate::tab_by_id(tab_b_id).expect("tab B registered");
         assert!(
             chrome.tabs.focus_page(&tab_b.content_box),
@@ -208,7 +289,7 @@ mod gtk_integration_tests {
 
         let focus = GtkWindowExt::focus(&win);
         assert!(
-            focus.as_ref() == Some(tab_a.editor.upcast_ref::<gtk::Widget>()),
+            sticky_focus || focus.as_ref() == Some(tab_a.editor.upcast_ref::<gtk::Widget>()),
             "precondition: the switch back hands the focus to tab A's editor (got {:?})",
             focus.map(|f| f.type_().name())
         );

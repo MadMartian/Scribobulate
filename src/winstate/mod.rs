@@ -145,5 +145,7 @@ pub(crate) use selfdelete::SwallowReason;
 pub(crate) use status::{StatusCtx, StatusStack, ERROR_NOTICE_TIME};
 pub(crate) use swap::{next_delay_ms, SwapState, MAX_LATENCY_MS};
 pub(crate) use tab::{TabInit, TabState};
-pub(crate) use viewmode::{copy_target, find_pane, FocusedPane, ViewMode};
+pub(crate) use viewmode::{
+    copy_target, editor_gate_after_switch, find_pane, FocusedPane, ViewMode,
+};
 pub(crate) use writegate::WriteGate;
