@@ -48,11 +48,12 @@ carried here as two unrelated entries and was nearly fixed twice before anyone n
 were one thing. Before opening work on an entry, scan the others for the same mechanism
 described from a different vantage point.
 
-**A grouped entry** holds several findings of one area under one letter, each a bullet
-with its own severity, reproduction and platforms; the entry's severity is its worst
-bullet's. One release pass found more deferrable defects than the alphabet has letters,
-and these were filed that way rather than compacting or widening the IDs. A fixed finding
-deletes its bullet; the letter goes when the last bullet does.
+**One finding per entry, and IDs never come back.** Assign each new entry the next unused
+ID: `A`–`Z`, then `AA`, `AB`, … `AZ`, `BA`, … Never backfill a gap a deletion or a closure
+leaves, never reuse an ID, never renumber the survivors, and never compact: an ID names one
+finding for as long as the entry lives. (The register once compacted at `Z` and, when one
+release pass filed more findings than the alphabet holds, grouped several under one letter;
+both are retired — a group cannot be triaged or deleted one finding at a time.)
 
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
@@ -65,25 +66,60 @@ deletes its bullet; the letter goes when the last bullet does.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | L | Any | Production | A highlight with no comment, `{==text==}` on its own, is valid CriticMarkup but the app treats it as not an annotation: it is left out of the annotations sidebar by design and the reader does not get a highlight with its markup hidden | Low |
-| M | Windows | Production | Windows file-system edges: live reload stops after the document's folder is deleted and recreated, never starts on a UNC path, and once left a false "deleted" state after a rename away and back; `nul.md` opens as the NUL device instead of being refused | Medium |
-| N | Any | Production | Five status notices are missing, late, covered or wrong: no "Opening…" for File ▸ Open, no second conflict prompt, a toast over the deleted-file prompt, a stale status over a truncation notice, the wrong reason logged for an unreadable image | Low |
-| O | Any | Production | Export drops or garbles content: a task item with a nested list loses its checkbox (HTML, PDF), Hangul is tofu in a Windows PDF, an unaligned header is centred and the Annotations summary prints a literal `**` (HTML) | Medium |
-| P | Any | Production | Preview rendering slips: an h-scrollbar at the narrowest window with the outline open, `<img width>` ignored, a `<details>` list item's bullet on its own line, a tiny disclosure marker on Windows, a raw `+++` in the front-matter snippet | Low |
-| Q | Any | Production | A rejected key in a user theme falls back to the desktop's page colour rather than the built-in theme's, which can leave Sepia ink invisible; two toolbar icons take the Linux host theme's; three tooltips show no accelerator | Medium |
-| R | Any | Production | The view lands somewhere else: a disclosure toggled at the document end jumps to the top, a click during Ctrl+End's travel on Windows, Side by Side on a short document on macOS, a reload during a resize drag, the first outline click into a collapsed block | Medium |
-| S | Any | Production | Editor commands go dead or misbehave: Format greyed after Swap panes and a tab round trip, Insert Emoji never inserts on macOS, a middle-click paste off a glyph is dropped (Linux), a new tab inherits the Replace text, typing clears the annotation selection (Windows) | Medium |
-| T | Any | Production | Annotation edge cases: annotating over a highlight prefills its old comment, the marker popover quotes raw source, a comment at a paragraph's start puts its chip beside the block before, a card vanishes instead of flipping on resize | Low |
-| U | Any | Production | Session and launch edges: two same-instant launches skip the restore, a dragged tab order is not saved, a wrongly typed `sidebar_split` drops the whole session, `--` opens as a document, two history stops are wrong | Low |
-| V | Any | Production | Crash-recovery snapshots: two live processes on one session write one swap file, so one edit is lost in a crash, and a snapshot body holding a NUL is not refused | Low |
-| W | Any | Production | Footprint and responsiveness: ~0.6 MB retained per window open/close, a ~68 s first-render stall on a 3000-item nested list, and the process outliving its windows by 20–30 s after Quit on Windows | Medium |
+| M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
+| N | Any | Production | File ▸ Open from a slow mount never shows "Opening…": it is armed on link-follow only | Low |
+| O | Any | Production | A task item with a nested list exports without its checkbox (HTML, PDF); the preview draws it | Medium |
+| P | Any | Production | At the 360 px window floor with the outline open, the preview grows a horizontal scrollbar that moves content 3–6 px | Low |
+| Q | Any | Production | A rejected key in a user theme falls back to the desktop's page colour rather than the built-in theme's, which can leave Sepia ink invisible on a dark desktop | Medium |
+| R | Any | Production | Toggling a one-line disclosure at the document's end can throw the preview to the top: the full re-render's restore fails at maximum scroll | Medium |
+| S | Any | Production | After Swap panes and a tab round trip, the Format menu stays greyed and Ctrl+B inert until the reader clicks into the editor | Medium |
+| T | Any | Production | Annotating over an existing highlight prefills the card with the old comment | Low |
+| U | Any | Production | Two launches in the same instant, one bare and one with a file, skip the session restore, and a later quit overwrites the saved session | Low |
+| V | Any | Production | Two live processes on one session snapshot to one swap file, so after a crash one process's edit is lost | Low |
+| W | Any | Production | Each window open/close cycle retains ~0.6 MB, linearly, with no plateau | Medium |
 | X | Windows | Production | Uninstalling on Windows leaves an empty `HKCU\Software\Scribobulate` key | Low |
 | Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
+| Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
+| AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
+| AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
+| AC | Any | Production | After Dismiss, further external changes raise no new conflict prompt; the Save overwrite guard still fires | Low |
+| AD | Any | Production | After Save As then deleting the file, the "File saved." toast briefly covers the "File deleted on disk" prompt's buttons | Low |
+| AE | Any | Production | "File saved" or "File reloaded" status text outlives a truncation or deletion notice's by up to ~6 s | Low |
+| AF | Any | Production | An unreadable image is logged with a reason that is not why it failed | Low |
+| AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
+| AH | Any | Production | HTML export gives an unaligned column's header no class, so a browser centres it | Low |
+| AI | Any | Production | HTML export's Annotations summary prints a literal `**` for a claim that crosses bold | Low |
+| AJ | Any | Production | `<img width="100">` is ignored: the image draws at the pane's width | Low |
+| AK | Any | Production | A `<details>` as a list item's first child puts the bullet on an empty row and the summary on the next | Low |
+| AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
+| AM | Any | Production | The collapsed front-matter snippet shows the TOML `+++` fence and smart-quotes its strings | Low |
+| AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
+| AO | Any | Production | Three tooltips show no accelerator: Insert Link…, Increase Indent, Horizontal Bar | Low |
+| AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
+| AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
+| AR | Any | Production | An external reload landing during a narrowing drag re-anchors near the top | Low |
+| AS | Any | Production | The first outline click into a collapsed block expands it but does not scroll the heading to the top | Low |
+| AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
+| AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
+| AV | Linux | Production | On X11, a middle-click paste on a blank line, past a line's end or on the empty last line is dropped | Low |
+| AW | Any | Production | A new tab's Replace field carries the previous tab's replace text | Low |
+| AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
+| AY | Any | Production | The annotation marker popover quotes a formatted claim as raw source | Low |
+| AZ | Any | Production | A comment at a paragraph's very start puts its margin chip beside the preceding block | Low |
+| BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
+| BB | Any | Production | A dragged tab order is not saved: relaunch restores the pre-drag order | Low |
+| BC | Any | Production | A wrongly typed `sidebar_split` in `session.toml` fails the whole file's parse, so the saved document tabs are lost | Low |
+| BD | Any | Production | A `--` on the command line opens as an empty tab named `--` | Low |
+| BE | Any | Production | Two navigation-history stops are wrong: Save All with both choosers cancelled drops one, and startup recovery leaves Back enabled onto a blank tab | Low |
+| BF | Any | Production | The crash-recovery snapshot decoder does not refuse a NUL in a snapshot body, as the document readers do | Low |
+| BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
+| BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
 
 ## Closed issues
 
 Intractable: no reachable fix, and the limitation is still real and present.
 Do not reopen one without a new constraint. These numbers never change and are never
-reused — unlike the letters above, which are positional and get reclaimed.
+reused, and run in a series of their own apart from the IDs above.
 
 | ID | Platform | Scope | Issue |
 |----|----------|-------|-------|
@@ -497,235 +533,431 @@ operator to answer in the app and the operator could not find them.
 - Render it as a highlight only, leave it out of the sidebar, and say so in §17.
 - Accept the limitation: write the pair; the agent instruction now says so.
 
-## M. Windows file-system edges: live reload stops, never starts, or misreads a device
+## M. On Windows, live reload stops after the document's folder is deleted and recreated
 
-**Severity**: Medium (the folder case silently stops live reload; Save still warns before
-overwriting, so nothing is lost). Found in the 1.0.0 dry run (Windows seat, on the build
-of "Merge bug/nul-byte-document: …", 2026-11-13, and its predecessors); each bullet is
-fixed and removed on its own.
+**Severity**: Medium (live reload stops silently; Save still warns before overwriting, so
+nothing is lost).
 
-- **The document's folder deleted and recreated** (Medium): open `dir\doc.md`, delete
-  `dir`, recreate it with `doc.md` → "File deleted on disk" stays, the recreated content
-  is never offered; one File ▸ Reload works, later appends are never seen. GIO's Win32
-  directory monitor loses its handle with the directory. Linux keeps firing. Known
-  issues: *"On Windows, live reload stops after the document's folder is deleted and
-  recreated — reopen the file."*
-- **A UNC path** (Low): a document opened as `\\localhost\C$\…` gets no monitor events, so
-  live reload never fires; a .NET `FileSystemWatcher` on the same share sees them. Known
-  issues: *"On Windows, a document opened through a network (UNC) path does not
-  live-reload — use File ▸ Reload."*
-- **Rename away and back in one folder** (Low, intermittent): the notice, badge and
-  prompt stayed up over a file back with identical bytes; Linux clears it in the first
-  frame. Not reproduced on a later build (2/2, frames to 9 s) — reproduce before
-  working it.
-- **`nul.md`** (Low): opens as the NUL device ("loaded … (0 bytes)"), no refusal, against
-  TDD 1.4a. Win32 treats `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`9`, `LPT1`–`9` with any
-  extension as devices; the 1.4a screen should name-check them.
+Open `dir\doc.md`, delete `dir`, recreate it with `doc.md` → "File deleted on disk" stays
+and the recreated content is never offered; one File ▸ Reload works, later appends are
+never seen. GIO's Win32 directory monitor loses its handle with the directory; Linux keeps
+firing. Evidence: 1.0.0 dry run, Windows seat, on the build of "Merge bug/nul-byte-document:
+…" (2026-11-13) and its predecessors. Known issues: *"On Windows, live reload stops after
+the document's folder is deleted and recreated — reopen the file."*
 
-## N. Five status notices are missing, late, covered or wrong
+## N. File ▸ Open from a slow mount never shows "Opening…"
 
-**Severity**: Low (each is a missing or mistimed message; no edit is lost). Found in the
-1.0.0 dry run, Linux and Windows, cross-platform by code path.
+**Severity**: Low (a missing message; no edit is lost).
 
-- **No "Opening…" for File ▸ Open** (TDD 1.4e): from a slow mount, 15–20 frames at 1.5 s
-  and 4 s read delay never show it; it is armed on link-follow only. "Reloading…"
-  shows at ~0.5 s.
-- **One conflict prompt per conflict** (TDD 5.1): after Dismiss, further external
-  changes raise no new prompt. The buffer stays dirty and the Save overwrite guard
-  (5.2) still fires; only the per-change notice is missing.
-- **A toast over a prompt**: Save As, then delete the file → the "File saved." toast
-  covers the "File deleted on disk" prompt's buttons for a moment.
-- **A stale status over a notice**: "File saved" or "File reloaded" outlives a
-  truncation or deletion notice's status text by up to ~6 s; the badge and prompt are
-  immediate.
-- **The wrong reason logged** (TDD 6.8): an unreadable image is logged with a reason that
-  is not why it failed. Log text only.
+TDD 1.4e: from a slow mount, 15–20 frames at 1.5 s and 4 s read delay never show
+"Opening…"; it is armed on link-follow only. "Reloading…" shows at ~0.5 s. Cross-platform
+by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in "File the 1.0.0 dry run's
+deferrals…" (2026-11-14). No Known-issues line.
 
-## O. Export drops or garbles content
+## O. A task item with a nested list exports without its checkbox
 
-**Severity**: Medium (the nested-task case silently drops task state the preview shows).
-Found in the 1.0.0 dry run.
+**Severity**: Medium (export silently drops task state the preview shows).
 
-- **A task item with a nested list** (Medium, any platform, 3/3): exports without its
-  checkbox in HTML and PDF; the preview draws it.
-- **Hangul in a Windows PDF** (Medium, Windows; TDD 25.18): Hangul draws as hex-box tofu
-  and extracts with its spaces dropped (Japanese-then-Korean lines split); n + U+0303
-  draws a detached tilde. The preview falls back to Malgun Gothic; the PDF path's font
-  map does not. Linux is byte-exact. Start at the cairo-win32/DirectWrite font map in
-  `src/export/pdf/`. Known issues: *"PDF export on Windows does not embed a fallback font
-  for Hangul — Korean text shows as boxes."*
-- **An unaligned column's header is centred** (Low; TDD 2.2d): the HTML export gives it
-  no class, and a browser centres `<th>` by default.
-- **A literal `**` in the Annotations summary** (Low; TDD 25.13): the HTML export prints
-  it for a claim that crosses bold.
+A task item holding a nested list exports without its checkbox in HTML and PDF; the
+preview draws it (3/3, any platform). Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry
+run's deferrals…" (2026-11-14). No Known-issues line.
 
-## P. Preview rendering slips
+## P. At the window's width floor with the outline open, the preview grows an h-scrollbar
 
-**Severity**: Low (cosmetic). Found in the 1.0.0 dry run, any platform unless marked.
+**Severity**: Low (cosmetic).
 
-- **An h-scrollbar at the floor** (TDD 2.2e): at the 360 px window floor (TDD 9.38) with
-  the outline open, the ~100 px preview grows a horizontal scrollbar that moves content
-  3–6 px. None at ≥ 420 px or with the outline closed.
-- **`<img width="100">` is ignored**: the image draws at the pane's width. No rubric
-  covers HTML `width`/`height`.
-- **A `<details>` as a list item's first child**: the bullet sits on an empty row and the
-  summary on the next (`disclosure.md`, "Disclosure in a list item"); TDD 2.26c says a
-  nested disclosure renders as at top level. The body indent is right.
-- **`disclosure_marker_size = 24` draws a 3×4 px speck** (Windows; Linux draws 10×11 px).
-  macOS not yet read.
-- **The collapsed front-matter snippet** shows the TOML `+++` fence and smart-quotes its
-  strings.
+TDD 2.2e: at the 360 px window floor (TDD 9.38) with the outline open, the ~100 px preview
+grows a horizontal scrollbar that moves content 3–6 px. None at ≥ 420 px or with the
+outline closed. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
 
-## Q. Theme fallbacks and toolbar chrome
+## Q. A rejected key in a user theme falls back to the desktop's page colour, not the theme's
 
-**Severity**: Medium (the Sepia case is unreadable text on a dark desktop). Found in the
-1.0.0 dry run.
+**Severity**: Medium (Sepia's ink is unreadable on a dark desktop).
 
-- **A rejected key falls through to System** (Medium, any platform; TDD 18.11): a user
-  `[themes.sepia]` with an invalid `background` takes the desktop's page colour, not
-  Sepia's own. On a dark desktop that is Sepia's dark ink on dark grey, invisible (2/2,
-  macOS); a light desktop gives a white page, which hides it.
-- **Two toolbar icons from the host theme** (Low, Linux; TDD 9.31): on a dark desktop
-  Show Unsafe Images draws two overlapping rectangles and Annotations a badged envelope.
-  The icon names likely resolve in the host theme before the bundled resource. Windows
-  and macOS draw the bundled icons.
-- **Three tooltips without an accelerator** (Low; TDD 16.4): Insert Link…, Increase
-  Indent, Horizontal Bar.
+TDD 18.11: a user `[themes.sepia]` with an invalid `background` takes the desktop's page
+colour (System), not Sepia's own. On a dark desktop that is Sepia's dark ink on dark grey,
+invisible (2/2, macOS); a light desktop gives a white page, which hides it. Evidence: 1.0.0
+dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
-## R. The view lands somewhere other than where the reader was
+## R. Toggling a disclosure at the document's end can throw the preview to the top
 
-**Severity**: Medium (visible jumps; nothing is lost). Found in the 1.0.0 dry run.
+**Severity**: Medium (a visible jump; nothing is lost).
 
-- **A disclosure toggled at the document end** (Medium, any platform; TDD 2.26h): a
-  one-line disclosure the fold splice refuses (its body literal text in the opening
-  raw-HTML block) takes the full re-render, and only at maximum scroll does the restore
-  fail, throwing the view to the top. Intermittent (4/5 after an outline jump to the end;
-  Windows +79 px on 2/9); likeliest a race between the outline jump's far-scroll
-  re-issue and the re-render's restore — adjustment-lifecycle work, research first.
-  Known issues: *"Toggling a disclosure at the very end of a document can jump the
-  preview to the top."*
-- **A click during Ctrl+End's travel** (Medium, Windows; TDD 9.33a; 3/3 and 2/2): the caret
-  lands where clicked, the viewport snaps to the top or runs on to the end, the caret off
-  screen. Linux 0/4 (Ctrl+End completes in < 0.1 s there); macOS not read. Known issues:
-  *"On Windows, clicking while Ctrl+End is still scrolling can leave the caret off
-  screen — press Ctrl+End again or click once more."*
-- **Side by Side from the View menu on a short document** (Medium, macOS; 14/14 by
-  menu, 0/12 by ⌥2; Linux 0/15): the preview shows only its last line. The menu route
-  alone logs `project_scroll(map) … target=16.0 max=32.0`
-  (`src/window/scrollsync.rs`): the editor-driven projection runs on map before the
-  preview's range exists. The system menu bar activates the action on a different path,
-  which is why Linux cannot see it. File ▸ Reload un-sticks it. Known issues: *"macOS: on
-  a short document, View ▸ Side by Side may show only the end of the preview — press ⌥2
-  or File ▸ Reload."*
-- **A reload during a narrowing drag** (Low; TDD 7.15): an external reload landing mid-drag
-  re-anchors near the top; resize alone and reload alone both hold.
-- **The first outline click into a collapsed block** (Low; TDD 12.22; 4/4): expands the
-  block but does not scroll the heading to the top; a second click does.
-- **Setting `view-mode` over D-Bus** (Low, harness only): `org.gtk.Actions.SetState`
-  leaves the preview scrolled where the accelerator does not; MANUAL-TEST §1.5 drives
-  view mode by accelerator.
+TDD 2.26h: a one-line disclosure the fold splice refuses (its body literal text in the
+opening raw-HTML block) takes the full re-render, and only at maximum scroll does the
+restore fail. Intermittent (4/5 after an outline jump to the end; Windows +79 px on 2/9);
+likeliest a race between the outline jump's far-scroll re-issue and the re-render's
+restore — adjustment-lifecycle work, research first. Evidence: 1.0.0 dry run, filed in "File
+the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Toggling a disclosure at the
+very end of a document can jump the preview to the top."*
 
-## S. Editor commands go dead or misbehave
+## S. After Swap panes and a tab round trip, the Format menu stays greyed
 
-**Severity**: Medium (Format goes dead until the reader clicks into the editor). Found in
-the 1.0.0 dry run.
+**Severity**: Medium (Format goes dead until the reader clicks into the editor).
 
-- **Format greyed after Swap panes** (Medium, any platform; TDD 10.6a; Windows 3/4, Linux
-  4/4): two tabs in Split, a selection in A's editor, View ▸ Swap panes, switch to B and
-  back → the Format menu stays greyed and Ctrl+B inert; only Heading stays live. Normal
-  pane order passes. Known issues: *"After swapping panes, click into the editor to
-  re-enable the Format menu."*
-- **Insert Emoji on macOS** (Medium, macOS; TDD 9.14): the chooser opens but a pick (click,
-  Enter, search) never inserts and Esc does not dismiss it; Linux and Windows insert.
-  Quartz-only path in `GtkEmojiChooser`. Known issues: *"Insert Emoji does not insert
-  on macOS — type the emoji or paste it."*
-- **A middle-click paste off a glyph** (Low, Linux/X11; 6/6): on a blank line, past a
-  line's end or on the empty last line the PRIMARY paste is dropped (the handler bails
-  when no iter is under the pointer); falling back to the line's end iter fixes it.
-- **A new tab's Replace field** carries the previous tab's replace text (Low).
-- **Typing above the selected annotation** clears the annotation list's selection (Low,
-  Windows 3/3; TDD 20.15). Linux passes; the row re-selects on the next click.
+TDD 10.6a: two tabs in Split, a selection in A's editor, View ▸ Swap panes, switch to B
+and back → the Format menu stays greyed and Ctrl+B inert; only Heading stays live. Normal
+pane order passes (Windows 3/4, Linux 4/4). Evidence: 1.0.0 dry run, filed in "File the
+1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"After swapping panes, click into
+the editor to re-enable the Format menu."*
 
-## T. Annotation edge cases
+## T. Annotating over an existing highlight prefills the card with the old comment
 
-**Severity**: Low (wrong prefill, quoting or placement; the markup written is right).
-Found in the 1.0.0 dry run, Windows and Linux, pure markup logic unless marked.
+**Severity**: Low (a wrong prefill; the markup written is right).
 
-- **Annotating over an existing highlight** prefills the card with the old comment.
-- **The marker popover** quotes a formatted claim as raw source.
-- **A comment at the very start of a paragraph** puts its margin chip beside the
-  preceding block (TDD 17.61; 2/2).
-- **On resize, a card whose anchor word moves up** vanishes instead of flipping (TDD 17.64;
-  Windows 2/2).
+Pure markup logic, so every platform. Evidence: 1.0.0 dry run (Windows, Linux), filed in
+"File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
-## U. Session, launch and history edges
+## U. Two launches in the same instant skip the session restore
 
-**Severity**: Low (each needs an unusual sequence or a hand-edited file). Found in the
-1.0.0 dry run, cross-platform by code path.
+**Severity**: Low (needs an unusual sequence).
 
-- **Two launches in the same instant** (TDD 8.2a), one bare and one with a file: the file
-  launch becomes primary and the session is not restored; a later quit overwrites the
-  saved session. A second launch 0.3 s later is clean.
-- **A dragged tab order is not saved** (TDD 15.10; 2/2): relaunch restores the pre-drag
-  order.
-- **A wrongly typed `sidebar_split`** (TDD 20.21): `sidebar_split = "abc"` in
-  `session.toml` fails the whole file's parse (the field is a plain `f64` in
-  `src/session/schema.rs`), which reads as "no saved session" — the document tabs are
-  lost. Out-of-range numbers clamp as TDD says. A tolerant deserializer for the field
-  fixes it.
-- **`--` opens as a document** (TDD 8.8): an extra empty tab named `--` beside the file;
-  `-- --help` forwarded to a running primary opens both. Needs a GLib argument-handling
-  answer first. Known issues: *"A `--` on the command line opens an empty tab named
-  `--` — leave it out."*
-- **History stops** (TDD 23.9; Linux and Windows): Save All with both Save As choosers
-  cancelled drops a stop (2/2); with no saved session, startup recovery leaves Back
-  enabled onto the blank Untitled tab (3/3).
+TDD 8.2a: one bare launch and one with a file in the same instant → the file launch
+becomes primary and the session is not restored; a later quit overwrites the saved
+session. A second launch 0.3 s later is clean. Cross-platform by code path. Evidence: 1.0.0
+dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
-## V. Crash-recovery snapshot gaps
+## V. Two live processes on one session write one swap file
 
-**Severity**: Low (both need an unusual setup). Found in the 1.0.0 dry run.
+**Severity**: Low (needs an unusual setup).
 
-- **Two live processes on one session**: two processes launched bare with
-  `--new-instance` against one state home with a saved session restore the same tab
-  with the same doc id and both snapshot to one `shared-<doc_id>.swap`; after a crash
-  the last writer's edit survives and the other is lost (seen once on Linux).
-  Single-instance activation normally prevents it. Either the swap name carries the
-  process id, or recovery refuses to share a doc id across live processes.
-- **A NUL in a snapshot body is not refused**: the document readers refuse a NUL byte,
-  but the snapshot decoder (`swapfile::codec::decode`) does not. Reachable only through a
-  tampered snapshot; refuse it there too.
+Two processes launched bare with `--new-instance` against one state home with a saved
+session restore the same tab with the same doc id and both snapshot to one
+`shared-<doc_id>.swap`; after a crash the last writer's edit survives and the other is lost
+(seen once on Linux). Single-instance activation normally prevents it. Either the swap name
+carries the process id, or recovery refuses to share a doc id across live processes.
+Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
+Known-issues line.
 
-## W. Footprint and responsiveness
+## W. Each window open/close cycle retains ~0.6 MB
 
-**Severity**: Medium (the window-cycle retention is unbounded). Found in the 1.0.0 dry run.
+**Severity**: Medium (unbounded retention).
 
-- **~0.6 MB retained per window open/close cycle** (Medium, any platform; TDD 8.6): linear
-  over 80 cycles, no plateau — a per-window residual, not the whole tab UI (~10 MB). The
-  pipeline's memory gates never cycle a window: add one with the fix. No Known-issues
-  line (hundreds of cycles before a reader notices).
-- **A 3000-item nested list stalls first render** (Low): a 1.2 MB file holds the main loop
-  ~68 s before the window appears (Linux; 2000 items ~35–39 s at 100 % CPU on macOS),
-  then renders. A candidate for incremental first render (a PLAN), not a point fix.
-- **The process outlives its windows after Quit on Windows** (Low): windows gone in 2 s,
-  the process lingers 20–30 s; Linux exits in ≤ 0.53 s. Unmeasured: the next step is
-  one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
+TDD 8.6: linear over 80 cycles, no plateau — a per-window residual, not the whole tab UI
+(~10 MB). Any platform. The pipeline's memory gates never cycle a window: add one with the
+fix. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
+Known-issues line (hundreds of cycles before a reader notices).
 
 ## X. Uninstalling on Windows leaves an empty registry key
 
-**Severity**: Low (invisible to the user). `HKCU\Software\Scribobulate` survives an
-uninstall, empty: the installer marks `Capabilities` `uninsdeletekey` and gives the
-parent no flag. Reproduce: install, uninstall, look for the key. Fix: one `.iss` row
-(`uninsdeletekeyifempty` on the parent). Found at gate 9 of the 1.0.0 dry run, every
-Windows build. Known issues: *"Uninstalling on Windows leaves an empty registry key,
-`HKCU\Software\Scribobulate`; it is harmless and can be deleted."*
+**Severity**: Low (invisible to the user).
+
+`HKCU\Software\Scribobulate` survives an uninstall, empty: the installer marks
+`Capabilities` `uninsdeletekey` and gives the parent no flag. Reproduce: install, uninstall,
+look for the key. Fix: one `.iss` row (`uninsdeletekeyifempty` on the parent). Evidence:
+gate 9 of the 1.0.0 dry run, every Windows build; filed in "File the 1.0.0 dry run's
+deferrals…" (2026-11-14). Known issues: *"Uninstalling on Windows leaves an empty registry
+key, `HKCU\Software\Scribobulate`; it is harmless and can be deleted."*
 
 ## Y. A tab-switch reveal test assumes a window size it never sets
 
-**Severity**: Low (test-only; CI's macOS runner passes it). On a 1728×1117 pt (@2×) Mac
-display, `window::outline_nav`'s `a_tab_switch_before_the_reveal_runs_drops_it` fails
-its "preview is long enough" precondition (`upper > 2 × page_size`) — 1 of 813 in the
-macOS integration step, identically on two builds of the 1.0.0 dry run, so not a
-regression. The test sets no default size where its siblings use 900×600; set one.
+**Severity**: Low (test-only; CI's macOS runner passes it).
+
+On a 1728×1117 pt (@2×) Mac display, `window::outline_nav`'s
+`a_tab_switch_before_the_reveal_runs_drops_it` fails its "preview is long enough"
+precondition (`upper > 2 × page_size`) — 1 of 813 in the macOS integration step,
+identically on two builds of the 1.0.0 dry run, so not a regression. The test sets no
+default size where its siblings use 900×600; set one. Evidence: filed in "File the 1.0.0
+dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## Z. On Windows, a document opened through a UNC path never live-reloads
+
+**Severity**: Low (File ▸ Reload still works).
+
+A document opened as `\\localhost\C$\…` gets no monitor events, so live reload never
+fires; a .NET `FileSystemWatcher` on the same share sees them. Evidence: 1.0.0 dry run,
+Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its
+predecessors. Known issues: *"On Windows, a document opened through a network (UNC) path
+does not live-reload — use File ▸ Reload."*
+
+## AA. On Windows, a rename away and back once left a false "deleted" state
+
+**Severity**: Low (intermittent).
+
+Renaming the document away and back within one folder left the notice, badge and prompt up
+over a file back with identical bytes; Linux clears it in the first frame. Not reproduced on
+a later build (2/2, frames to 9 s) — reproduce before working it. Evidence: 1.0.0 dry run,
+Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) or its
+predecessors. No Known-issues line.
+
+## AB. On Windows, `nul.md` opens as the NUL device instead of being refused
+
+**Severity**: Low.
+
+`nul.md` opens as the NUL device ("loaded … (0 bytes)") with no refusal, against TDD 1.4a.
+Win32 treats `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`9`, `LPT1`–`9` with any extension as
+devices; the 1.4a screen should name-check them. Evidence: 1.0.0 dry run, Windows seat, on
+the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its predecessors. No
+Known-issues line.
+
+## AC. After Dismiss, a further external change raises no new conflict prompt
+
+**Severity**: Low (a missing notice; no edit is lost).
+
+TDD 5.1 asks one conflict prompt per conflict; after Dismiss, further external changes
+raise none. The buffer stays dirty and the Save overwrite guard (5.2) still fires; only the
+per-change notice is missing. Cross-platform by code path. Evidence: 1.0.0 dry run (Linux,
+Windows), filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AD. The "File saved." toast briefly covers the deleted-file prompt's buttons
+
+**Severity**: Low (momentary).
+
+Save As, then delete the file → the "File saved." toast covers the "File deleted on disk"
+prompt's buttons for a moment. Cross-platform by code path. Evidence: 1.0.0 dry run (Linux,
+Windows), filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AE. A stale "File saved" or "File reloaded" status outlives a truncation or deletion notice
+
+**Severity**: Low (status text only; the badge and prompt are immediate).
+
+"File saved" or "File reloaded" outlives a truncation or deletion notice's status text by
+up to ~6 s. Cross-platform by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in
+"File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AF. An unreadable image is logged with the wrong reason
+
+**Severity**: Low (log text only).
+
+TDD 6.8: an unreadable image is logged with a reason that is not why it failed.
+Cross-platform by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in "File the
+1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AG. PDF export on Windows draws Hangul as tofu
+
+**Severity**: Medium (Korean text is unreadable in the PDF).
+
+TDD 25.18: Hangul draws as hex-box tofu and extracts with its spaces dropped
+(Japanese-then-Korean lines split); n + U+0303 draws a detached tilde. The preview falls
+back to Malgun Gothic; the PDF path's font map does not. Linux is byte-exact. Start at the
+cairo-win32/DirectWrite font map in `src/export/pdf/`. Evidence: 1.0.0 dry run, filed in
+"File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"PDF export on Windows
+does not embed a fallback font for Hangul — Korean text shows as boxes."*
+
+## AH. HTML export centres an unaligned column's header
+
+**Severity**: Low.
+
+TDD 2.2d: the HTML export gives an unaligned column's header no class, and a browser
+centres `<th>` by default. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's
+deferrals…" (2026-11-14). No Known-issues line.
+
+## AI. HTML export's Annotations summary prints a literal `**`
+
+**Severity**: Low.
+
+TDD 25.13: the HTML export prints a literal `**` in the Annotations summary for a claim
+that crosses bold. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## AJ. `<img width="100">` is ignored
+
+**Severity**: Low (cosmetic).
+
+The image draws at the pane's width. No rubric covers HTML `width`/`height`. Evidence: 1.0.0
+dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AK. A `<details>` as a list item's first child puts the bullet on its own row
+
+**Severity**: Low (cosmetic).
+
+The bullet sits on an empty row and the summary on the next (`disclosure.md`, "Disclosure
+in a list item"); TDD 2.26c says a nested disclosure renders as at top level. The body
+indent is right. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
+
+**Severity**: Low (cosmetic).
+
+Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
+dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AM. The collapsed front-matter snippet shows the `+++` fence and smart-quotes its strings
+
+**Severity**: Low (cosmetic).
+
+The collapsed snippet of TOML front matter shows its `+++` fence and smart-quotes its
+strings. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## AN. On a dark Linux desktop, two toolbar icons come from the host theme
+
+**Severity**: Low.
+
+TDD 9.31: Show Unsafe Images draws two overlapping rectangles and Annotations a badged
+envelope. The icon names likely resolve in the host theme before the bundled resource.
+Windows and macOS draw the bundled icons. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
+dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AO. Three tooltips show no accelerator
+
+**Severity**: Low.
+
+TDD 16.4: Insert Link…, Increase Indent and Horizontal Bar. Evidence: 1.0.0 dry run, filed
+in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AP. On Windows, a click during Ctrl+End's travel leaves the caret off screen
+
+**Severity**: Medium (a visible jump; nothing is lost).
+
+TDD 9.33a (3/3 and 2/2): the caret lands where clicked, the viewport snaps to the top or
+runs on to the end, the caret off screen. Linux 0/4 (Ctrl+End completes in < 0.1 s there);
+macOS not read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). Known issues: *"On Windows, clicking while Ctrl+End is still scrolling can
+leave the caret off screen — press Ctrl+End again or click once more."*
+
+## AQ. On macOS, View ▸ Side by Side on a short document shows only the preview's last line
+
+**Severity**: Medium (a visible jump; nothing is lost).
+
+14/14 by menu, 0/12 by ⌥2; Linux 0/15. The menu route alone logs `project_scroll(map) …
+target=16.0 max=32.0` (`src/window/scrollsync.rs`): the editor-driven projection runs on
+map before the preview's range exists. The system menu bar activates the action on a
+different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. Evidence:
+1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues:
+*"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
+press ⌥2 or File ▸ Reload."*
+
+## AR. A reload landing during a narrowing drag re-anchors near the top
+
+**Severity**: Low.
+
+TDD 7.15: an external reload landing mid-drag re-anchors near the top; resize alone and
+reload alone both hold. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's
+deferrals…" (2026-11-14). No Known-issues line.
+
+## AS. The first outline click into a collapsed block expands it but does not scroll
+
+**Severity**: Low (a second click works).
+
+TDD 12.22 (4/4): the block expands but the heading is not scrolled to the top; a second
+click does. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
+
+**Severity**: Low (harness only).
+
+`org.gtk.Actions.SetState` on `view-mode` leaves the preview scrolled where the
+accelerator does not; MANUAL-TEST §1.5 drives view mode by accelerator. Evidence: 1.0.0 dry
+run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AU. On macOS, Insert Emoji never inserts
+
+**Severity**: Medium (the command is dead on one platform).
+
+TDD 9.14: the chooser opens but a pick (click, Enter, search) never inserts and Esc does not
+dismiss it; Linux and Windows insert. Quartz-only path in `GtkEmojiChooser`. Evidence: 1.0.0
+dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Insert
+Emoji does not insert on macOS — type the emoji or paste it."*
+
+## AV. On Linux/X11, a middle-click paste off a glyph is dropped
+
+**Severity**: Low.
+
+On a blank line, past a line's end or on the empty last line the PRIMARY paste is dropped
+(6/6): the handler bails when no iter is under the pointer; falling back to the line's end
+iter fixes it. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## AW. A new tab's Replace field carries the previous tab's replace text
+
+**Severity**: Low.
+
+Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
+Known-issues line.
+
+## AX. On Windows, typing above the selected annotation clears the list's selection
+
+**Severity**: Low (the row re-selects on the next click).
+
+TDD 20.15 (Windows 3/3); Linux passes. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
+dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AY. The marker popover quotes a formatted claim as raw source
+
+**Severity**: Low (wrong quoting; the markup written is right).
+
+Pure markup logic, so every platform. Evidence: 1.0.0 dry run (Windows, Linux), filed in
+"File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## AZ. A comment at a paragraph's very start puts its margin chip beside the preceding block
+
+**Severity**: Low (wrong placement; the markup written is right).
+
+TDD 17.61 (2/2). Pure markup logic, so every platform. Evidence: 1.0.0 dry run (Windows,
+Linux), filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## BA. On resize, a card whose anchor word moves up vanishes instead of flipping
+
+**Severity**: Low.
+
+TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
+the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## BB. A dragged tab order is not saved
+
+**Severity**: Low.
+
+TDD 15.10 (2/2): relaunch restores the pre-drag order. Cross-platform by code path.
+Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
+Known-issues line.
+
+## BC. A wrongly typed `sidebar_split` drops the whole saved session
+
+**Severity**: Low (needs a hand-edited file).
+
+TDD 20.21: `sidebar_split = "abc"` in `session.toml` fails the whole file's parse (the field
+is a plain `f64` in `src/session/schema.rs`), which reads as "no saved session" — the
+document tabs are lost. Out-of-range numbers clamp as TDD says. A tolerant deserializer for
+the field fixes it. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## BD. A `--` on the command line opens as a document
+
+**Severity**: Low.
+
+TDD 8.8: an extra empty tab named `--` opens beside the file; `-- --help` forwarded to a
+running primary opens both. Needs a GLib argument-handling answer first. Evidence: 1.0.0 dry
+run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"A `--` on
+the command line opens an empty tab named `--` — leave it out."*
+
+## BE. Two navigation-history stops are wrong
+
+**Severity**: Low (needs an unusual sequence).
+
+TDD 23.9 (Linux and Windows): Save All with both Save As choosers cancelled drops a stop
+(2/2); with no saved session, startup recovery leaves Back enabled onto the blank Untitled
+tab (3/3). Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## BF. A NUL in a crash-recovery snapshot body is not refused
+
+**Severity**: Low (reachable only through a tampered snapshot).
+
+The document readers refuse a NUL byte, but the snapshot decoder
+(`swapfile::codec::decode`) does not; refuse it there too. Evidence: 1.0.0 dry run, filed in
+"File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
+
+## BG. A 3000-item nested list stalls first render for about a minute
+
+**Severity**: Low.
+
+A 1.2 MB file holds the main loop ~68 s before the window appears (Linux; 2000 items ~35–39
+s at 100 % CPU on macOS), then renders. A candidate for incremental first render (a PLAN),
+not a point fix. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
+(2026-11-14). No Known-issues line.
+
+## BH. On Windows, the process outlives its windows by 20–30 s after Quit
+
+**Severity**: Low.
+
+Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 s. Unmeasured:
+the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
+Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
+Known-issues line.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

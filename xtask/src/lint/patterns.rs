@@ -16,8 +16,10 @@ use std::sync::OnceLock;
 /// `ISSUES` is matched case-SENSITIVELY: a case-insensitive match hits ordinary prose
 /// ("issues a queue_draw"), which is a real false positive the PowerShell port hit because
 /// `Select-String` defaults the other way. The trailing `\b` after `[A-Z]` is what keeps
-/// `sdd/ISSUES.md TOC` from matching — an ID is a single letter standing alone, not the
-/// first letter of a word.
+/// `sdd/ISSUES.md TOC` from matching — an ID is one or two capitals standing alone, not the
+/// start of a word. Two, since 2026-11-14: the register's letters run on past `Z` as `AA`,
+/// `AB`, … rather than compacting, so a bare two-letter ID is as live a citation as a
+/// one-letter one. Three capitals (`TOC`) stay prose.
 ///
 /// The second alternative catches the `#`-sigil form (a `#` then the letter), which the
 /// single-letter branch cannot: `#` is not a separator it accepts, and a MULTI-letter
@@ -54,7 +56,7 @@ pub fn issues_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
     rx(
         &RX,
-        // `[A-Z][0-9]*\b`, not `[A-Z]\b`: a word boundary does not fall between a
+        // `[A-Z]{1,2}[0-9]*\b`, not `[A-Z]\b`: a word boundary does not fall between a
         // letter and a digit, so the bare form `I5` was unmatchable — measured, on a
         // live citation inside `sdd/TDD.md`. The register's letters are positional and
         // a numbered variant is exactly the shape someone reaches for.
@@ -78,7 +80,7 @@ pub fn issues_rx() -> &'static Regex {
         // holds the measured lines; quoting them here would trip this very check.
         // `[^.]` bounds each to one sentence. The separator also takes the typographic apostrophe `’`, which
         // `sdd/TDD.md` uses, and the description form an adjective before its noun.
-        r#"\bISSUES(\.md)?((?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?[A-Z][0-9]*\b|(?:[ .:_,(`"*-]|['’]s?)*#[A-Z]+[0-9]*\b|[ .:_,(`*-]+"[^"]+"|(?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?(entry|item|issue) (on|about|for|covering|describing)\b|[^.]{0,40}\b(entry|item|issue) [A-Z][0-9]*\b)|\b(entry|item|issue) [A-Z][0-9]*\b[^.]{0,40}\bISSUES|\bentry (in|of) [^.]{0,20}ISSUES|\bCLSD-[0-9]+\b"#,
+        r#"\bISSUES(\.md)?((?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?[A-Z]{1,2}[0-9]*\b|(?:[ .:_,(`"*-]|['’]s?)*#[A-Z]+[0-9]*\b|[ .:_,(`*-]+"[^"]+"|(?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?(entry|item|issue) (on|about|for|covering|describing)\b|[^.]{0,40}\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b)|\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b[^.]{0,40}\bISSUES|\bentry (in|of) [^.]{0,20}ISSUES|\bCLSD-[0-9]+\b"#,
     )
 }
 
