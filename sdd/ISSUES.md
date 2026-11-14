@@ -66,7 +66,7 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
-| W | Any | Production | Each window open/close cycle retains ~0.6 MB, linearly, with no plateau | Medium |
+| W | Any | Production | Each window open/close cycle still retains ~0.14 MB, linearly (GTK submenu models, an unpinned remainder) | Low |
 | Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
@@ -494,14 +494,24 @@ firing. Evidence: 1.0.0 dry run, Windows seat, on the build of "Merge bug/nul-by
 …" (2026-11-13) and its predecessors. Known issues: *"On Windows, live reload stops after
 the document's folder is deleted and recreated — reopen the file."*
 
-## W. Each window open/close cycle retains ~0.6 MB
+## W. Each window open/close cycle still retains ~0.14 MB
 
-**Severity**: Medium (unbounded retention).
+**Severity**: Low (unbounded but slow: ~11 MB over 80 cycles).
 
-TDD 8.6: linear over 80 cycles, no plateau — a per-window residual, not the whole tab UI
-(~10 MB). Any platform. The pipeline's memory gates never cycle a window: add one with the
-fix. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
-Known-issues line (hundreds of cycles before a reader notices).
+Release build, 80 × new-window-then-close: +10.4 MB, linear, no plateau, so MANUAL-TEST
+8.6 still fails. The app-side cycles (Annotate card, find bar, the line-numbered editor
+that GtkSourceView 5.4.1 never finalizes) are fixed and guarded by the window-cycle memory
+gate (TDD 6.13); what remains is not a widget:
+- GTK 4.6.9 keeps every submenu `GMenu` bound to a `GtkPopoverMenuBar` or `GtkMenuButton`
+  alive after its window closes (a bare window with no app code reproduces it), ~50 KB per
+  window from `menubar::build_top_level_menus_with`. An app-side workaround (empty the
+  models at window destroy) runs into GTK4Rs/AP-76; not attempted.
+- ~17 KB of the disposed editor's instance structs, ~4 KB for the preview card's comment
+  `GtkSourceView` (`wire_annotation_overlay`), and ~70 KB not yet attributed (valgrind
+  still-reachable blocks whose count equals the cycle count is the method that found the
+  rest).
+Disposing the editor logs one "Finalizing GtkSourceGutter … children left" `Gtk-WARNING`
+per closed tab. Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
 
 ## Y. A tab-switch reveal test assumes a window size it never sets
 
