@@ -595,8 +595,14 @@ pub fn stub_keeps_implementation_line(tree: &Tree) -> bool {
 /// **Lowered again 2026-09-24 — 150_000/160_000 -> 90_000/100_000.** The 97 GEP `**Routed**`
 /// tombstones followed the gtk4-rs stubs out by the same mechanism (`N -> GEP-M` in the
 /// manifest); the file is ~87 KB and holds only resident entries and dead landing spots.
-const REGISTER_WARN: u64 = 90_000;
-const REGISTER_FAIL: u64 = 100_000;
+/// **Raised 2026-11-14 by operator decision — 90_000/100_000 -> 130_000/150_000.** The 1.0.0
+/// release pass's five rig lessons pushed the file to the ceiling, and the change that made
+/// room compressed seven resident entries (261, 309, 340, 343, 351, 352, 359) to stubs. The
+/// operator judged those entries worth their bytes and ordered them restored in full; the
+/// file is ~105 KB with them back. Both tiers move, leaving room for growth rather than a
+/// ratchet that bites on the next entry.
+const REGISTER_WARN: u64 = 130_000;
+const REGISTER_FAIL: u64 = 150_000;
 const ENTRY_WARN: u64 = 3_000;
 const ENTRY_FAIL: u64 = 4_000;
 

@@ -20,6 +20,11 @@ pub(crate) const UNSAVED_CHANGES: &str = "Unsaved changes";
 /// Confirmation for Copy Document (TDD 16.15).
 pub(crate) const DOCUMENT_COPIED: &str = "Document copied";
 
+/// Annotate refused: the selection lies wholly inside an existing comment, whose text is
+/// not annotatable (TDD 17.59).
+pub(crate) const COMMENT_NOT_ANNOTATABLE: &str =
+    "A comment's text can't be annotated: select the text it comments on";
+
 /// Confirmation for Copy Link Location (TDD 16.15).
 pub(crate) const LINK_LOCATION_COPIED: &str = "Link location copied";
 

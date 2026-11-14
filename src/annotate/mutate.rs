@@ -396,6 +396,12 @@ pub(crate) fn insert_or_extend_highlight(
     let sel_ce = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.end));
 
     let (union, region) = match merge(&ext, sel_cs, sel_ce) {
+        // A claim around a whole suggested edit or point comment would read that mark
+        // as literal text (CriticMarkup does not nest): a point comment instead (TDD 17.59).
+        Merge::Nothing if super::landing::encloses_mark(&ext.annotations, &range) => {
+            let slot = super::landing::for_point(source, range.end);
+            return insert_landed_point(source, slot, comment);
+        }
         Merge::Nothing => return insert_highlight_comment(source, range, comment),
         Merge::Point => {
             let slot = super::landing::for_point(source, range.end);

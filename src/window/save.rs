@@ -174,7 +174,7 @@ async fn save_window(
     // content-gated save guard (`save_is_safe`) compares future disk reads
     // against THIS baseline, not a recorded mtime (QA round-1 H3-H5).
     st.set_source(&text);
-    *st.saved_baseline.borrow_mut() = text;
+    st.adopt_baseline(text);
     // Announce the baseline move to any save guard whose read is already out. Its
     // read left before this write and is about to be compared against the baseline
     // this line just installed — two different moments, which differ with nothing
@@ -379,6 +379,7 @@ fn save_with_guard_tab(window: &ApplicationWindow, st: Rc<TabState>, after: Opti
                     &st.saved_baseline.borrow(),
                     Some(&disk_content),
                     st.backing_loss.get().is_some(),
+                    st.recovered_basis.borrow().as_deref(),
                 ) {
                     do_save(&window, &st, Some(busy), after);
                 } else {

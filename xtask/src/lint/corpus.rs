@@ -86,6 +86,12 @@ const ISSUES_MUST_MATCH: &[&str] = &[
     "`sdd/ISSUES.md`'s open entry on native chooser",
     "ISSUES.md’s entry B",
     "ISSUES.md lists it as entry B",
+    // Two-letter IDs: the register continues `AA`, `AB`, … past `Z`, so every bare form
+    // above must reach a second capital.
+    "see ISSUES AB",
+    "see `sdd/ISSUES.md` entry AB for details",
+    "see entry AB in `sdd/ISSUES.md`",
+    "ISSUES.md lists it as entry BH",
 ];
 
 /// Prose ABOUT the register, which must stay legal: the rule is against citing an ENTRY,

@@ -149,6 +149,18 @@ pub(crate) fn document_source(window: &ApplicationWindow) -> Option<String> {
     Some(crate::saferizer::BufferText::of(buf).into_string())
 }
 
+/// Tell the reader why Annotate did nothing: the selection lies wholly inside an existing
+/// comment, whose text is not annotatable (TDD 17.59). A quiet-command notice (Status-
+/// notice CAM row 5), retracted against the stack that showed it.
+pub(crate) fn announce_annotation_refused(widget: &impl IsA<gtk::Widget>) {
+    if let Some(chrome) = host_window(widget).and_then(|w| winstate::chrome(&w)) {
+        chrome.push_timed_notice(
+            crate::winstate::statusbar::COMMENT_NOT_ANNOTATABLE,
+            super::toast::INFO_STATUS_TIME,
+        );
+    }
+}
+
 pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit) {
     let old = crate::saferizer::BufferText::of(buf).into_string();
     let new = match edit {
@@ -204,6 +216,9 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 crate::annotate::Landing::Point(slot) => {
                     crate::annotate::insert_landed_point(&old, slot, &comment)
                 }
+                // The target is wholly inside a comment: nothing is written. The card
+                // refused it when raised; this covers a document edited since.
+                crate::annotate::Landing::Refused => return,
             }
         }
         AnnotationEdit::Create(CreateAnnotation::Point { target, comment }) => {
@@ -923,5 +938,78 @@ mod gtk_integration_tests {
             text_of(&b),
             "EDITED alpha {==beta==}{>>revised<<} gamma {>>note<<}"
         );
+    }
+
+    /// Defect (b) at the choke point both cards write through: the preview card's target
+    /// for a selection ending where `{++…++}` begins ends PAST the cleaned-away `{++`.
+    /// Mutation check: take the snap out of `landing::for_highlight` and the buffer reads
+    /// `say {==hello {++==}{>>c<<}there++} now`.
+    #[gtktest::test]
+    fn a_claim_ending_where_an_insertion_begins_never_splits_it() {
+        let src = "say hello {++there++} now";
+        let buf = undo_enabled_buf(src);
+        let range = src.find("hello").unwrap()..src.find("there").unwrap();
+        apply_annotation_edit(&buf, highlight_in(src, range, "c"));
+        assert_eq!(text_of(&buf), "say {==hello ==}{>>c<<}{++there++} now");
+    }
+
+    /// Defect (a) through `win.annotate` (TDD 17.59): a selection in the EDITOR strictly
+    /// inside an existing comment's text raises no card, writes nothing, and says why in
+    /// the status bar. Before the fix the card opened and its commit wrote the new
+    /// `{==…==}{>>…<<}` inside the comment, changing its text. Mutation check: drop the
+    /// refusal from the editor card's `show` and the card opens and the notice never
+    /// appears (the pump below times out).
+    #[gtktest::test]
+    fn annotating_inside_a_comment_is_refused_with_a_notice() {
+        use gtk::prelude::*;
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.annotateincomment"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building a window");
+        let src = "The claim {==is here==}{>>and the reply<<}.";
+        let window = crate::window::new_window(&app, "IT", src, None);
+        window.present();
+        let pump = |what: &str, done: &dyn Fn() -> bool| {
+            crate::testpump::until_for(
+                crate::testpump::Clock::Idle,
+                std::time::Duration::from_secs(5),
+                what,
+                done,
+            )
+        };
+        pump("toplevel to map", &|| window.is_mapped());
+        let st = state(&window).expect("state after new_window");
+        crate::window::change_action_state(&window, "view-mode", &"edit".to_variant());
+        st.editor.grab_focus();
+
+        let buf = &st.editor_buf;
+        let at = src.find("the reply").unwrap() as i32; // ASCII: bytes == chars
+        buf.select_range(&buf.iter_at_offset(at), &buf.iter_at_offset(at + 9));
+        crate::window::update_annotate_action_state(&window);
+        window
+            .lookup_action("annotate")
+            .expect("win.annotate registered")
+            .activate(None);
+
+        let shown = || st.chrome().status.borrow().label_text();
+        pump("the refusal notice to show", &|| {
+            shown() == crate::winstate::statusbar::COMMENT_NOT_ANNOTATABLE
+        });
+        let mut focus = GtkWindowExt::focus(&window);
+        while let Some(w) = focus {
+            assert!(
+                !w.has_css_class(crate::window::ANNOTATION_CARD_CLASS),
+                "no comment card may open over a comment's text"
+            );
+            focus = w.parent();
+        }
+        assert_eq!(
+            crate::saferizer::BufferText::of(buf).into_string(),
+            src,
+            "nothing is written"
+        );
+        window.destroy();
     }
 }

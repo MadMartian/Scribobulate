@@ -547,13 +547,32 @@ pub(crate) fn wire_annotation_overlay(
         }
     });
 
+    // Dismiss the card AND hand the keyboard back to the preview — the one exit both the
+    // commit (Enter, Save) and the cancel (Escape, ×) take, so neither can leave the focus
+    // behind. Hiding the card that holds the focus does not move it here: GTK defers a
+    // successor to after-paint and picks the first focusable ancestor of the card or,
+    // failing that, the window's first focusable widget (gtkwindow.c
+    // `maybe_unset_focus_and_default`, 4.6.9). Grabbing a visible widget straight after
+    // the hide cancels that deferred move (`gtk_window_root_set_focus`). The view is
+    // captured weak, as `hide_entry` captures the bar, for the same cycle.
+    let dismiss_entry: Rc<dyn Fn()> = Rc::new({
+        let hide_entry = hide_entry.clone();
+        let view = view.downgrade();
+        move || {
+            hide_entry();
+            if let Some(v) = view.upgrade() {
+                v.grab_focus();
+            }
+        }
+    });
+
     // Commit: read the captured span + comment, create, then hide. `CommentEntry` wires
     // this to BOTH Enter and the Save button, so the two routes cannot diverge — the
     // defect recorded on the third copy of this surface.
     let card = CommentEntry::new("", {
         let view = view.downgrade();
         let pending = pending.clone();
-        let hide_entry = hide_entry.clone();
+        let dismiss_entry = dismiss_entry.clone();
         move |text: &str| {
             let Some(v) = view.upgrade() else { return };
             // The selection was resolved into source space when the card was RAISED, so
@@ -574,7 +593,7 @@ pub(crate) fn wire_annotation_overlay(
             // chain ("Broken accounting of active state for widget …" — GTK4Rs/AP-30).
             // Deferring lets the gesture finish first. (Entry `activate` reaches here
             // too and is deferred identically.)
-            hide_entry();
+            dismiss_entry();
             if let Some(create) = create {
                 // Collapse the preview selection so the freshly-created highlight's amber
                 // wash is visible immediately. The sink edits the EDITOR buffer and
@@ -678,6 +697,22 @@ pub(crate) fn wire_annotation_overlay(
                 )
             };
             pop.popdown();
+            // Kept out of existing comments, as the editor card is (TDD 17.59). A preview
+            // selection cannot normally reach a comment's text, which the preview does
+            // not show; this keeps the two cards on one rule.
+            let refused = crate::window::host_window(&v)
+                .and_then(|w| crate::window::document_source(&w))
+                .is_some_and(|source| {
+                    pending
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|target| target.is_refused(&source))
+                });
+            if refused {
+                pending.borrow_mut().take();
+                crate::window::announce_annotation_refused(&v);
+                return;
+            }
             // Pre-populate with the comment(s) this annotation will MERGE.
             // `insert_or_extend_highlight` deliberately extends rather than nests — it
             // replaces every intersecting construct, `{>>comment<<}` included, with the
@@ -736,14 +771,8 @@ pub(crate) fn wire_annotation_overlay(
     // preview (an in-surface overlay child has no popover autohide, so this is wired
     // explicitly).
     card.wire_cancel(&bar, {
-        let hide_entry = hide_entry.clone();
-        let view = view.downgrade();
-        move || {
-            hide_entry();
-            if let Some(v) = view.upgrade() {
-                v.grab_focus();
-            }
-        }
+        let dismiss_entry = dismiss_entry.clone();
+        move || dismiss_entry()
     });
 
     // Focus leaving the WHOLE bar while the entry is open dismisses it (the entry gave

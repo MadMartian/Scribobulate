@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles` and cite `GEP-N` at the site. **Nothing here** either — the `**Routed**` tombstones were retired 2026-09-24 the same way as the gtk4-rs stubs.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 366**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 371**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -94,6 +94,11 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 363 | A strong `TabState` capture in a widget the tab bar owns — the tab reaches the bar, so it is a cycle | C |
 | 364 | An open card that re-points only on scroll — a render in place moves its annotation under it | C |
 | 365 | A pasted fence that never closes re-pairs the document's own fences — each mask check then finds one comment more | C |
+| 366 | Comparing pdftotext output line for line — builds differ in where the page-break form feed lands | C |
+| 367 | Piping a GTK test or app run into `tail` — a portal D-Bus-activated during the run holds the pipe, and the command never returns | C |
+| 368 | A `dbus-run-session` rig on the operator's desktop — the accessibility bus is per user, not per session bus | C |
+| 369 | Reinstalling right after `Start-Process unins000.exe -Wait` — Inno's uninstaller is still running from its `%TEMP%` copy | C |
+| 370 | Expecting macOS "Open Anyway" to keep working — the System Settings entry lapses after some hours | C |
 
 ---
 
@@ -567,3 +572,38 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **Resolution**: once a check sees a block opening inside an unmasked comment and running past it, the next mask takes every later fence-holding comment at once, and the following check confirms it; the parse bound is unchanged.
 **Lesson**: a settle loop whose budget grows by one item per round needs a one-step jump wherever one item can hide the next; otherwise the round count scales with the document, not with the ambiguity.
 **Scribobulate**: `annotate::written::settle` (`escaping_block`, `fence_bodies_after`); tests `pasted_fences_after_a_document_fence_settle_in_one_step`, `the_manual_pasted_fence_document_keeps_every_comment`; TDD 17.61.
+
+## 366. Comparing pdftotext output line for line — builds differ in where the page-break form feed lands
+**Symptom**: a PDF export test passed on Linux and failed on macOS with the text extracted correctly: the cell row read `office fifty waffle flow` plus a trailing `\f`.
+**Root cause**: poppler's `pdftotext` emits a form feed (U+000C) at each page break, and builds place it differently: Homebrew poppler 26.08 appends it to the page's last text line; the Linux build in use (22.02) does not. Tried first: reading it as a cell-text regression on Quartz — the text was right.
+**Resolution**: the comparison strips `\f` before comparing ("Strip the page-break form feed before comparing the extracted cell row", 2026-11-13).
+**Lesson**: normalise every pdftotext line (strip `\f`) before an exact comparison; a last-line match that holds on one platform's poppler says nothing about another's.
+**Scribobulate**: `window::export_pdf`'s extraction tests (`a_table_cell_with_ligatures_extracts_byte_exact_like_body_text`).
+
+## 367. Piping a GTK test or app run into `tail` — a portal D-Bus-activated during the run holds the pipe, and the command never returns
+**Symptom**: the 17.23 context-menu fix agent's GTK test run (2026-11-13, `bug/context-menu-annotate`) finished its work and never returned to the shell.
+**Root cause**: a run that reaches the desktop portal D-Bus-activates it, and the activated service inherits the run's stdout; `tail` waits for end-of-file on a pipe the long-lived portal still holds open.
+**Resolution**: write the run's output to a file and read the file afterwards; never pipe a GTK run into `tail` or any filter that waits for end-of-file.
+**Lesson**: a pipe's reader waits for every writer, including ones the command under it started and left behind.
+**Scribobulate**: every GTK-suite and app run in POLICY's build pipeline and MANUAL-TEST §1.
+
+## 368. A `dbus-run-session` rig on the operator's desktop — the accessibility bus is per user, not per session bus
+**Symptom**: a rig run under `dbus-run-session` on the operator's machine during the 1.0.0 dry run (2026-11-13) took over the user's at-spi socket.
+**Root cause**: the accessibility bus socket lives in the user's runtime directory (`/run/user/<uid>/at-spi/`), not inside the session bus, so an at-spi launcher started from the rig's private bus can claim the socket the desktop's own screen reader and apps use. (Mechanism inferred from where the socket lives; not measured here.)
+**Resolution**: a rig on a shared desktop keeps accessibility out of its private bus — `GTK_A11Y=none` for the app under test, or its own `XDG_RUNTIME_DIR`.
+**Lesson**: a private session bus isolates the session bus only; per-user sockets in the runtime directory are still shared.
+**Scribobulate**: MANUAL-TEST §1.2 launch rigs; the AT-SPI connection noted in `logging.rs`.
+
+## 369. Reinstalling right after `Start-Process unins000.exe -Wait` — Inno's uninstaller is still running from its `%TEMP%` copy
+**Symptom**: at gate 9 on Windows (1.0.0 dry run, 2026-11-12), a scripted uninstall-then-reinstall left the new install without its `unins000.*` files.
+**Root cause**: Inno Setup's uninstaller copies itself to `%TEMP%\_iu*.tmp` and runs from there so it can delete its own executable; `-Wait` returns when the first process exits, while the copy is still deleting, and it deleted the reinstall's uninstaller. Known Inno behaviour, not a packaging defect.
+**Resolution**: after `-Wait`, wait until no `_iu*.tmp` process remains before installing again.
+**Lesson**: a self-deleting uninstaller's exit code is not its completion.
+**Scribobulate**: `packaging/windows/scribobulate.iss`; RELEASE.md gate 9 on Windows.
+
+## 370. Expecting macOS "Open Anyway" to keep working — the System Settings entry lapses after some hours
+**Symptom**: at gate 9 on macOS (1.0.0 dry run, 2026-11-12), the operator's Open Anyway for the unsigned dmg build did nothing on the first attempt, hours after Gatekeeper had blocked it; the second attempt worked.
+**Root cause**: the Privacy & Security "Open Anyway" entry Gatekeeper leaves after a block is time-limited; once it lapses, the button no longer admits the app.
+**Resolution**: relaunch the app to have Gatekeeper block it again, which regenerates the entry, and use it promptly.
+**Lesson**: a Gatekeeper exception is a short-lived offer, not a setting; schedule the operator's click for when they are at the machine.
+**Scribobulate**: unsigned macOS bundle (POLICY § Artefact signing); RELEASE.md gate 9's full run on macOS.
