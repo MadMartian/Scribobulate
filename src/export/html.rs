@@ -299,10 +299,11 @@ fn table_html(
 
 fn align_attr(a: Option<&Align>) -> &'static str {
     match a {
-        Some(Align::Left) => " class=\"a-l\"",
+        // An unaligned column is flush left (TDD 2.2d) and must SAY so: a browser's
+        // default sheet centres `<th>`, so no class means a centred header.
+        Some(Align::Left) | Some(Align::None) | None => " class=\"a-l\"",
         Some(Align::Center) => " class=\"a-c\"",
         Some(Align::Right) => " class=\"a-r\"",
-        _ => "",
     }
 }
 
@@ -2042,6 +2043,23 @@ mod html_sink_tests {
         ] {
             assert!(out.contains(expected), "missing {expected:?} in output");
         }
+    }
+
+    #[test]
+    fn an_unaligned_column_header_is_classed_flush_left() {
+        let out = html_of("| a | b |\n|---|:-:|\n| 1 | 2 |\n");
+        assert!(out.contains("<th class=\"a-l\">a</th>"), "{out}");
+        assert!(out.contains("<td class=\"a-l\">1</td>"), "{out}");
+        assert!(out.contains("<th class=\"a-c\">b</th>"), "{out}");
+    }
+
+    #[test]
+    fn a_task_item_with_a_nested_list_exports_its_checkbox() {
+        let out = html_of("- [x] outer\n  - inner\n");
+        assert!(
+            out.contains("<li class=\"task-list-item\"><input type=\"checkbox\" checked disabled>"),
+            "{out}"
+        );
     }
 
     #[test]

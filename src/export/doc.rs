@@ -14,7 +14,7 @@
 
 use super::walk::Builder;
 use super::{Block, ExportAnnotation, ExportDoc, Inline, RenderOptions};
-use crate::renderer::{frontmatter, segments_of};
+use crate::renderer::frontmatter;
 
 /// Build the export model for `source`.
 ///
@@ -78,24 +78,28 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
-            claim: claim_text(cleaned, hs, he),
+            claim: claim_text(&doc.blocks, idx, cleaned, hs, he),
         });
     }
     doc
 }
 
-/// The claim's own text, delimiters and tight-construct markers stripped, for a sink
-/// that shows a comment away from the run it refers to.
-fn claim_text(cleaned: &str, hs: usize, he: usize) -> String {
+/// The claim's own text as the page shows it, for a sink that shows a comment away
+/// from the run it refers to.
+///
+/// Read off the claim's marked fragments, which are built from the rendered inline
+/// tree, so every construct marker — `**`, `^`, `~` — is already gone. Reading the
+/// source run instead strips only the tight script markers and leaves a bold claim's
+/// literal `**`. A claim the mapper placed on no fragment falls back to nothing.
+fn claim_text(blocks: &[Block], idx: usize, cleaned: &str, hs: usize, he: usize) -> String {
     if hs >= he || he > cleaned.len() {
         return String::new();
     }
-    let run = &cleaned[hs..he];
-    segments_of(run)
-        .into_iter()
-        .filter(|seg| !seg.marker)
-        .map(|seg| seg.text(run))
-        .collect()
+    let mut out = String::new();
+    for_each_claim(blocks, idx, &mut |inner| {
+        out.push_str(&crate::export::plain_text(inner));
+    });
+    out
 }
 
 /// Split every [`Inline::Text`] overlapping `range` and wrap the overlap in a
@@ -770,6 +774,33 @@ mod export_doc_tests {
             // Whatever the verdict, the reader still sees the link's text.
             assert!(text_of(&doc).contains("click"), "text survives {href:?}");
         }
+    }
+
+    #[test]
+    fn a_claim_crossing_bold_lists_without_its_markers() {
+        let doc = doc_of("The {==a **bold** word==}{>>c<<} end.\n");
+        assert_eq!(doc.annotations[0].claim, "a bold word");
+    }
+
+    #[test]
+    fn a_task_item_with_a_nested_list_keeps_its_checkbox() {
+        let doc = doc_of("- [x] outer\n  - inner\n  - [ ] inner task\n- [ ] next\n");
+        let Some(Block::List { items, .. }) = doc.blocks.first() else {
+            panic!("expected a list, got {:?}", doc.blocks);
+        };
+        assert_eq!(items[0].task, Some(true));
+        assert_eq!(items[1].task, Some(false));
+        let Some(Block::List { items: inner, .. }) = items[0]
+            .blocks
+            .iter()
+            .find(|b| matches!(b, Block::List { .. }))
+        else {
+            panic!("no nested list");
+        };
+        assert_eq!(
+            inner.iter().map(|i| i.task).collect::<Vec<_>>(),
+            vec![None, Some(false)]
+        );
     }
 
     #[test]
