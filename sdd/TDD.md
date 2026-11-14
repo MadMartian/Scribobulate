@@ -870,6 +870,8 @@
 - **Given** the editor has unsaved local edits
 - **When** the file is changed on disk by another process
 - **Then** the user is notified of the conflict and offered to reload (discarding local edits) or keep local edits — the local edits are never silently overwritten
+- **And** Dismiss answers the prompt about the on-disk text it was raised for and nothing more: the file changing again to different content raises a fresh prompt, while a repeat of the dismissed text stays quiet. The Save overwrite guard (5.2) is unaffected either way
+- **And** raising the prompt retracts any "File saved" / "File reloaded" toast and status entry still showing — the toast shares the prompt's corner and the acknowledgement is stale — and a truncation or deletion does the same (3.4, 3.5), so neither the toast nor the status text outlives the condition that supersedes it
 
 ### 5.2 Saving over an externally changed file
 - **Given** the file on disk has changed since it was loaded, and the user has unsaved edits

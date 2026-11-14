@@ -54,6 +54,13 @@ fn refresh_guards(tab: &Rc<TabState>) {
         // line is composed from the ACTIVE tab, so a background loss shows the moment
         // its tab is switched to (Derived-view CAM row 5).
         refresh_dirty_status(&window);
+        // A loss supersedes the acknowledgements ("File saved", "File reloaded") of
+        // whatever came before it: they would sit over the persistent line and the
+        // prompt below for their remaining seconds. Only for the tab in front — the
+        // shared toast and status stack are about the active document.
+        if state(&window).is_some_and(|a| a.id == tab.id && tab.backing_loss.get().is_some()) {
+            tab.chrome().retract_info_notices();
+        }
         // Save's own enablement was re-derived above, which is what the prompt's Save
         // button binds to — so the prompt is raised after it, never before, or it would
         // appear for a beat offering a control GTK still had greyed.
