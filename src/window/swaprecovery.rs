@@ -443,8 +443,22 @@ async fn apply_recovered_content(
         // second one beside it. Note the monitor's own check cannot see this: it compares
         // the file against the tab's loaded source, which restore has just made identical.
         log::info!("crash recovery: the file changed on disk since the snapshot was taken");
+        // The tab's baseline is the file as it is NOW, which is not what the recovered
+        // edits were made against, so the save guard's baseline comparison alone would
+        // call a Save safe and write the recovered text over the newer file. Record
+        // the basis the snapshot names; the guard holds the save to it (TDD 22.7).
+        tab.recovered_basis
+            .replace(Some(swap.header.baseline_digest.clone()));
         tab.pending_external.set(true);
-        super::reload::show_conflict_toast(window);
+        // The prompt is window-shared and acts on the ACTIVE tab: raised for a
+        // background recovered tab it would offer to reload some other document. A
+        // background tab keeps the flag and the badge, and the tab-switch replay raises
+        // the prompt when it is reached — the path every background change takes.
+        if winstate::state(window).is_some_and(|active| active.id == tab.id) {
+            super::reload::show_conflict_toast(window);
+        } else {
+            crate::window::badge_tab_label(tab);
+        }
     }
     show_recovery_toast(window, tab, swap.header.written_at);
     true
@@ -702,5 +716,7 @@ mod owner_is_live_tests {
     }
 }
 
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod conflict_tests;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod tests;

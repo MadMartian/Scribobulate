@@ -8,7 +8,7 @@ use crate::window::new_window;
 /// Built through the production encoder rather than a hand-written string: a fixture
 /// that fabricates the on-disk shape independently would keep passing after the
 /// format changed, which is the failure mode a recovery test can least afford.
-fn seed_swap(state_home: &std::path::Path, header: &SwapHeader, body: &str) {
+pub(super) fn seed_swap(state_home: &std::path::Path, header: &SwapHeader, body: &str) {
     let dir = state_home.join("scribobulate").join("swap");
     std::fs::create_dir_all(&dir).expect("swap dir");
     let name = crate::swapfile::swap_file_name(
@@ -22,7 +22,7 @@ fn seed_swap(state_home: &std::path::Path, header: &SwapHeader, body: &str) {
     .expect("seed the snapshot");
 }
 
-fn header(doc_id: DocId, path: Option<&std::path::Path>, baseline: &[u8]) -> SwapHeader {
+pub(super) fn header(doc_id: DocId, path: Option<&std::path::Path>, baseline: &[u8]) -> SwapHeader {
     SwapHeader {
         doc_id,
         path: path.and_then(|p| p.to_str()).map(str::to_string),

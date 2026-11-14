@@ -3978,6 +3978,9 @@ buffer holds the only copy.
 - **Given** a recoverable document whose file on disk has changed since the crash
 - **When** the application restarts
 - **Then** the content is still recovered, and the user is shown the same external-change conflict prompt an ordinary outside edit raises (§5) rather than a second prompt built for this case
+- **And** that prompt is on screen first: the recovery notice (22.8) waits behind it and returns once the conflict is answered, never covering it
+- **And** a Save made before the user has reloaded asks before overwriting the file, as 5.2 does — the recovered work was made against the file as it was before the crash, so the newer file is never overwritten unasked
+- **And** a recovered tab that is not the one in front is marked as changed on disk and shows the prompt when the user reaches it, as any background change does (15.13)
 
 ### 22.8 Recovery is visible, and an empty recovery is silent
 - **Given** an unclean exit that left recoverable documents
