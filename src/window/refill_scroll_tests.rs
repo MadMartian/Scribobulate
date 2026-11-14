@@ -212,10 +212,11 @@ fn a_reload_landing_in_a_narrowing_drag_holds_the_reading_line() {
     );
 
     // A narrowing drag, one frame-edge step at a time, with the file changing under the
-    // reader half way through it.
+    // reader half way through it. `resize_mapped_window`, not `set_default_size`, which
+    // leaves a mapped window its width on Windows (see the helper).
     let widths = [940, 880, 820, 760, 700, 640, 580, 520, 460, 400];
     for (step, width) in widths.into_iter().enumerate() {
-        window.set_default_size(width, 700);
+        crate::window::testkit::resize_mapped_window(&window, width, 700);
         drain_for(Clock::Frame, Duration::from_millis(60));
         if step == 5 {
             crate::window::reload::apply_external_reload(&window, &format!("{doc}\nappended\n"));
