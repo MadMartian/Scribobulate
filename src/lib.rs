@@ -346,6 +346,9 @@ pub fn run() -> glib::ExitCode {
     // The decision itself is `app::new_instance_argv` — pure, and unit-tested there
     // rather than here, where the coverage gate cannot reach it.
     let (force_new, args) = app::new_instance_argv(argv.clone());
+    // A bare `--` is resolved here, after every switch of ours is taken and before
+    // either GLib or the macOS handoff sees argv (TDD 8.8). See `app::end_of_options_argv`.
+    let args = app::end_of_options_argv(args);
 
     let mut flags = ApplicationFlags::HANDLES_OPEN;
     if force_new {

@@ -167,6 +167,9 @@ Root: HKCU; Subkey: "Software\Classes\.markdown"; ValueType: string; ValueName: 
     ValueData: "Scribobulate.Document"; Tasks: assocmd; Flags: uninsdeletevalue
 
 ; Registered Applications — puts Scribobulate in Settings ▸ Default apps.
+; The parent key is created implicitly by its Capabilities child, so it needs its own
+; row to be removed on uninstall; `ifempty` leaves it if anything else was put there.
+Root: HKCU; Subkey: "Software\Scribobulate"; Flags: uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Scribobulate\Capabilities"; \
     ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Scribobulate\Capabilities"; \
