@@ -465,29 +465,9 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
 
 ## Rig notes
 
-What the 1.0.0 dry run's rigs got wrong, each once and at a cost:
-
-- **pdftotext builds differ in where the page-break form feed lands** — one appends it
-  to the page's last text line, another puts it on a line of its own. Strip `\f` before
-  comparing extracted text.
-- **Never pipe a test or app run through `tail`** (or anything that holds the pipe
-  open). A D-Bus-activated portal started by the run inherits the pipe, and the command
-  never returns.
-- **A strong reference that exists only under `#[cfg(test)]` hides release-only
-  lifetimes.** A test-only clone that keeps an object alive makes every test pass while
-  the release build frees it; a release-only defect is proved on a release binary.
-- **gtk-rs checks interior NULs only in debug builds** (`debug_assertions`). A debug test
-  of text containing a NUL panics in the binding before the code under test runs, and
-  passes for the wrong reason; the release build hands the text to GTK.
-- **A `dbus-run-session` rig must not take over the user's at-spi socket.** The rig's
-  private bus, and whatever it starts, stays the rig's; the operator's desktop keeps its
-  own accessibility bus.
-- **Inno Setup's `unins000.exe` returns before it has finished.** `Start-Process … -Wait`
-  returns while the uninstaller's `%TEMP%` copy is still deleting; a scripted
-  uninstall-then-reinstall waits for that copy to exit first, or the reinstall loses its
-  own uninstaller.
-- **macOS Open Anyway expires.** The System Settings button lapses after some hours; a
-  relaunch regenerates it.
+The lessons the release rigs taught — pdftotext's form feed, a pipe held by a portal, the
+shared at-spi socket, Inno's still-running uninstaller, macOS Open Anyway's expiry — are
+ScrAP-366 to ScrAP-370 in [ANTI-PATTERNS.md](ANTI-PATTERNS.md).
 
 ## What is deliberately not a gate
 
