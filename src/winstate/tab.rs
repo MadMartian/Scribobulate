@@ -690,9 +690,10 @@ impl TabState {
 
     /// Adopt a persisted document identity, replacing the one generated at construction.
     ///
-    /// **Restore-time only.** Called immediately after a tab is built from a session
-    /// entry, before the tab can become dirty and therefore before anything can be filed
-    /// under the id being replaced.
+    /// Called immediately after a tab is built from a session entry, before the tab can
+    /// become dirty and therefore before anything can be filed under the id being
+    /// replaced; and by the first snapshot's claim check, which swaps in a fresh id before
+    /// anything of this process's is filed under either.
     pub(crate) fn adopt_doc_id(&self, doc_id: crate::swapfile::DocId) {
         *self.doc_id.borrow_mut() = doc_id;
     }

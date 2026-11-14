@@ -578,7 +578,7 @@ fn announce_recovery(window: &ApplicationWindow, count: usize) {
 /// `OpenProcess` for as long as any handle to it is held, so existence has to be
 /// established separately — see `platform::win32::process` for the measurements and for
 /// why a false "live" is the failure that matters.
-fn owner_is_live(pid: u32) -> bool {
+pub(crate) fn owner_is_live(pid: u32) -> bool {
     if pid == std::process::id() {
         return false;
     }

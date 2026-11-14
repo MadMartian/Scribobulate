@@ -68,8 +68,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
 | N | Any | Production | File ▸ Open from a slow mount never shows "Opening…": it is armed on link-follow only | Low |
 | R | Any | Production | Toggling a one-line disclosure at the document's end can throw the preview to the top: the full re-render's restore fails at maximum scroll | Medium |
-| U | Any | Production | Two launches in the same instant, one bare and one with a file, skip the session restore, and a later quit overwrites the saved session | Low |
-| V | Any | Production | Two live processes on one session snapshot to one swap file, so after a crash one process's edit is lost | Low |
 | W | Any | Production | Each window open/close cycle retains ~0.6 MB, linearly, with no plateau | Medium |
 | Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
@@ -522,27 +520,6 @@ restore — adjustment-lifecycle work, research first. Evidence: 1.0.0 dry run, 
 the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Toggling a disclosure at the
 very end of a document can jump the preview to the top."*
 
-## U. Two launches in the same instant skip the session restore
-
-**Severity**: Low (needs an unusual sequence).
-
-TDD 8.2a: one bare launch and one with a file in the same instant → the file launch
-becomes primary and the session is not restored; a later quit overwrites the saved
-session. A second launch 0.3 s later is clean. Cross-platform by code path. Evidence: 1.0.0
-dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## V. Two live processes on one session write one swap file
-
-**Severity**: Low (needs an unusual setup).
-
-Two processes launched bare with `--new-instance` against one state home with a saved
-session restore the same tab with the same doc id and both snapshot to one
-`shared-<doc_id>.swap`; after a crash the last writer's edit survives and the other is lost
-(seen once on Linux). Single-instance activation normally prevents it. Either the swap name
-carries the process id, or recovery refuses to share a doc id across live processes.
-Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
-Known-issues line.
-
 ## W. Each window open/close cycle retains ~0.6 MB
 
 **Severity**: Medium (unbounded retention).
@@ -656,7 +633,7 @@ deferrals…" (2026-11-14). No Known-issues line.
 
 TDD 12.22 (4/4): the block expands but the heading is not scrolled to the top; a second
 click does. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
+(2026-11-14). No Known-issues line. **Not reproduced on Linux** (GTK 4.6.9, 2026-11-14): `disclosure.md` in Preview and Split, from the top and after Ctrl+End, at 900×720 and 1400×980, and a ~1,900-line far target — the first click landed the heading at the top every time. Platform still to be established on Windows or macOS before any change.
 
 ## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
 

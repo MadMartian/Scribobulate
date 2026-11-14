@@ -97,6 +97,9 @@ pub(super) fn on_open(app: &Application, files: &[gtk::gio::File], hint: &str) {
     let hold = app.hold();
     let app = app.clone();
     let hint = hint.to_owned();
+    if cold_start {
+        super::coldstart::note_open_cold_start();
+    }
     gtk::glib::MainContext::default().spawn_local(async move {
         let _hold = hold;
         let mut docs = Vec::with_capacity(to_open.len());

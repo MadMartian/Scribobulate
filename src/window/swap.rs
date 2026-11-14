@@ -209,6 +209,10 @@ fn write_snapshot(tab: &Rc<TabState>) {
         log::warn!("crash recovery: cannot create the swap directory: {e}");
         return;
     }
+    if !tab.swap.id_claimed.get() {
+        claim_doc_id_then_write(tab, destination);
+        return;
+    }
     let payload = match swapfile::encode(&header_for(tab), &tab.editor_text()) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -260,6 +264,71 @@ fn write_snapshot(tab: &Rc<TabState>) {
             );
         },
     );
+}
+
+/// Before a tab's first snapshot, look at what already sits at its destination and
+/// surrender the document id if a different live process files a snapshot under it
+/// (`swapfile::claim_doc_id` carries why), then carry on with the write.
+///
+/// Read off the main thread like the write itself, and only the header's worth of bytes.
+/// `in_flight` is held across the read so a second request coalesces instead of racing it.
+fn claim_doc_id_then_write(tab: &Rc<TabState>, destination: std::path::PathBuf) {
+    tab.swap.in_flight.set(true);
+    let tab_id = tab.id;
+    let generation = tab.swap.generation.get();
+    gio::File::for_path(&destination).read_async(
+        glib::Priority::DEFAULT,
+        gio::Cancellable::NONE,
+        move |opened| {
+            let Ok(stream) = opened else {
+                settle_claim(tab_id, generation, None);
+                return;
+            };
+            stream.read_bytes_async(
+                swapfile::HEADER_PEEK_BYTES,
+                glib::Priority::DEFAULT,
+                gio::Cancellable::NONE,
+                move |bytes| settle_claim(tab_id, generation, bytes.ok()),
+            );
+        },
+    );
+}
+
+/// Apply [`claim_doc_id_then_write`]'s answer, then resume the write it deferred.
+fn settle_claim(tab_id: winstate::TabId, generation: u64, peeked: Option<glib::Bytes>) {
+    let Some(tab) = winstate::tab_by_id(tab_id) else {
+        return;
+    };
+    tab.swap.in_flight.set(false);
+    tab.swap.coalesced.set(false);
+    tab.swap.id_claimed.set(true);
+    // Lossy: the peek may end inside a multi-byte character of the body, which the header
+    // does not care about and a strict UTF-8 check would refuse the whole file for.
+    let existing = peeked.and_then(|bytes| {
+        swapfile::decode(String::from_utf8_lossy(&bytes).as_bytes())
+            .ok()
+            .map(|(header, _)| header)
+    });
+    let current = tab.doc_id();
+    if swapfile::claim_doc_id(
+        existing.as_ref(),
+        &current,
+        std::process::id(),
+        super::swaprecovery::owner_is_live,
+    ) == swapfile::DocIdClaim::Remint
+    {
+        log::info!(
+            "crash recovery: another running instance already files a snapshot under this \
+             document's id; taking a fresh id"
+        );
+        tab.adopt_doc_id(swapfile::DocId::generate());
+    }
+    if tab.swap.generation.get() == generation {
+        write_snapshot(&tab);
+    } else {
+        // Withdrawn while the read was out: re-decide from the tab's state now.
+        sync_tab_swap(&tab);
+    }
 }
 
 /// Close the temp and promote it, or discard it — the file half, with **no tab state

@@ -391,7 +391,21 @@ fn on_activate(app: &Application) {
     // different question during the interval restore itself occupies.
     let cold_start = super::coldstart::claim();
     if !cold_start {
-        new_window(app, "Scribobulate", WELCOME, None);
+        // A bare launch that lost the race to a file launch asked for the saved session
+        // and is owed it (`coldstart::bare_launch_owed_restore`); any other re-activation
+        // is a blank document.
+        if super::coldstart::bare_launch_owed_restore() {
+            let hold = app.hold();
+            let app = app.clone();
+            gtk::glib::MainContext::default().spawn_local(async move {
+                let _hold = hold;
+                if !crate::window::restore_session(&app).await {
+                    new_window(&app, "Scribobulate", WELCOME, None);
+                }
+            });
+        } else {
+            new_window(app, "Scribobulate", WELCOME, None);
+        }
         return;
     }
     // Rebuild every window (and its tabs) from the
