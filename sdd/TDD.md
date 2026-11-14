@@ -347,6 +347,7 @@
 - **Given** an image that is cut off, malformed, crafted to crash a decoder, claims a size beyond the pixel limit, is bigger than the file size limit, or is not a regular file (such as a named pipe)
 - **When** it is rendered
 - **Then** the broken-image placeholder shows (or the next `<picture>` candidate), and the window stays responsive
+- **And** an animation whose leading frames decode and whose remainder is cut off plays the frames it has and stays on the last one, rather than giving way to the placeholder — the reader sees the content that exists
 - **And** an image over the pixel limit is refused before any memory is set aside for its pixels
 - **And** the file size limit can be changed in the configuration file
 
@@ -564,12 +565,13 @@
 - **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4), a right-margin comment marker (§17) and a code block's copy button (2.3b) each require their press and release to land on the same one, so a selection drag that happens to end over any of them leaves it alone
 
 ### 2.24a A press inside an existing selection belongs to the drag, not to the affordance under it
-- **Given** a selection in the preview that covers a pointer affordance — a link, a right-margin comment marker, a gutter task checkbox, or a code block's copy button
+- **Given** a selection in the preview that covers a pointer affordance the text view draws itself — a link or a right-margin comment marker
 - **When** the reader presses inside that selection, on the affordance
 - **Then** the affordance does **not** activate: the click clears the selection instead, and the next click on it behaves normally (2.24). One wasted click, self-correcting, nothing at risk
 - **And** this is **GTK's behaviour, deliberately left in place, not a defect of this application**: `gtk_text_view_click_gesture_pressed` claims the sequence for its own drag gesture on any single non-touch press whose iter lies inside the selection, in order to start a drag-and-drop, and it does so unconditionally rather than gated on the view being editable. A claim sets `DENIED` on every other gesture handling that sequence, `DENIED` is terminal, and it is **not** a cancellation — so the application's gesture receives `pressed` and then neither `released` nor `cancel`, which is why the click cannot be observed at all rather than merely arriving late (the same arbitration wall as GTK4Rs/AP-171; measured on an instrumented build against GTK 4.6.9)
 - **And** it is **priced and deliberately not worked around**: claiming the sequence ourselves is the only way to out-rank GTK's claim, and it would buy this one self-correcting click at the cost of the case it steals — a press over an affordance would no longer be available to begin a selection drag, and because intent is unknowable at the moment the claim must be made, a press that *did* become a drag would end in nothing happening at all. A silent no-op that fixes itself is the better of the two silences
 - **And** the rule does not reach a press **outside** the selection: that press is the application's as usual, and 2.24's complete-click contract governs it
+- **And** it does not reach the gutter task checkbox or a code block's copy button either: those are widgets of their own, outside the text view's gesture arbitration, so a press on one inside a selection acts on the first click
 
 ### 2.22 Hovering a link reveals its target
 - **Given** a rendered document containing a hyperlink whose caption differs from its URL
@@ -938,6 +940,7 @@
 - **When** the process's GPU memory and GPU engine utilization are measured (e.g. Activity Monitor / `ioreg`), first while the window is resized between small and maximized, and then with documents of very different sizes at a fixed window size
 - **Then** the reading stays far below 6.1's ceiling, **does not grow with window area**, **does not grow with document size or complexity**, and GPU engine utilization for the process stays at or near zero throughout — while system RAM (6.3) *does* rise with document size, confirming the document is rendered on the CPU
 - **And** a reading that scales with either dimension, or sustained GPU engine activity, means software compositing is not active and **fails** this gate — that, not a non-zero byte count, is the macOS signal that 6.2 has been violated
+- **And** the reading is the process's own accelerator accounting — its IOAccelerator (AGX) allocations and GPU engine time — and **not** the window's backing store: the IOSurface every Cocoa window is composited from scales with window area for any application, so counting it as GPU memory fails a build that passes
 
 ### 6.5 On Windows, GPU memory is fixed overhead — not a rendering cost
 > Windows composites every visible window through the GPU, so a literal zero reading
@@ -1908,23 +1911,27 @@
 - **Then** the new emphasis **nests** around the existing markup (`**bold**` → `***bold***`, `~~struck~~` → `~~~struck~~~`) — the existing markers are preserved, never collapsed to a shorter run or stripped (a single `*` must not turn `**bold**` into `*bold*`, which would silently drop the bold)
 - **And** re-applying the *same* command to a genuinely wrapped run still toggles it off (10.2 unchanged): a single-character marker toggles off only on an **odd** same-character run (`*x*`, `***x***`), never on the **even** run that is the other marker (`**`, `~~`)
 
-### 10.16 Highlight renders as a translucent wash- **Given** a document containing `==marked==` text
+### 10.16 Highlight renders as a translucent wash
+- **Given** a document containing `==marked==` text
 - **When** it is shown in the preview (split or preview-only render it; edit-only shows the source)
 - **Then** the marked span is drawn with a **translucent background wash** behind its characters, the `==` markers removed, and the body text stays legible on top — rendered immediately, in every mode that shows the preview
 - **And** the wrap / toggle-off / empty-caret behaviour and the copy-to-source round-trip (`==text==`) are the shared inline-command contracts (10.1–10.3) and the copy contract (§2.8), not restated here
 
-### 10.17 The highlight colour is sourced per reading theme- **Given** a document with `==marked==` text shown in the preview
+### 10.17 The highlight colour is sourced per reading theme
+- **Given** a document with `==marked==` text shown in the preview
 - **When** the active reading theme changes
-- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), muted green (Bedtime), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and vivid lime (Candy)
+- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), muted green (Bedtime), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and deep lemon, a shaded gold (Candy)
 - **And** where a theme also states `mark_fg`, the marked text takes that ink on both the body and the in-cell path; where it does not, the marked text keeps the body foreground and only its background changes
 - **And** switching the reading theme at runtime recolours every marked span, in every open window, without a restart
 
-### 10.18 Highlight holds inside containers, including table cells- **Given** `==marked==` text inside a list item, a blockquote, and a table cell
+### 10.18 Highlight holds inside containers, including table cells
+- **Given** `==marked==` text inside a list item, a blockquote, and a table cell
 - **When** the document is rendered
 - **Then** each marked span shows the wash exactly as it does at top level
 - **And** the table-cell case (drawn as Pango markup, since a cell is a `GtkLabel` outside the buffer) takes its colour from the **same** `mark_bg` key as the body-text path — one key, no second literal, no drift
 
-### 10.19 Highlight recognition is tight-flanked- **Given** text containing `==` runs
+### 10.19 Highlight recognition is tight-flanked
+- **Given** text containing `==` runs
 - **When** it is parsed for highlighting
 - **Then** a fence is recognised only when non-whitespace immediately follows the opening `==` and precedes the closing `==` (interior spaces allowed, e.g. `==a marked phrase==`)
 - **And** ordinary prose where `==`/`=` are operators or spaced (`a == b`, `x -= 1`, `y == 2`, `== spaced ==`) renders literally, with no wash
@@ -2188,7 +2195,7 @@
 ### 12.10 Scroll and outline position survive a view-mode switch
 - **Given** the user has moved into a document — scrolled down in preview, or the caret placed in a lower section in edit/split — with the outline reflecting the current section
 - **When** the user switches view mode (preview, edit, or split)
-- **Then** the document stays at approximately the same position and the outline keeps its selection — neither resets to the top (complements §7.4)
+- **Then** the document stays at approximately the same position and the outline highlights the section at that position by the new mode's rule — the top-of-viewport section in preview, the caret's section in edit and split (12.12, 12.14, 12.16) — and neither resets to the top (complements §7.4)
 
 ### 12.12 Outline scroll-spy highlights the current section while scrolling (preview)
 - **Given** the window is in **preview** mode with a document containing at least two headings
@@ -2201,7 +2208,7 @@
 - **Given** the window is in **preview** mode and the user clicks an outline entry (section A) to navigate
 - **When** the user then manually scrolls the preview to section B without clicking the outline
 - **Then** the outline highlights section B (the preview scroll-spy overrides the visual selection)
-- **And** switching modes and back re-selects section A (the last user-activated entry, not the spy highlight)
+- **And** switching modes and back highlights the section at the restored position by the same rule (12.10, 12.16) — section B here — not section A merely because it was the last entry clicked
 
 ### 12.14 Outline tracks the caret's section in edit-only mode
 - **Given** the window is in edit-only mode with a document containing at least two headings
@@ -3660,6 +3667,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a link or image path beginning `~/` (a bare `~`, or `~/` followed by a path)
 - **When** it is resolved
 - **Then** the `~` expands to the user's home directory FIRST, on the raw href, before the relative/absolute decision — so the expanded path is an absolute path outside the document's folder and is **Refused** unless the tab's toggle is on (never **Missing**, which is the silent wrong answer of reporting that an existing file does not exist; and never admitted past the gate, which would make the tilde a containment bypass)
+- **And** a `~/` path that names no file at all is reported **Missing**, toggle on or off: existence is settled before containment, by design, so **Refused** is the verdict for an existing file outside the folder
 - **And** a `~` anywhere but position 0 stays a literal path component (`./~/x.md` names a real subdirectory), and `~user/…` is deliberately unsupported
 - **And** the image path reaches the same verdict as the link path — both resolve through one shared helper, so the two content types cannot drift apart about what a path means
 
@@ -3815,7 +3823,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the two sections take the shares the drag gives them, each still scrolling its own list; the divider **cannot take either section away** — it stops at a section's minimum height, so a section leaves the screen only by its own `win.outline` / `win.annotations` toggle and the toggle's state never disagrees with what is displayed (20.9)
 - **And** hiding one section and showing it again returns to the divider position the reader chose, rather than resetting the split
 - **And** with only one section shown there is no divider at all — that section fills the sidebar (20.9), and a window-height change is shared between the two rather than taken entirely from one
-- **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is corrupt, restores to the even split rather than to a jammed divider
+- **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is out of range, restores to the even split rather than to a jammed divider
 
 ### 20.22 The annotations viewer's heading counts the annotations
 - **Given** a document with annotations
