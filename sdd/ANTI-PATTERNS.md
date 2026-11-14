@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles` and cite `GEP-N` at the site. **Nothing here** either — the `**Routed**` tombstones were retired 2026-09-24 the same way as the gtk4-rs stubs.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 371**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 380**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -107,6 +107,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 376 | Merging a user theme key before validating it — a refused value shadows the good one | C |
 | 377 | Reducing a synthetic construct's source span as Markdown | C |
 | 378 | Each annotation surface carrying its own "is an annotation" test and its own claim quoting | C |
+| 379 | Proving a multi-process fix with a renamed copy of the binary — the liveness check matches the process name | C |
 
 ---
 
@@ -671,3 +672,10 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **Resolution**: one predicate (`Annotation::is_listed`) and one reduction (`annotate::plain_claim`, through the sanctioned parse seam) shared by every surface.
 **Lesson**: a derived view of one construct has one definition; a second copy is a future disagreement (CAM § derived views).
 **Scribobulate**: `src/annotations.rs`, `src/annotate/`, `src/export/doc.rs`; TDD 17.67–17.69.
+
+## 379. Proving a multi-process fix with a renamed copy of the binary — the liveness check matches the process name
+**Symptom**: a two-instance swap-file fix "did nothing" when driven from a copied binary named `uv-new-bin` (1.0.0 dry run follow-up, 2026-11-14).
+**Root cause**: swap-file owner liveness (`window::swaprecovery::owner_is_live`) treats a pid as ours only if its process name is `scribobulate`; a renamed copy reads as a dead owner, so the guard never fires.
+**Resolution**: copy the build into a directory under its real name, never under a different file name.
+**Lesson**: any rig that runs a second build side by side keeps the executable's name; the app identifies its own processes by it.
+**Scribobulate**: `src/window/swaprecovery.rs`, `src/swapfile/recovery.rs` (`claim_doc_id`), `src/window/swap.rs`; TDD 22.20.

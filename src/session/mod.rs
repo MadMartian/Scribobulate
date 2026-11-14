@@ -109,6 +109,48 @@ fn parse(text: &str) -> Session {
     session
 }
 
+/// Drop, from windows about to be restored, every tab whose file `is_open` already
+/// names, keeping each window's per-tab payload `D` in step with its tabs.
+///
+/// Reached when a session is restored into a process that already holds documents (a
+/// file launch that won the race against a bare one — TDD 8.2a): restoring such a tab
+/// would give one document two tabs, each with its own baseline, monitor and swap file.
+/// A window left with no tab is dropped, except one that never had any (it restores as
+/// one blank window). The active tab keeps pointing at the tab it named, or at the
+/// nearest survivor when it was itself dropped.
+pub(crate) fn prune_open_tabs<D>(
+    windows: Vec<(WindowSession, Vec<D>)>,
+    is_open: impl Fn(&std::path::Path) -> bool,
+) -> Vec<(WindowSession, Vec<D>)> {
+    windows
+        .into_iter()
+        .filter_map(|(mut ws, docs)| {
+            if ws.tabs.is_empty() {
+                return Some((ws, docs));
+            }
+            let keep: Vec<bool> = ws
+                .tabs
+                .iter()
+                .map(|t| !t.path.as_deref().is_some_and(&is_open))
+                .collect();
+            let kept = keep.iter().filter(|k| **k).count();
+            if kept == 0 {
+                return None;
+            }
+            let before_active = keep.iter().take(ws.active_tab).filter(|k| **k).count();
+            ws.active_tab = before_active.min(kept - 1);
+            let mut flags = keep.iter();
+            ws.tabs.retain(|_| *flags.next().unwrap_or(&true));
+            let mut flags = keep.iter();
+            let docs = docs
+                .into_iter()
+                .filter(|_| *flags.next().unwrap_or(&true))
+                .collect();
+            Some((ws, docs))
+        })
+        .collect()
+}
+
 /// Load the saved session, falling back to defaults when missing or unparseable.
 pub(crate) fn load() -> Session {
     let Some(path) = session_path() else {
@@ -260,6 +302,70 @@ mod tests {
                 "the default instance saves at its own level"
             );
         });
+    }
+
+    fn tab(path: Option<&str>) -> TabSession {
+        TabSession {
+            path: path.map(std::path::PathBuf::from),
+            ..TabSession::default()
+        }
+    }
+
+    fn window(paths: &[Option<&str>], active: usize) -> (WindowSession, Vec<usize>) {
+        (
+            WindowSession {
+                active_tab: active,
+                tabs: paths.iter().map(|p| tab(*p)).collect(),
+                ..WindowSession::default()
+            },
+            (0..paths.len()).collect(),
+        )
+    }
+
+    #[test]
+    fn restoring_into_a_process_that_holds_a_file_skips_that_tab_only() {
+        let out = prune_open_tabs(
+            vec![window(&[Some("/a"), Some("/b"), None, Some("/c")], 3)],
+            |p| p == std::path::Path::new("/b"),
+        );
+        let (ws, docs) = &out[0];
+        let paths: Vec<_> = ws.tabs.iter().map(|t| t.path.clone()).collect();
+        assert_eq!(
+            paths,
+            [Some("/a".into()), None, Some("/c".into())],
+            "only the open file's tab goes; the untitled one stays"
+        );
+        assert_eq!(docs, &[0, 2, 3], "each tab keeps its own payload");
+        assert_eq!(ws.active_tab, 2, "the active tab still names /c");
+    }
+
+    #[test]
+    fn a_window_whose_every_tab_is_open_is_dropped_but_a_tabless_one_is_kept() {
+        let out = prune_open_tabs(vec![window(&[Some("/a")], 0), window(&[], 0)], |p| {
+            p == std::path::Path::new("/a")
+        });
+        assert_eq!(out.len(), 1);
+        assert!(out[0].0.tabs.is_empty());
+    }
+
+    #[test]
+    fn a_dropped_active_tab_falls_back_to_a_survivor() {
+        let out = prune_open_tabs(vec![window(&[Some("/a"), Some("/b")], 1)], |p| {
+            p == std::path::Path::new("/b")
+        });
+        assert_eq!(out[0].0.active_tab, 0);
+        let out = prune_open_tabs(vec![window(&[Some("/a"), Some("/b")], 0)], |p| {
+            p == std::path::Path::new("/a")
+        });
+        assert_eq!(out[0].0.active_tab, 0, "index re-based onto the survivor");
+        let out = prune_open_tabs(
+            vec![window(&[Some("/x"), Some("/a"), Some("/b"), Some("/c")], 1)],
+            |p| p == std::path::Path::new("/x"),
+        );
+        assert_eq!(
+            out[0].0.active_tab, 0,
+            "an earlier tab going shifts the index of the one that stays active"
+        );
     }
 
     #[test]

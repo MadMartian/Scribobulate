@@ -1276,6 +1276,8 @@
 - **When** a second launch arrives (bare, or carrying file arguments) and is handed to the running instance
 - **Then** it is treated as a re-activation, not as a cold start: the session is restored once and crash recovery offers once, however many launches land inside that interval
 - **And** the second launch does what a re-activation always does — a blank document, or its named files as tabs
+- **And given** a bare launch and a launch carrying files made in the same instant, and the file launch became the primary process, so the bare one arrives as a re-activation
+- **Then** the bare launch still gets what it asked for: the saved session is restored once (a document the file launch already opened is not given a second tab), alongside the file launch's own files, within a few seconds of the file launch's start; a bare launch arriving after that is an ordinary re-activation, a blank document
 - **And** "is this the cold start?" is claimed **synchronously**, by one claim every entry point takes, rather than derived from observable state; a predicate over state the authorised work will itself change is true for as long as the work is pending, which is precisely the interval in question
 - **Rationale, so it is not re-derived as an optimisation:** a duplicate restore gives every document two tabs, each with its own baseline, file monitor and swapfile, so saving in one raises an external-change decision in the other. It is reachable exactly when restore is slow — large session, slow storage — and a slow start looks like nothing happening, which is what prompts the second launch
 
@@ -4101,6 +4103,13 @@ buffer holds the only copy.
 - **When** the application starts
 - **Then** nothing is recovered for it: no tab is opened for it, no notice or recovered count mentions it, and its recovery data is removed
 - **And** recovery data that leaves its tab with no unsaved changes once applied is removed and goes unannounced the same way, so no later launch can restore that content over a file that has since changed
+
+### 22.20 Two running instances never share one document's recovery data
+- **Given** two instances running against one state directory that each restored the same saved session, so both hold a tab with the same document id
+- **When** both have unsaved edits in that tab and write their recovery data
+- **Then** each has a recovery file of its own, and after both are force-killed a relaunch recovers both edits
+- **And** the instance that writes second finds the first's file at the name it would use, owned by a running instance, and takes a fresh document id for that tab rather than replace it; a file whose owner is not running, or is this instance's own, is replaced as ever
+- **And** where liveness cannot be confirmed (22.14) the file is replaced, as there — the duplicated-tab outcome is the lesser loss
 
 ## 23. Back / Forward navigation history
 

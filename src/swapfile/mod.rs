@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 pub(crate) use codec::{decode, encode, SwapDecodeError};
 pub(crate) use digest::content_digest;
 pub(crate) use naming::{is_stray_temp_name, looks_like_swap_file, swap_file_name, TEMP_SUFFIX};
-pub(crate) use recovery::{sync_action, SwapDisposition, SwapSync};
+pub(crate) use recovery::{claim_doc_id, sync_action, DocIdClaim, SwapDisposition, SwapSync};
 
 /// Directory under the user state directory holding every swap file.
 const SWAP_DIR_NAME: &str = "swap";
@@ -144,6 +144,10 @@ pub(crate) struct SwapHeader {
     /// read, where the swap file may be the only artefact with a version stamp on it.
     pub app_version: String,
 }
+
+/// How many leading bytes of a swap file are enough to read its header (the codec's
+/// terminator search is bounded to about 8 KiB).
+pub(crate) const HEADER_PEEK_BYTES: usize = 16 * 1024;
 
 /// The swap directory, `<state dir>/swap`, or `None` where no state directory resolves.
 ///

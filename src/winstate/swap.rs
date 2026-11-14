@@ -44,6 +44,9 @@ pub(crate) struct SwapState {
     /// completes; otherwise the temp is unlinked. Without it, a write in flight across
     /// a Discard renamed the discarded text into place after the delete had run.
     pub(crate) generation: Cell<u64>,
+    /// Whether this tab has checked, before its first write, that no other live process
+    /// already files a snapshot under its document id (`swapfile::claim_doc_id`).
+    pub(crate) id_claimed: Cell<bool>,
 }
 
 /// The idle debounce for a document of `bytes` bytes, in milliseconds.
