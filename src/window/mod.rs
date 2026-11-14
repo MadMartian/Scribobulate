@@ -799,6 +799,7 @@ fn build_window_chrome_state(
         documents_refresh_scheduled: Cell::new(false),
         tab_drag: RefCell::new(None),
         retiring: Cell::new(false),
+        info_notices: RefCell::new(Vec::new()),
     })
 }
 

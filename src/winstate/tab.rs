@@ -216,6 +216,10 @@ pub(crate) struct TabState {
     /// After "Dismiss", suppress the conflict toast until the next save/reload so
     /// the user is not nagged about a change they chose to keep editing over.
     pub(crate) suppress_conflict: Cell<bool>,
+    /// The on-disk text the conflict prompt was last raised for. A Dismiss answers
+    /// about THAT text only: the file changing to something else is a new conflict and
+    /// raises a new prompt (TDD 5.1) — see [`winstate::dismissal_covers`].
+    pub(crate) conflict_disk: RefCell<Option<String>>,
     /// Set when this tab's OWN backing file changed on disk while it was in
     /// the BACKGROUND (TDD 15.13) — the conflict/reload
     /// decision was correctly evaluated against this tab's own state, but not
@@ -625,6 +629,7 @@ impl TabState {
             outline_spy_doc: RefCell::new(None),
             scroll_spy_conn: RefCell::new(None),
             suppress_conflict: Cell::new(false),
+            conflict_disk: RefCell::new(None),
             pending_external: Cell::new(false),
             expect_self_delete: SelfDeleteGuard::default(),
             // A freshly loaded/created tab's file is present (or it is untitled).
