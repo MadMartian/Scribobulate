@@ -103,7 +103,7 @@ fn persist_all_windows_session(closing: &ApplicationWindow) {
         .filter_map(|w| w.downcast::<ApplicationWindow>().ok())
         .filter_map(|w| {
             let chrome = winstate::chrome(&w)?;
-            let tabs_state = winstate::tabs_for_window(&w);
+            let tabs_state = tabs_in_strip_order(&w, &chrome);
             if tabs_state.is_empty() {
                 return None;
             }
@@ -173,6 +173,26 @@ fn persist_all_windows_session(closing: &ApplicationWindow) {
     });
 }
 
+/// `window`'s tabs in VISUAL strip order, which is what a session must record (TDD 15.10):
+/// the registry's own order is insertion order and diverges from the strip the moment a
+/// tab is dragged (GTK4Rs/AP-74), so persisting it restored the pre-drag order. A tab the
+/// strip does not list (not expected) is kept after the listed ones rather than dropped,
+/// so no document is lost from the session by an ordering disagreement.
+fn tabs_in_strip_order(
+    window: &ApplicationWindow,
+    chrome: &winstate::WindowChrome,
+) -> Vec<Rc<winstate::TabState>> {
+    let mut remaining = winstate::tabs_for_window(window);
+    let mut ordered = Vec::with_capacity(remaining.len());
+    for content in chrome.tabs.ordered_contents() {
+        if let Some(at) = remaining.iter().position(|t| t.content_box == content) {
+            ordered.push(remaining.remove(at));
+        }
+    }
+    ordered.extend(remaining);
+    ordered
+}
+
 /// `window`'s place on the desktop as it is NOW, for the session (`winplace`): the
 /// size it returns to rather than its allocation, its states, and on X11 where it is.
 /// A window with no usable size yet (never mapped) records the configured default.
@@ -191,6 +211,57 @@ fn window_place(window: &ApplicationWindow) -> winplace::Place {
 mod tests {
     use super::*;
     use crate::animation::policy::EnableAnimationsGuard;
+
+    /// TDD 15.10: a tab dragged to a new place in the strip is saved in that place.
+    /// The registry keeps insertion order, so persisting it restored the pre-drag
+    /// order. Mutation-checked: reading `tabs_for_window` directly in
+    /// `persist_all_windows_session` fails the order assertion.
+    #[gtktest::test]
+    fn a_dragged_tab_order_is_what_the_session_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let app = crate::window::testkit::test_app_suffixed("lifecycle.tabdragorder");
+            let window = crate::window::new_window(&app, "IT", "one", None);
+            crate::window::create_tab_in_window(&window, "two", None, false, false).expect("tab");
+            crate::window::create_tab_in_window(&window, "three", None, false, false).expect("tab");
+            let chrome = winstate::chrome(&window).expect("chrome");
+            let ids = |w: &ApplicationWindow| -> Vec<String> {
+                winstate::tabs_for_window(w)
+                    .iter()
+                    .map(|t| t.doc_id().as_str().to_string())
+                    .collect()
+            };
+            let inserted = ids(&window);
+
+            // Drag the first tab past the last one.
+            let first = chrome.tabs.ordered_contents()[0].clone();
+            chrome.tabs.set_dragging(&first, true);
+            chrome.tabs.preview_reorder(&first, 100_000.0);
+            chrome.tabs.settle_reorder();
+            chrome.tabs.set_dragging(&first, false);
+            let strip: Vec<String> = chrome
+                .tabs
+                .ordered_contents()
+                .iter()
+                .filter_map(winstate::tab_by_content_box)
+                .map(|t| t.doc_id().as_str().to_string())
+                .collect();
+            assert_ne!(
+                strip, inserted,
+                "precondition: the drag reordered the strip"
+            );
+
+            persist_all_windows_session(&window);
+            let saved: Vec<String> = crate::session::load().windows[0]
+                .tabs
+                .iter()
+                .filter_map(|t| t.doc_id.clone())
+                .collect();
+            assert_eq!(saved, strip, "the session records the strip's order");
+
+            window.destroy();
+        });
+    }
 
     /// TDD 27.7's persistence half, pinned at the actual write site: a close/quit
     /// must save the READER'S raw `app.play-animations` choice, never the effective

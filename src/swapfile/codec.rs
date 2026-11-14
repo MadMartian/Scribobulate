@@ -290,6 +290,12 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(SwapHeader, String), SwapDecodeErr
         ));
     }
 
+    // The document readers refuse a NUL (TDD 1.4a, 5.5) because a NUL is valid UTF-8 yet
+    // truncates GLib's text handling; a snapshot body feeds the same buffer, so it takes the
+    // same screen rather than a second definition of "binary".
+    crate::docio::content::screen(body.as_bytes())
+        .map_err(|refusal| SwapDecodeError::Malformed(format!("body {refusal}")))?;
+
     Ok((header, body.to_string()))
 }
 
@@ -344,6 +350,15 @@ mod tests {
         let (got_header, got_body) = decode(&bytes).expect("decodes");
         assert_eq!(got_header, header());
         assert_eq!(got_body, body);
+    }
+
+    #[test]
+    fn a_nul_in_the_body_is_malformed_not_recovered() {
+        let bytes = encode(&header(), "before\0after\n").expect("encodes");
+        assert!(
+            matches!(decode(&bytes), Err(SwapDecodeError::Malformed(why)) if why.contains("NUL")),
+            "a snapshot body is refused a NUL as a document is"
+        );
     }
 
     #[test]
