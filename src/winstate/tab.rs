@@ -68,7 +68,23 @@ pub(crate) struct TabState {
     source: RefCell<String>,
     /// Text as of the last load or successful save — the clean baseline the
     /// unsaved-changes check compares the editor against.
+    ///
+    /// Written by a load or a save through [`TabState::adopt_baseline`], which also
+    /// retires [`TabState::recovered_basis`]; the two describe one fact and must move
+    /// together.
     pub(crate) saved_baseline: RefCell<String>,
+    /// Set while this tab holds recovered work whose file changed on disk after the
+    /// snapshot was taken (TDD 22.7): the content digest of the file the recovered edits
+    /// were made against, as the snapshot recorded it.
+    ///
+    /// Needed because `saved_baseline` cannot say it. Recovery loads the tab from the
+    /// file as it is NOW, so the baseline equals the disk and the save guard's
+    /// baseline-against-disk comparison calls the save safe — Save then wrote the
+    /// recovered text over the newer file without a word (found on macOS, where the
+    /// conflict prompt was out of sight). While this is `Some`, the guard also requires
+    /// the file to be the one the edits were based on (`winstate::save_is_safe`). Cleared
+    /// by the next load or save, which is when the tab's baseline is the file again.
+    pub(crate) recovered_basis: RefCell<Option<String>>,
     /// The editor view (created once, reused across mode switches).
     pub(crate) editor: sourceview::View,
     /// The editor's buffer (source of truth for in-progress edits).
@@ -589,6 +605,7 @@ impl TabState {
             recovered_at: Cell::new(None),
             path: RefCell::new(path),
             saved_baseline: RefCell::new(text.clone()),
+            recovered_basis: RefCell::new(None),
             source: RefCell::new(text),
             editor,
             editor_buf,
@@ -768,6 +785,14 @@ impl TabState {
     }
 
     /// True when the editor differs from the saved baseline (unsaved changes).
+    /// Make `text` — just read from, or just written to, the tab's file — its clean
+    /// baseline. Retires a recovery basis with it: the file and the baseline agree again,
+    /// so the ordinary guard comparison is the whole truth.
+    pub(crate) fn adopt_baseline(&self, text: String) {
+        *self.saved_baseline.borrow_mut() = text;
+        self.recovered_basis.replace(None);
+    }
+
     pub(crate) fn is_dirty(&self) -> bool {
         self.editor_text() != *self.saved_baseline.borrow()
     }

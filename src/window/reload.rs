@@ -87,7 +87,7 @@ pub(crate) fn reload_from_disk(window: &ApplicationWindow) {
 ///   flight describes a document that no longer exists.
 /// - **A recorded backing loss is cleared**: the buffer is no longer the only copy.
 pub(crate) fn adopt_disk_text(window: &ApplicationWindow, st: &Rc<TabState>, content: &str) {
-    *st.saved_baseline.borrow_mut() = content.to_string();
+    st.adopt_baseline(content.to_string());
     write_loaded_text(window, st, content);
     crate::window::clear_backing_loss(st);
 }
@@ -171,7 +171,9 @@ pub(super) fn show_conflict_toast(window: &ApplicationWindow) {
     // lost and in conflict — a flagged file returning with other content, TDD 3.6 —
     // would otherwise draw them on top of each other. This one takes the corner while
     // it is up; the sync stands the other down and gives it back when this is answered.
+    // The recovery prompt yields the same way (TDD 22.7).
     super::toast::sync_backing_loss_toast(window);
+    super::toast::sync_recovery_toast(window);
 }
 
 /// Re-read `window`'s active tab's file and apply the external-change decision.
@@ -301,6 +303,8 @@ fn apply_for_active(
             tab.suppress_conflict.set(false);
             tab.chrome().conflict_toast.set_visible(false);
             crate::window::clear_backing_loss(tab);
+            // A recovery prompt that yielded to the retired one gets its corner back.
+            super::toast::sync_recovery_toast(window);
         }
     }
 }

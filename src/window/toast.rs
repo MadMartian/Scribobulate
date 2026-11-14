@@ -79,6 +79,9 @@ pub(super) fn make_conflict_toast(window: &ApplicationWindow) -> gtk::Box {
             // re-derive it here — a document can be BOTH lost and in conflict, which
             // is exactly the state a flagged file returning with other content is in.
             sync_backing_loss_toast(&w);
+            // The recovery prompt yields the corner the same way (TDD 22.7): recovered
+            // work over a file that changed since the crash raises both.
+            sync_recovery_toast(&w);
         }
     ));
     toast
@@ -242,6 +245,17 @@ pub(crate) fn sync_recovery_toast(window: &ApplicationWindow) {
         chrome.recovery_toast.set_visible(false);
         return;
     };
+    // Every toast is bottom-end aligned in one overlay, and the conflict prompt takes
+    // the corner while it is up — the rule the backing-loss prompt already follows,
+    // for the same reason. Recovered work over a file that changed since the crash
+    // raises both (TDD 22.7), and drawn second this one covered the conflict prompt
+    // entirely: the reader was not told the file had changed until they had answered
+    // Keep, and a Save in the meantime went ahead. The notice is not lost, only
+    // deferred — `recovered_at` still holds it, and answering the conflict re-syncs it.
+    if chrome.conflict_toast.is_visible() {
+        chrome.recovery_toast.set_visible(false);
+        return;
+    }
     let stamp = glib::DateTime::from_unix_local(when)
         .and_then(|d| d.format("%H:%M"))
         .map(|s| s.to_string())

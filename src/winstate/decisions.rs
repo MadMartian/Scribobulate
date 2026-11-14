@@ -231,9 +231,25 @@ pub(crate) fn line_col_indicator(mode: ViewMode, line: i32, visual_col: u32) -> 
 /// blank file under a document already flagged as having lost its backing
 /// (`backing_lost`): that is the truncation the user is saving to repair, not
 /// someone else's work to warn about (TDD 15.22).
-pub(crate) fn save_is_safe(baseline: &str, disk_content: Option<&str>, backing_lost: bool) -> bool {
+///
+/// `recovered_basis` is the content digest a crash recovery recorded for the file its
+/// edits were made against, set only when the file changed after the snapshot (TDD
+/// 22.7). Then the baseline is NOT the edits' basis — recovery loads the tab from the
+/// file as it is now, so `disk == baseline` holds while the recovered text sits on an
+/// older version — and the file must also still be the one the edits were based on.
+/// Until the user reloads or confirms an overwrite, it is not, and the save asks.
+pub(crate) fn save_is_safe(
+    baseline: &str,
+    disk_content: Option<&str>,
+    backing_lost: bool,
+    recovered_basis: Option<&str>,
+) -> bool {
     match disk_content {
-        Some(disk) => disk == baseline || (backing_lost && is_blank_content(disk)),
+        Some(disk) => {
+            let basis_holds = recovered_basis
+                .is_none_or(|digest| crate::swapfile::content_digest(disk.as_bytes()) == digest);
+            (disk == baseline && basis_holds) || (backing_lost && is_blank_content(disk))
+        }
         None => true,
     }
 }
@@ -478,24 +494,40 @@ mod tests {
     #[test]
     fn save_is_safe_gates_on_content_not_mtime() {
         // QA round-1: content-identical → safe, regardless of what any clock says.
-        assert!(save_is_safe("hello", Some("hello"), false));
+        assert!(save_is_safe("hello", Some("hello"), false, None));
         // Any other on-disk content → unsafe, even a single-byte difference
         // that a coarse-resolution mtime clock could never have detected.
-        assert!(!save_is_safe("hello", Some("hello!"), false));
+        assert!(!save_is_safe("hello", Some("hello!"), false, None));
         // Unreadable/deleted on disk → allow (the write itself surfaces any
         // real I/O error; there is nothing there to clobber).
-        assert!(save_is_safe("hello", None, false));
+        assert!(save_is_safe("hello", None, false, None));
+    }
+
+    /// TDD 22.7: recovered work whose file changed after the snapshot. The tab was
+    /// loaded from the newer file, so baseline and disk agree — and the save must still
+    /// ask, because the recovered edits were made against the older file. Mutation:
+    /// drop `basis_holds` and the first assertion fails.
+    #[test]
+    fn a_recovery_on_a_changed_file_is_not_safe_to_save_until_its_basis_holds() {
+        let older = crate::swapfile::content_digest(b"older");
+        assert!(!save_is_safe("newer", Some("newer"), false, Some(&older)));
+        // The file went back to what the edits were made against: nothing to clobber.
+        // (Reached only by a reload or a save, which retire the basis anyway; pinned
+        // so the comparison is known to be against the basis, not merely "any basis".)
+        assert!(save_is_safe("older", Some("older"), false, Some(&older)));
+        // A deleted file is still nothing to clobber.
+        assert!(save_is_safe("newer", None, false, Some(&older)));
     }
 
     #[test]
     fn saving_over_a_truncated_file_is_safe_and_over_anything_else_is_not() {
         // TDD 15.22: the blank file is what the save is repairing.
-        assert!(save_is_safe("hello", Some(""), true));
-        assert!(save_is_safe("hello", Some(" \n\t\r\n"), true));
+        assert!(save_is_safe("hello", Some(""), true, None));
+        assert!(save_is_safe("hello", Some(" \n\t\r\n"), true, None));
         // Blank but never flagged: somebody else's write, even an empty one.
-        assert!(!save_is_safe("hello", Some(""), false));
+        assert!(!save_is_safe("hello", Some(""), false, None));
         // Flagged, but the file came back with other content: a conflict (TDD 3.6).
-        assert!(!save_is_safe("hello", Some("other"), true));
+        assert!(!save_is_safe("hello", Some("other"), true, None));
     }
 
     #[test]
