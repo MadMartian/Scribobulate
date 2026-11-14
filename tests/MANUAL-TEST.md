@@ -1632,7 +1632,21 @@ and this file is just the run-sheet.
   original on-disk file not left half-written (covers `atomic_io`'s
   write-temp-then-rename claim under real ENOSPC, not just a crash-simulation)
 - [ ] Save a document containing a `\0` byte or invalid UTF-8 pasted from
-  another app → doesn't panic; either sanitizes or errors cleanly
+  another app → doesn't panic; either sanitizes or errors cleanly.
+  **And OPEN one from disk (TDD 1.4a, 5.5; this was DATA LOSS):** write
+  `printf '# Title\n\nbefore\0after\n\nlast line\n' > nul.md` (*Windows*:
+  `[IO.File]::WriteAllBytes("$PWD\nul.md", [Text.Encoding]::UTF8.GetBytes("# Title`n`nbefore`0after`n`nlast line`n"))`),
+  record `sha256sum nul.md` / `Get-FileHash`, and open it (CLI and File ▸ Open)
+  → the tab shows **"Refused to open file"** naming a NUL byte at byte 15, it
+  is **not** marked unsaved (no `•`), Save is disabled, and Ctrl+S changes
+  nothing: the hash is unchanged. The pre-fix signature was a tab already
+  dirty with "0 words", and Ctrl+S writing **0 bytes** over the file and
+  saying "File saved." Then the re-read half: open a clean `ok.md`, append a
+  NUL from a terminal (`printf 'x\0y\n' >> ok.md`) → the editor keeps its text
+  and stays clean (the watcher stays silent), File ▸ Reload reports the
+  refusal, and the file is not rewritten. Invalid UTF-8
+  (`printf 'caf\xe9\n' > latin1.md`) still opens as **"Could not open file"**
+  with Save disabled
 - [ ] Round-trip CRLF (`crlf-doc.md`): open, edit, save → line endings not
   silently converted to LF (or if they are, that's a documented decision, not
   an accident — confirm which and note it)
