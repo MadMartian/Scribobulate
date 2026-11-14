@@ -52,7 +52,11 @@ fn refresh_format_edit_surfaces(window: &ApplicationWindow, force: bool) {
     // is always evaluated so the cache tracks the latest kind either way.
     if chrome.fmt_edit_state.replace(kind) != kind || force {
         for (btn_kind, btn) in chrome.fmt_edit_btns.iter().chain(&chrome.overlay_edit_btns) {
-            crate::a11y::name(btn, btn_kind.label(Some(*btn_kind) == kind));
+            crate::a11y::name_with_accel(
+                btn,
+                btn_kind.label(Some(*btn_kind) == kind),
+                btn_kind.accel(),
+            );
         }
     }
     // Each window now owns its Format menu (GTK4Rs/AP-76), so relabel THIS

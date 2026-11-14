@@ -394,6 +394,11 @@ pub(crate) struct TabState {
     /// widget on tab switch so re-opening find on a tab shows its own last
     /// search rather than whatever the previously active tab left behind.
     pub(crate) find_query: RefCell<String>,
+    /// The text in the replace field while this tab was active — the same per-tab
+    /// ownership as [`find_query`](Self::find_query), so a new or switched-to tab
+    /// shows its own replacement rather than the previous tab's. Not persisted: a
+    /// replacement survives a restart as the head of `replace_history`.
+    pub(crate) replace_text: RefCell<String>,
     /// This tab's find **match options** — case, whole word, regular expression.
     ///
     /// Per tab for the same reason as [`find_query`](Self::find_query), and it has to
@@ -659,6 +664,7 @@ impl TabState {
             search_context,
             search_settings,
             find_query: RefCell::new(String::new()),
+            replace_text: RefCell::new(String::new()),
             // Born at the default — a case-insensitive literal, the behaviour the bar
             // had before options existed. A restored tab's own options are applied
             // after construction by `window::findbar::adopt_find_options`, which is the
