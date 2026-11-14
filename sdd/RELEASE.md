@@ -362,11 +362,6 @@ Every published artefact carries the notices its dependencies require (POLICY
   ISSUES.md entry or a reworded rubric, classified as gate 3 says.
 - Only `windows` and `mac` can run their own platform's pass; `linux` dictates the
   target commit and collects the three reports for the operator.
-- A brief to a seat is sent at the maximum message TTL with an acknowledgement asked
-  for: a seat mid-chunk reads its inbox late, and a brief that expires unread is
-  indistinguishable, from the sender's side, from one that was read. The release seat
-  keeps one consolidated current brief per seat — target, artefact and sum, what to run,
-  what to skip — and re-sends that, not a chain of amendments.
 - **Proof:** the operator's 👍 on the three reports. Each report carries the commit
   hash tested, the artefact's name, the date, the counts (pass / fail / not-run) and
   the NOT-RUN and FAIL item numbers with reasons; a 👎 names what sends the release
@@ -382,21 +377,37 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
   resolve.
 - The file association opens a `.md` from the file manager.
 - Uninstall leaves nothing behind that the installer put there.
-- **Full once per campaign, lite after that.** The steps above run in full once per
-  release campaign, and again only when the diff since the last full run touches
-  `packaging/`, `.github/workflows/`, `scripts/pipeline.steps`, `Cargo.toml` or
-  `Cargo.lock`, `build.rs`, the resources (desktop file, icons, MIME, `Info.plist`,
-  entitlements, the licence bundle) or startup and lifecycle code (`src/main.rs`,
-  `src/app/`, `src/logging.rs`, `src/forensics/`, settings and session migration). Any
-  other change cannot alter whether the package installs or the binary launches, and
-  takes **gate 9 lite**: verify the artefact's sum, install it over the previous build,
-  prove the version (`--version`) and the commit, launch once, quit once. The commit
-  proof is the log's identity line on Windows and macOS; on Linux, whose log carries
-  none, it is the commit found in the installed binary (`strings`) and the previous
-  one absent. On macOS the lite run strips quarantine from its scratch copy
-  (`xattr -d com.apple.quarantine`), so it costs the operator no Gatekeeper click —
-  the full run already proved what Gatekeeper shows.
+- The steps above run in full once per release campaign; after that, each target move
+  takes the full run or the lite run by the rule below.
 - **Proof:** one line per platform in the release record, saying full or lite.
+
+#### Full or lite
+
+A change that cannot alter whether the package installs or the binary launches does
+not need the full gate again. The diff since the last full run decides, by category —
+not by a fixed file list, because the files move:
+
+- **Packaging and the build of the artefact**: the per-platform packaging trees and
+  their READMEs, the CI workflow, and the pipeline step list that every runner derives
+  from (AGENTS.md's "building, running, or testing" section names them).
+- **The dependency graph and the build script**: the Cargo manifest and lock file, and
+  any build script the manifest declares.
+- **Bundled resources**: whatever the packaging copies beside the binary — desktop
+  entry, icons, MIME registration, the macOS property list and entitlements, the
+  licence bundle, themes. The packaging trees say what they copy.
+- **Startup and lifecycle code**: the entry point, application setup and activation,
+  logging and crash handling, and the migration of settings and sessions.
+  [TECH.md](TECH.md)'s module map names the modules that hold these today.
+
+To confirm, list the files the diff touches (`git diff --stat <last-full-gate-9
+commit>..<target>`) and assign each to a category or to none. One file in a category
+→ the full gate on every platform whose artefact it reaches. None → **gate 9 lite**:
+verify the artefact's sum, install it over the previous build, prove the version
+(`--version`) and the commit, launch once, quit once. The commit proof is the log's
+identity line where the log carries one (Windows, macOS); where it does not (Linux),
+it is the commit found in the installed binary and the previous one absent. On macOS
+the lite run strips quarantine from its scratch copy, so it costs the operator no
+Gatekeeper click — the full run already proved what Gatekeeper shows.
 
 ### 10. Documentation
 
