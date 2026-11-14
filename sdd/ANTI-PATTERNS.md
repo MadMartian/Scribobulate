@@ -99,6 +99,14 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 368 | A `dbus-run-session` rig on the operator's desktop — the accessibility bus is per user, not per session bus | C |
 | 369 | Reinstalling right after `Start-Process unins000.exe -Wait` — Inno's uninstaller is still running from its `%TEMP%` copy | C |
 | 370 | Expecting macOS "Open Anyway" to keep working — the System Settings entry lapses after some hours | C |
+| 371 | A boolean "dismissed" flag, and a timed acknowledgement, outliving the condition they answered | C |
+| 372 | Naming a descriptor-driven control with a helper that drops its declared accelerator | C |
+| 373 | A window-shared widget mirroring per-tab state with no per-tab owner | C |
+| 374 | Persisting tabs in registry order instead of the strip's order | C |
+| 375 | Recording a tour that returns home with the lossy navigation `follow` | C |
+| 376 | Merging a user theme key before validating it — a refused value shadows the good one | C |
+| 377 | Reducing a synthetic construct's source span as Markdown | C |
+| 378 | Each annotation surface carrying its own "is an annotation" test and its own claim quoting | C |
 
 ---
 
@@ -607,3 +615,59 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **Resolution**: relaunch the app to have Gatekeeper block it again, which regenerates the entry, and use it promptly.
 **Lesson**: a Gatekeeper exception is a short-lived offer, not a setting; schedule the operator's click for when they are at the machine.
 **Scribobulate**: unsigned macOS bundle (POLICY § Artefact signing); RELEASE.md gate 9's full run on macOS.
+
+## 371. A boolean "dismissed" flag, and a timed acknowledgement, outliving the condition they answered
+**Symptom**: after Dismiss, no later external change raised a conflict prompt; a "File saved." toast and status line sat over a deletion prompt that arrived after them (1.0.0 dry run).
+**Root cause**: Dismiss set a flag that silenced every later conflict, not the one answered; acknowledgements were retracted only by their own timers, so nothing tied them to the condition that superseded them.
+**Resolution**: record what was dismissed (the on-disk text) and compare (`winstate::dismissal_covers`); a condition-driven surface retracts outstanding acknowledgements when raised (`WindowChrome::retract_info_notices`).
+**Lesson**: a dismissal answers one question — store the question; a "that happened" notice yields to any condition raised after it.
+**Scribobulate**: `src/winstate/decisions.rs`, `src/winstate/chrome.rs`, `src/window/reload.rs`, `src/window/backingloss.rs`; TDD 5.1.
+
+## 372. Naming a descriptor-driven control with a helper that drops its declared accelerator
+**Symptom**: Format-bar tooltips showed no shortcut ("Bold", not "Bold (Ctrl+B)"); a relabel stripped Insert Link's again (1.0.0 dry run).
+**Root cause**: `format_button` and the Insert/Edit relabel named controls with `a11y::name`, which sets no accelerator, although each descriptor declares one.
+**Resolution**: every site that names a descriptor-driven control uses `a11y::name_with_accel(label, cmd.accel)`; the test walks the whole `FORMAT_CMDS` table.
+**Lesson**: a control built from a descriptor takes every user-visible attribute from it at every naming site, and the guard walks the table, not a hand-picked few.
+**Scribobulate**: `src/window/editbar/formatbar.rs`, `relabel.rs`; TDD 16.4.
+
+## 373. A window-shared widget mirroring per-tab state with no per-tab owner
+**Symptom**: a new tab's Replace field showed the previous tab's replace text (1.0.0 dry run).
+**Root cause**: the find bar is one widget per window; the tab-switch resync restored the Find field from `TabState` but the Replace field had no per-tab value at all.
+**Resolution**: `TabState.replace_text`, written from the field's `changed` signal and restored in `resync_find_bar_for_tab`.
+**Lesson**: every window-shared widget that shows per-tab state needs a per-tab owner and a restore on switch — audit the whole widget, not the field that was reported.
+**Scribobulate**: `src/window/findbar.rs`, `src/window/tabs/switch.rs`.
+
+## 374. Persisting tabs in registry order instead of the strip's order
+**Symptom**: a dragged tab order was not restored on relaunch (1.0.0 dry run, TDD 15.10).
+**Root cause**: session save enumerated `winstate::tabs_for_window`, which is insertion order and diverges from the strip after a reorder.
+**Resolution**: `tabs_in_strip_order` over `TabView::ordered_contents`; `active_tab` indexes that order.
+**Lesson**: anything that saves or shows tabs "as the reader sees them" reads the strip's order; the registry's order is an implementation detail.
+**Scribobulate**: `src/window/lifecycle.rs`.
+
+## 375. Recording a tour that returns home with the lossy navigation `follow`
+**Symptom**: Save All with every chooser cancelled lost a Back stop (1.0.0 dry run, TDD 23.9).
+**Root cause**: suppressed switches call `NavHistory::follow`, which overwrites the cursor entry and collapses equal neighbours, so a tour through an adjacent tab cannot be undone by returning.
+**Resolution**: `NavHistory::hold` / `winstate::nav_hold` makes recording a no-op for a tour that comes back; `nav_suppress` stays for sweeps that may remove tabs. Recovery's reveal is suppressed too.
+**Lesson**: "don't record this" has two meanings — leave history untouched, or follow the cursor; pick per caller.
+**Scribobulate**: `src/winstate/navhistory/`, `src/window/save.rs` (`save_all_next`), `src/window/swaprecovery.rs`.
+
+## 376. Merging a user theme key before validating it — a refused value shadows the good one
+**Symptom**: a user `[themes.sepia]` with a bad `background` drew the desktop's page colour, leaving Sepia's ink invisible on a dark desktop (1.0.0 dry run, TDD 18.11).
+**Root cause**: `ThemeSpec::overlay` replaced the built-in key with the user's value before validation; the resolution walk then refused it and fell through one source too far, to the System theme.
+**Resolution**: a refused overlay value does not displace a key the base theme states; it is logged and the shipped value kept.
+**Lesson**: when a fallback chain skips refused values, validate at merge time, or the merge erases the fallback.
+**Scribobulate**: `src/theme/spec.rs`; THEMING.md.
+
+## 377. Reducing a synthetic construct's source span as Markdown
+**Symptom**: the collapsed TOML front-matter snippet showed its `+++` fence and smart-quoted strings (1.0.0 dry run).
+**Root cause**: the snippet reduced the front-matter disclosure's body span as Markdown; that span is metadata, not Markdown (YAML's `---` only hid it by parsing as a rule).
+**Resolution**: `preview_insert_text` detects the front-matter span and snippets it verbatim.
+**Lesson**: a synthetic construct's source range is not Markdown; anything that re-parses a span must know when it is synthetic.
+**Scribobulate**: `src/renderer/disclosure/preview.rs`.
+
+## 378. Each annotation surface carrying its own "is an annotation" test and its own claim quoting
+**Symptom**: a bare highlight was missing from the sidebar while rendered as one; a formatted claim was quoted as raw source in the chip, sidebar and export, and export alone printed a literal `**` (1.0.0 dry run).
+**Root cause**: the row, chip, card and export each reduced a claim their own way, and the "listed" predicate was decided apart from rendering.
+**Resolution**: one predicate (`Annotation::is_listed`) and one reduction (`annotate::plain_claim`, through the sanctioned parse seam) shared by every surface.
+**Lesson**: a derived view of one construct has one definition; a second copy is a future disagreement (CAM § derived views).
+**Scribobulate**: `src/annotations.rs`, `src/annotate/`, `src/export/doc.rs`; TDD 17.67–17.69.
