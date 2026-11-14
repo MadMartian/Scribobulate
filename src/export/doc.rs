@@ -78,28 +78,20 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
-            claim: claim_text(&doc.blocks, idx, cleaned, hs, he),
+            claim: claim_text(cleaned, hs, he),
         });
     }
     doc
 }
 
-/// The claim's own text as the page shows it, for a sink that shows a comment away
+/// The claim's own text as the page shows it ([`crate::annotate::plain_claim`], the
+/// reduction the chips and the viewer quote with), for a sink that shows a comment away
 /// from the run it refers to.
-///
-/// Read off the claim's marked fragments, which are built from the rendered inline
-/// tree, so every construct marker — `**`, `^`, `~` — is already gone. Reading the
-/// source run instead strips only the tight script markers and leaves a bold claim's
-/// literal `**`. A claim the mapper placed on no fragment falls back to nothing.
-fn claim_text(blocks: &[Block], idx: usize, cleaned: &str, hs: usize, he: usize) -> String {
-    if hs >= he || he > cleaned.len() {
-        return String::new();
+fn claim_text(cleaned: &str, hs: usize, he: usize) -> String {
+    match cleaned.get(hs..he) {
+        Some(run) if hs < he => crate::annotate::plain_claim(run),
+        _ => String::new(),
     }
-    let mut out = String::new();
-    for_each_claim(blocks, idx, &mut |inner| {
-        out.push_str(&crate::export::plain_text(inner));
-    });
-    out
 }
 
 /// Split every [`Inline::Text`] overlapping `range` and wrap the overlap in a
@@ -864,10 +856,18 @@ mod export_doc_tests {
     }
 
     #[test]
-    fn a_bare_highlight_without_a_comment_is_not_an_annotation() {
-        // `is_listed`'s predicate — the same one the chips and the viewer use.
+    fn a_bare_highlight_is_an_annotation_with_no_comment() {
+        // `is_listed`'s predicate — the same one the chips and the viewer use (TDD 17.67).
         let doc = doc_of("A {==claim==} with no comment.\n");
-        assert!(doc.annotations.is_empty(), "{:?}", doc.annotations);
+        assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
+        assert_eq!(doc.annotations[0].comment, "");
+        assert_eq!(doc.annotations[0].claim, "claim");
+    }
+
+    #[test]
+    fn an_exported_claim_is_quoted_as_the_page_shows_it() {
+        let doc = doc_of("A {==**bold** and [a link](u)==}{>>c<<} here.\n");
+        assert_eq!(doc.annotations[0].claim, "bold and a link");
     }
 
     #[test]

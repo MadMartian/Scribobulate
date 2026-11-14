@@ -860,8 +860,8 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
     }
 }
 
-/// Build the right-margin comment markers: one per annotation
-/// that carries a comment (a highlight+comment, or a standalone point comment).
+/// Build the right-margin comment markers: one per listed annotation (a highlight, with
+/// or without its comment, or a standalone point comment).
 /// The anchor is the buffer char the marker sits beside — the end of a
 /// highlighted claim, or the point comment's position.
 fn build_markers(
@@ -874,9 +874,8 @@ fn build_markers(
     const HL_OPEN_LEN: usize = 3; // "{=="
     let mut out = Vec::new();
     for ann in annotations {
-        // The one shared "is a comment-bearing annotation" predicate (TDD 20.2): the
-        // viewer's list builder gates on this exact function, so a chip exists iff a
-        // viewer row does. It guarantees `comment`/`src_comment_body` are `Some` below.
+        // The one shared "is an annotation" predicate (TDD 20.2): the viewer's list
+        // builder gates on this exact function, so a chip exists iff a viewer row does.
         if !ann.is_listed() {
             continue;
         }
@@ -904,16 +903,27 @@ fn build_markers(
                 let cleaned_len = hi.saturating_sub(lo);
                 (
                     hi,
-                    Some(cleaned.get(lo..hi).unwrap_or_default().to_string()),
+                    // Quoted as the page shows it, not as the source spells it
+                    // (TDD 17.69) — the viewer's rows take the same reduction.
+                    Some(crate::annotate::plain_claim(
+                        cleaned.get(lo..hi).unwrap_or_default(),
+                    )),
                     Some(cs..cs + cleaned_len),
                 )
             }
-            AnnKind::Comment => (ann.cleaned_content.start.raw(), None, None),
+            AnnKind::Comment => (crate::annotate::chip_anchor(original, ann), None, None),
             _ => continue,
         };
-        let (Some(comment), Some(body)) = (ann.comment.clone(), ann.src_comment_body.clone())
-        else {
-            continue;
+        // A bare highlight has no comment yet: its comment is empty and its "body" the
+        // empty range just past the closing `==}`, where Edit writes `{>>…<<}`
+        // (TDD 17.67). Every other listed annotation carries both.
+        let (comment, body) = match (ann.comment.clone(), ann.src_comment_body.clone()) {
+            (Some(comment), Some(body)) => (comment, body),
+            _ if ann.kind == AnnKind::Highlight => {
+                let end = ann.src_span.end.raw();
+                (String::new(), end..end)
+            }
+            _ => continue,
         };
         // Capture the construct's own text alongside its range, so the card built
         // from this marker can re-find it after the document moves underneath
@@ -1250,21 +1260,54 @@ mod pure_tests {
         );
     }
 
+    /// The markers of a real document: its extraction, with one whole-text content
+    /// event standing in for the renderer's records (every fixture below is one run).
+    fn markers_of(original: &str) -> Vec<crate::codeview::MarkerData> {
+        let ex = crate::annotate::extract(original);
+        let end = ex.cleaned.len();
+        let evs = [(0usize, end, 0i32, end as i32)];
+        build_markers(original, &ex.cleaned, &ex.annotations, &evs)
+    }
+
+    /// TDD 17.67: a bare highlight is an annotation with an empty comment, whose Edit
+    /// target is the empty range just past `==}`.
     #[test]
-    fn build_markers_skips_a_comment_less_highlight() {
-        let cleaned = "plain highlight only";
-        let original = "{==plain highlight only==}";
-        let ann = Annotation {
-            kind: AnnKind::Highlight,
-            src_span: crate::span::OriginalByteOffset::new(0)
-                ..crate::span::OriginalByteOffset::new(24),
-            cleaned_content: crate::span::CleanedByteOffset::new(0)
-                ..crate::span::CleanedByteOffset::new(20),
-            src_comment_body: None,
-            comment: None,
-        };
-        let evs = [(0usize, 20usize, 0i32, 20i32)];
-        assert!(build_markers(original, cleaned, std::slice::from_ref(&ann), &evs).is_empty());
+    fn build_markers_emits_a_marker_for_a_comment_less_highlight() {
+        let original = "A {==plain claim==} only";
+        let markers = markers_of(original);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].comment, "");
+        assert_eq!(markers[0].claim.as_deref(), Some("plain claim"));
+        assert_eq!(markers[0].source.src_comment_body, 19..19);
+        assert_eq!(&original[..19], "A {==plain claim==}");
+        assert_eq!(markers[0].source.construct.captured_at(), 2..19);
+    }
+
+    /// TDD 17.69: the card quotes what the page shows, not the Markdown behind it.
+    #[test]
+    fn build_markers_quotes_a_formatted_claim_as_rendered() {
+        let markers = markers_of("A {==**bold** and `code`==}{>>c<<} end\n");
+        assert_eq!(markers[0].claim.as_deref(), Some("bold and code"));
+    }
+
+    /// TDD 17.68: a comment on a line of its own above a paragraph anchors at that
+    /// paragraph's first character, not at the end of the block before it.
+    #[test]
+    fn build_markers_anchors_an_own_line_comment_at_the_paragraph_below() {
+        let original = "First para.\n\n{>>about next<<}\nSecond para.\n";
+        let ex = crate::annotate::extract(original);
+        // Two content events, as the renderer records them (the buffer holds the paragraph
+        // break between them): the gap in the cleaned text is where the
+        // comment's cleaned offset falls.
+        let first = ex.cleaned.find("First").unwrap();
+        let second = ex.cleaned.find("Second").unwrap();
+        let evs = [
+            (first, first + 11, 0i32, 11i32),
+            (second, second + 12, 13i32, 25i32),
+        ];
+        let markers = build_markers(original, &ex.cleaned, &ex.annotations, &evs);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].anchor, 13, "the start of `Second para.`");
     }
 }
 
