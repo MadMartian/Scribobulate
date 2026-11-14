@@ -6,6 +6,7 @@
 //! (`crate::app::X`) is re-exported below unchanged, so the split is internal.
 
 mod appactions;
+mod application;
 pub(crate) mod coldstart;
 mod commands;
 mod menubar;
@@ -44,6 +45,8 @@ pub(crate) use setup::register_accelerators;
 pub(crate) use setup::setup_app;
 pub(crate) use setup::{re_render_all_windows, reload_theme_css};
 pub(crate) use shortcuts::make_shortcuts_window;
+
+pub(crate) use application::ScribobulateApplication;
 
 /// The `--new-instance` / `-n` decision, and the argv it leaves behind.
 ///
@@ -116,6 +119,26 @@ pub(crate) fn end_of_options_argv(args: Vec<String>) -> Vec<String> {
         }
     }));
     rest
+}
+
+/// The argv GLib parses: `instance::instance_argv`'s strip, then
+/// [`new_instance_argv`]'s, then [`end_of_options_argv`]. The one owner of that
+/// shaping. `run()` applies it before `run_with_args`, and
+/// `ScribobulateApplication`'s `local_command_line` applies it again to what GLib
+/// actually parses, which on Windows is the real command line rather than what
+/// `run()` passed (see `application.rs`).
+///
+/// Idempotent, so applying it twice, as Linux and macOS do, changes nothing: every
+/// switch it strips is gone, no bare `--` survives, and a dash-led operand after one
+/// is now spelled `./<name>`. A refused `--instance` is left in place. `run()` has
+/// already refused the launch, so GLib never parses it.
+pub(crate) fn shape_argv(args: Vec<String>) -> Vec<String> {
+    let args = match crate::instance::instance_argv(args.clone()) {
+        Ok((_, rest)) => rest,
+        Err(_) => args,
+    };
+    let (_, args) = new_instance_argv(args);
+    end_of_options_argv(args)
 }
 
 /// Does argv carry an argument shaped like an option?
@@ -452,5 +475,128 @@ mod end_of_options_tests {
     #[test]
     fn the_program_name_is_never_examined() {
         assert_eq!(end_of_options_argv(argv(&["--"])), argv(&["--"]));
+    }
+}
+
+#[cfg(test)]
+mod shape_argv_tests {
+    use super::shape_argv;
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn shaped(rest: &[&str]) -> Vec<String> {
+        shape_argv(argv(&[&["scribobulate"], rest].concat()))
+    }
+
+    fn in_cwd(name: &str) -> String {
+        std::path::Path::new(".")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Each switch of ours is stripped wherever it stands before a `--`. On Windows
+    /// these reached GLib unshaped, so the ones after a file were refused (TDD 8.5,
+    /// 8.9).
+    #[test]
+    fn our_switches_are_stripped_after_a_file_as_well_as_before_it() {
+        for rest in [
+            &["-n", "file.md"][..],
+            &["file.md", "-n"],
+            &["file.md", "--new-instance"],
+            &["file.md", "--instance", "W"],
+            &["--instance", "W", "file.md"],
+            &["file.md", "--instance=W"],
+            &["--instance", "W", "-n", "file.md"],
+        ] {
+            assert_eq!(shaped(rest), argv(&["scribobulate", "file.md"]), "{rest:?}");
+        }
+    }
+
+    /// TDD 8.8: the separator never survives, and a dash-led operand after it is a path.
+    #[test]
+    fn the_separator_is_resolved() {
+        assert_eq!(
+            shaped(&["--", "-x.md"]),
+            vec!["scribobulate".to_owned(), in_cwd("-x.md")]
+        );
+        assert_eq!(
+            shaped(&["--", "--help", "-x.md"]),
+            vec!["scribobulate".to_owned(), in_cwd("--help"), in_cwd("-x.md")]
+        );
+        assert_eq!(
+            shaped(&["--", "file.md"]),
+            argv(&["scribobulate", "file.md"])
+        );
+    }
+
+    /// Switches after the separator are file names, not switches.
+    #[test]
+    fn our_switches_after_the_separator_are_files() {
+        assert_eq!(
+            shaped(&["--", "-n", "--instance", "W"]),
+            vec![
+                "scribobulate".to_owned(),
+                in_cwd("-n"),
+                in_cwd("--instance"),
+                "W".to_owned()
+            ]
+        );
+    }
+
+    /// GLib's own switches are left for GLib to answer or refuse.
+    #[test]
+    fn other_switches_are_left_for_glib() {
+        for rest in [
+            &["--help"][..],
+            &["-x.md"],
+            &["--version"],
+            &["file.md", "--nonsense"],
+        ] {
+            let mut expected = argv(&["scribobulate"]);
+            expected.extend(argv(rest));
+            assert_eq!(shaped(rest), expected, "{rest:?}");
+        }
+    }
+
+    /// A refused `--instance` is left in place rather than half-stripped; `run()` has
+    /// already ended the launch.
+    #[test]
+    fn a_refused_instance_switch_is_left_in_place() {
+        assert_eq!(
+            shaped(&["file.md", "--instance"]),
+            argv(&["scribobulate", "file.md", "--instance"])
+        );
+    }
+
+    /// Linux and macOS shape in `run()` and again in `local_command_line`; the second
+    /// pass must change nothing, or those platforms change behaviour.
+    #[test]
+    fn shaping_is_idempotent() {
+        let corpus: &[&[&str]] = &[
+            &[],
+            &["file.md"],
+            &["-n", "file.md"],
+            &["file.md", "-n"],
+            &["file.md", "--instance", "W"],
+            &["--instance=W", "-n", "a.md", "b.md"],
+            &["--", "-x.md"],
+            &["--", "--help", "-x.md"],
+            &["--", "--"],
+            &["--", "--", "-n"],
+            &["--", "-"],
+            &["--", "-n", "--instance", "W"],
+            &["a.md", "--", "--instance=W", "--new-instance"],
+            &["--help"],
+            &["-x.md"],
+            &["file.md", "--instance"],
+            &["--instance", "bad name!", "a.md"],
+        ];
+        for rest in corpus {
+            let once = shaped(rest);
+            assert_eq!(shape_argv(once.clone()), once, "{rest:?}");
+        }
     }
 }

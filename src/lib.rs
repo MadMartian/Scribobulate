@@ -242,6 +242,9 @@ pub fn run() -> glib::ExitCode {
         println!("{}", app::STARTUP_PROBE_MARKER);
         return glib::ExitCode::SUCCESS;
     }
+    // Windows only: GLib counts what `run_with_args` is given and nothing more (below).
+    #[cfg(windows)]
+    let raw_argv = argv.clone();
 
     // `--instance NAME` (TDD 8.9–8.17): decided here, before logging starts, because
     // the persistent log and the crash reports live in the state folder and a named
@@ -345,10 +348,18 @@ pub fn run() -> glib::ExitCode {
     // switch so the remaining args still flow into HANDLES_OPEN as file paths.
     // The decision itself is `app::new_instance_argv` — pure, and unit-tested there
     // rather than here, where the coverage gate cannot reach it.
-    let (force_new, args) = app::new_instance_argv(argv.clone());
-    // A bare `--` is resolved here, after every switch of ours is taken and before
-    // either GLib or the macOS handoff sees argv (TDD 8.8). See `app::end_of_options_argv`.
-    let args = app::end_of_options_argv(args);
+    let (force_new, _) = app::new_instance_argv(argv.clone());
+    // What GLib parses: every switch of ours taken out and a bare `--` resolved
+    // (TDD 8.8), before either GLib or the macOS handoff sees argv. See `app::shape_argv`.
+    #[cfg(not(windows))]
+    let args = app::shape_argv(argv.clone());
+    // Except on Windows, where GLib parses the process's REAL command line, not the
+    // vector it is given, and keeps only that vector's COUNT: given fewer entries, it
+    // drops the surplus from the front of the real line, so `-- -x.md` reached it as
+    // `["--", "-x.md"]`. So it is given the unshaped argv, whose count matches, and
+    // `ScribobulateApplication` shapes what GLib really parses (see `app/application.rs`).
+    #[cfg(windows)]
+    let args = raw_argv;
 
     let mut flags = ApplicationFlags::HANDLES_OPEN;
     if force_new {
@@ -367,10 +378,9 @@ pub fn run() -> glib::ExitCode {
     }
 
     let app_id = instance::app_id_for(APP_ID, instance::current());
-    let app = Application::builder()
-        .application_id(app_id.as_str())
-        .flags(flags)
-        .build();
+    // A subclass for one vfunc, `local_command_line` (see `app/application.rs`); held as
+    // a plain `Application` from here on.
+    let app: Application = app::ScribobulateApplication::new(app_id.as_str(), flags).upcast();
 
     app::setup_app(&app);
 

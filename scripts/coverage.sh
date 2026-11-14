@@ -664,6 +664,10 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 #                   construction code under a new name, so it inherits the same
 #                   decision — the document READS it now defers are in `docio`, which
 #                   is gated and near-fully covered.
+#                   `application.rs` is the `GApplication` subclass whose only body is
+#                   a `local_command_line` vfunc run by `g_application_run` — a live
+#                   GLib runtime, never reached by a unit test — so it is excluded;
+#                   the argv decision it calls, `app::shape_argv`, is pure and gated.
 #   widgets/table/  mod.rs is GObject glue → excluded; layout.rs (column-fit and
 #                   cell-placement arithmetic) → gated.
 #   widgets/tab/    mod, imp, bar, ops, view are GObject/façade → excluded;
@@ -869,7 +873,7 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 # what is excluded is the WIRING, and every decision any of them takes was extracted into
 # a file that stayed in scope. If a future change puts logic back into one of these, the
 # answer is to extract it again, not to widen this term.
-IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|animation[/\\](tick|sprites[/\\]mod|paintable[/\\](mod|drive)|visibility[/\\]watch)|imagecache[/\\]loader|saferizer[/\\]owned_mark|popoverrelease|widgets[/\\](sprite_icon|table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
+IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|application|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|animation[/\\](tick|sprites[/\\]mod|paintable[/\\](mod|drive)|visibility[/\\]watch)|imagecache[/\\]loader|saferizer[/\\]owned_mark|popoverrelease|widgets[/\\](sprite_icon|table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
 # IGNORE_TESTONLY — leg B's extra filter, and ONLY leg B's.
 #
