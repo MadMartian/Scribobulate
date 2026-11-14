@@ -73,6 +73,7 @@ pub(crate) use actions::update_save_action_state;
 /// drifted into a coincidence-coupling in the first place.
 pub(crate) use actions::ANNOTATION_CARD_CLASS;
 pub(crate) use actions::{bool_action_state, change_action_state, set_action_enabled};
+pub(crate) use annotate::announce_annotation_refused;
 pub(crate) use annotate::apply_annotation_edit;
 pub(crate) use annotate::document_source;
 pub(crate) use annotate::refresh_preview_after_annotation;

@@ -114,6 +114,17 @@ impl PendingTarget {
         self.span.resolve(source)
     }
 
+    /// True when annotating this target is refused because it lies wholly inside an
+    /// existing comment (`annotate::landing::claim_span`, TDD 17.59). The card is not
+    /// raised for it; the commit re-checks against the live source.
+    pub(crate) fn is_refused(&self, source: &str) -> bool {
+        !self.point
+            && self.resolve(source).is_some_and(|range| {
+                crate::annotate::landing::for_highlight(source, range)
+                    == crate::annotate::Landing::Refused
+            })
+    }
+
     /// True when this target merges nothing: a point comment inserts a new construct
     /// rather than replacing any.
     pub(crate) fn is_point(&self) -> bool {
