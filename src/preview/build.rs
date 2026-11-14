@@ -188,6 +188,9 @@ pub(super) struct RenderProducts {
 /// zoom-scaled metrics that must be rebuilt rather than reused. Names are collected
 /// first: removing during `foreach` mutates the table mid-iteration.
 fn reset_buffer_for_render(buf: &TextBuffer) {
+    // Retire every navigation still travelling toward a mark in the render being
+    // discarded: the delete below drags each mark to offset 0 (GTK4Rs/AP-172).
+    crate::farscroll::note_buffer_rebuilt(buf);
     buf.delete(&mut buf.start_iter(), &mut buf.end_iter());
     let table = buf.tag_table();
     let mut tags: Vec<gtk::TextTag> = Vec::new();

@@ -282,6 +282,40 @@ fn caret_still_at_requested_end(to_end: bool, iter_is_end: bool, iter_offset: i3
     }
 }
 
+/// The generation of the render a buffer holds: how many times its text has been
+/// rebuilt in place (`preview::build::reset_buffer_for_render`).
+///
+/// A pending re-issue ([`scroll_to_mark_when_ready`]) outlives the render it was aimed
+/// at when the rebuild happens in the SAME buffer object: the caret has not moved and the
+/// buffer was not swapped, so neither of the other two supersession tests sees it, yet
+/// the mark it carries has been dragged to the start of the emptied buffer
+/// (GTK4Rs/AP-172: "am I still current?", never "is the slot empty?").
+const RENDER_GENERATION: crate::saferizer::qdata_key::QdataKey<u64> =
+    crate::saferizer::qdata_key::QdataKey::new("scrib-render-generation");
+
+/// The render generation `buffer` is on; `0` before its first in-place rebuild.
+pub(crate) fn render_generation(buffer: &gtk::TextBuffer) -> u64 {
+    RENDER_GENERATION.get(buffer).unwrap_or(0)
+}
+
+/// Record that `buffer`'s text is being rebuilt in place, retiring every navigation
+/// that was aimed at the previous render.
+pub(crate) fn note_buffer_rebuilt(buffer: &gtk::TextBuffer) {
+    RENDER_GENERATION.set(buffer, render_generation(buffer).wrapping_add(1));
+}
+
+/// Whether a re-issue captured at (`caret_at_call`, `generation_at_call`) still means
+/// what it meant: the reader has not moved the caret AND the buffer has not been rebuilt
+/// under it. Split out so the rule is testable without a buffer.
+fn reissue_still_current(
+    caret_at_call: i32,
+    caret_now: i32,
+    generation_at_call: u64,
+    generation_now: u64,
+) -> bool {
+    caret_at_call == caret_now && generation_at_call == generation_now
+}
+
 /// Whether `view` has a viewport to scroll *within*.
 ///
 /// A realized view that has never been allocated has a zero-height text window, and
@@ -371,7 +405,9 @@ pub(crate) fn wire_buffer_ends_scroll(view: &gtk::TextView) {
 /// [`wire_buffer_ends_scroll`] uses. Every caller here moves the caret to its
 /// target, so a later navigation retires an earlier pending re-issue with no
 /// generation bookkeeping — and a re-issue can never drag the reader somewhere they
-/// have already left. The target mark is carried through
+/// have already left. It is ALSO abandoned when the buffer was rebuilt in place since
+/// ([`note_buffer_rebuilt`]), which drags the target mark to the start of the emptied
+/// buffer without touching the caret. The target mark is carried through
 /// [`BufferMark`](crate::saferizer::buffer_mark::BufferMark), so a `set_buffer`
 /// swap in the meantime yields `None` rather than the GTK4Rs/AP-89 abort.
 ///
@@ -386,6 +422,7 @@ pub(crate) fn scroll_to_mark_when_ready(
 ) {
     let buffer = view.buffer();
     let caret_at_call = buffer.iter_at_mark(&buffer.get_insert()).offset();
+    let generation_at_call = render_generation(&buffer);
     let target = crate::saferizer::buffer_mark::BufferMark::new(mark.clone(), &buffer);
     stop_kinetic_glide(view);
 
@@ -395,8 +432,13 @@ pub(crate) fn scroll_to_mark_when_ready(
 
     after_line_heights_validated(view, move |view| {
         let buffer = view.buffer();
-        if buffer.iter_at_mark(&buffer.get_insert()).offset() != caret_at_call {
-            return; // superseded — the reader has moved on
+        if !reissue_still_current(
+            caret_at_call,
+            buffer.iter_at_mark(&buffer.get_insert()).offset(),
+            generation_at_call,
+            render_generation(&buffer),
+        ) {
+            return; // superseded — the reader has moved on, or the render was rebuilt
         }
         if !has_viewport(view) {
             return; // no viewport to scroll within; see `has_viewport`
@@ -567,11 +609,34 @@ mod decision_tests {
         // ...and that a non-empty end position is NOT accepted as a start position.
         assert!(!caret_still_at_requested_end(false, true, 500));
     }
+
+    // ---- reissue_still_current -----------------------------------------------------
+
+    #[test]
+    fn a_reissue_is_current_only_while_both_the_caret_and_the_render_are_unchanged() {
+        assert!(reissue_still_current(40, 40, 3, 3));
+        // The reader moved the caret: the long-standing supersession test.
+        assert!(!reissue_still_current(40, 41, 3, 3));
+        // The buffer was rebuilt in place under an unmoved caret: the case the caret
+        // alone cannot see, because the rebuild moves the target MARK, not the caret.
+        assert!(!reissue_still_current(40, 40, 3, 4));
+    }
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
+
+    #[gtktest::test]
+    fn an_in_place_rebuild_advances_the_buffers_render_generation() {
+        let buffer = gtk::TextBuffer::new(None);
+        assert_eq!(render_generation(&buffer), 0);
+        note_buffer_rebuilt(&buffer);
+        note_buffer_rebuilt(&buffer);
+        assert_eq!(render_generation(&buffer), 2);
+        // Per buffer, never process-wide.
+        assert_eq!(render_generation(&gtk::TextBuffer::new(None)), 0);
+    }
     use crate::window::build_tab_editor;
 
     /// Big enough that GTK is still validating line heights when the key is

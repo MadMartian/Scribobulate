@@ -83,7 +83,7 @@ mod ordertests;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod painttest;
 
-pub(crate) use geometry::move_or_create_mark;
+pub(crate) use geometry::{move_or_create_mark, OUTLINE_TARGET_MARK};
 pub(crate) use markernav::{CardFocus, PendingMarkerOpen};
 pub(crate) use markers::{
     AnnotateTrigger, AnnotationEdit, AnnotationSink, CreateAnnotation, MarkerData, MarkerSource,

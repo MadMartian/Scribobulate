@@ -201,7 +201,7 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             }
 
             // Carry the reading position across the mode switch.
-            apply_content_reading_position(&window, new_mode, old_pos);
+            apply_content_reading_position(&window, new_mode, old_pos, PreviewState::Warm);
 
             // Put keyboard focus in the editor when it becomes visible so vertical
             // navigation (PageUp/PageDown, arrows) operates on it — in split mode

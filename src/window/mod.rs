@@ -43,6 +43,8 @@ mod outline_nav;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod outline_reload_tests;
 pub(crate) mod panescroll;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod refill_scroll_tests;
 mod reload;
 mod rename;
 mod save;

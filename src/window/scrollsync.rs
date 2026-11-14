@@ -522,6 +522,19 @@ pub(crate) fn content_reading_position(window: &ApplicationWindow) -> DocPositio
     readingpos::from_preview_char(&rd.source_map, &rd.shifts, view_top_offset(&preview_view))
 }
 
+/// What shape the preview is in when [`apply_content_reading_position`] runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PreviewState {
+    /// The preview's line heights are as GTK last validated them (a mode switch onto a
+    /// preview that was already laid out): the warm one-shot line restore lands.
+    Warm,
+    /// The preview's buffer was just emptied and refilled in place (a disclosure
+    /// toggle's full re-render): heights are unvalidated and a scroll parked inside GTK
+    /// before the rebuild is still pending, so only the evicting progressive restore
+    /// lands (TDD 2.26h).
+    Refilled,
+}
+
 /// Put the reader back at `pos` in whichever panes `mode` shows, AFTER the swap has
 /// built them. The counterpart of [`content_reading_position`].
 ///
@@ -531,10 +544,14 @@ pub(crate) fn content_reading_position(window: &ApplicationWindow) -> DocPositio
 /// `restore_preview_scroll_to_line`, which is the validation-safe path
 /// (GTK4Rs/AP-14/GTK4Rs/AP-13): a freshly built preview has unvalidated line heights, so a
 /// raw adjustment write here would land near the top.
+///
+/// `preview` says what shape the preview is in, because the restore that is right for one
+/// is wrong for the other (see [`PreviewState`]).
 pub(super) fn apply_content_reading_position(
     window: &ApplicationWindow,
     mode: ViewMode,
     pos: DocPosition,
+    preview: PreviewState,
 ) {
     let Some(st) = state(window) else { return };
     // Remember what is being written and where, so the next capture can tell "the
@@ -574,11 +591,22 @@ pub(super) fn apply_content_reading_position(
             if written_line.is_none() {
                 written_line = Some(line);
             }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "a reading-position restore: a mode switch re-applies the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
-            )]
-            restore_preview_scroll_to_line(&preview_sw, line);
+            match preview {
+                PreviewState::Warm => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a reading-position restore: a mode switch re-applies the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
+                    )]
+                    restore_preview_scroll_to_line(&preview_sw, line);
+                }
+                PreviewState::Refilled => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a reading-position restore: a full re-render re-applies the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
+                    )]
+                    crate::preview::restore_refilled_preview_to_line(&preview_sw, line);
+                }
+            }
         }
     }
     st.scroll

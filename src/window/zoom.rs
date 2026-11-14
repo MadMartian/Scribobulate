@@ -243,7 +243,7 @@ pub(crate) fn rerender_preview_in_place(
             // independent of the buffer they are reading it in".
             let pos = content_reading_position(window);
             re_render_preview(&st, &preview_sw, mode, zoom, allow_unsafe);
-            apply_content_reading_position(window, mode, pos);
+            apply_content_reading_position(window, mode, pos, PreviewState::Refilled);
         }
     }
 

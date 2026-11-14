@@ -78,14 +78,11 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
-| AR | Any | Production | An external reload landing during a narrowing drag re-anchors near the top | Low |
-| AS | Any | Production | The first outline click into a collapsed block expands it but does not scroll the heading to the top | Low |
 | AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
 | AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
 | AV | Linux | Production | On X11, a middle-click paste on a blank line, past a line's end or on the empty last line is dropped | Low |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
-| BD | Any | Production | A `--` on the command line opens as an empty tab named `--` | Low |
 | BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
 
@@ -520,6 +517,8 @@ restore — adjustment-lifecycle work, research first. Evidence: 1.0.0 dry run, 
 the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Toggling a disclosure at the
 very end of a document can jump the preview to the top."*
 
+**Status (2026-11-14)**: the researched mechanism — the in-place refill's whole-buffer delete parks GtkTextView's first-paragraph mark and any pending outline scroll at offset 0, and the warm one-shot restore stops part-way on a far target — is now handled: ChangedContent restores through `preview::restore_refilled_preview_to_line` (progressive, evicting the parked scroll) and `farscroll` re-issues are superseded by a render generation. **Not reproduced on Linux** before or after (20 + 10 in-app tries, GTK 4.6.9); the Windows part-way case (+79 px) is what remains to confirm. Delete this entry when Windows holds at the end on 10 tries.
+
 ## W. Each window open/close cycle retains ~0.6 MB
 
 **Severity**: Medium (unbounded retention).
@@ -619,22 +618,6 @@ different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. 
 *"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
 press ⌥2 or File ▸ Reload."*
 
-## AR. A reload landing during a narrowing drag re-anchors near the top
-
-**Severity**: Low.
-
-TDD 7.15: an external reload landing mid-drag re-anchors near the top; resize alone and
-reload alone both hold. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's
-deferrals…" (2026-11-14). No Known-issues line.
-
-## AS. The first outline click into a collapsed block expands it but does not scroll
-
-**Severity**: Low (a second click works).
-
-TDD 12.22 (4/4): the block expands but the heading is not scrolled to the top; a second
-click does. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line. **Not reproduced on Linux** (GTK 4.6.9, 2026-11-14): `disclosure.md` in Preview and Split, from the top and after Ctrl+End, at 900×720 and 1400×980, and a ~1,900-line far target — the first click landed the heading at the top every time. Platform still to be established on Windows or macOS before any change.
-
 ## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
 
 **Severity**: Low (harness only).
@@ -674,15 +657,6 @@ dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
 the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## BD. A `--` on the command line opens as a document
-
-**Severity**: Low.
-
-TDD 8.8: an extra empty tab named `--` opens beside the file; `-- --help` forwarded to a
-running primary opens both. Needs a GLib argument-handling answer first. Evidence: 1.0.0 dry
-run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"A `--` on
-the command line opens an empty tab named `--` — leave it out."*
 
 ## BG. A 3000-item nested list stalls first render for about a minute
 
