@@ -27,8 +27,6 @@ use crate::saferizer::owned_mark::OwnedMark;
 pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
     let find_bar_revealer = &chrome.find_bar_revealer;
     let find_entry = &chrome.find_entry;
-    let replace_row = &chrome.replace_row;
-    let match_count_label = &chrome.match_count_label;
     let replace_entry = &chrome.replace_entry;
     let replace_btn = &chrome.replace_btn;
     let replace_all_btn = &chrome.replace_all_btn;
@@ -41,14 +39,21 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
     // ── win.find / win.find-replace actions ──────────────────────────────────
     // Both open the revealer; find-replace additionally reveals the replace row.
     {
+        // Captures the window weakly and nothing else: the bar's widgets are read off the
+        // window's chrome at call time. This closure is shared by actions whose owner is the
+        // window, so a strong capture of any widget in the bar would keep that widget alive
+        // for as long as anything kept the closure (GTK4Rs/AP-63, AP-140).
         let open_find_bar: Rc<dyn Fn(bool)> = Rc::new({
             let win = window.downgrade();
-            let fr = find_bar_revealer.clone();
-            let fe = find_entry.clone();
-            let rr = replace_row.clone();
-            let mc = match_count_label.clone();
             move |replace_mode: bool| {
                 let Some(w) = win.upgrade() else { return };
+                let Some(chrome) = crate::winstate::chrome(&w) else {
+                    return;
+                };
+                let fr = &chrome.find_bar_revealer;
+                let fe = &chrome.find_entry;
+                let rr = &chrome.replace_row;
+                let mc = &chrome.match_count_label;
                 if let Some(st) = state(&w) {
                     st.find_replace_mode.set(replace_mode);
                     rr.set_visible(replace_mode);
@@ -130,11 +135,19 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
     // ── Close find bar (button, ancestor Escape, and GtkSearchEntry's own
     //    Escape keybinding all funnel through this one closure — single
     //    source of truth, see ANTI-PATTERNS.md re: GtkSearchEntry Escape). ──
+    //
+    // Weak over the revealer: this closure is connected on widgets INSIDE the revealer (the
+    // close button, the bar's Escape controller, the entry's `stop-search`), so a strong
+    // capture would close `revealer` → child → controller/handler → closure → `revealer`
+    // into a cycle that strands the whole find bar on every window close (GTK4Rs/AP-63,
+    // AP-140).
     let close_find_bar: Rc<dyn Fn()> = Rc::new({
         let win = window.downgrade();
-        let fr = find_bar_revealer.clone();
+        let fr = find_bar_revealer.downgrade();
         move || {
-            fr.set_reveal_child(false);
+            if let Some(fr) = fr.upgrade() {
+                fr.set_reveal_child(false);
+            }
             let Some(w) = win.upgrade() else { return };
             if let Some(st) = state(&w) {
                 st.search_context.set_highlight(false);
@@ -221,11 +234,14 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
     // which is the only definition that matches what they are pressing Escape at.
     {
         let cfb = Rc::clone(&close_find_bar);
-        let fr = find_bar_revealer.clone();
+        let fr = find_bar_revealer.downgrade();
         let key_ctrl = gtk::EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk::PropagationPhase::Bubble);
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             let showing = |r: &gtk::Revealer| r.reveals_child() || r.is_child_revealed();
+            let Some(fr) = fr.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             if key != gtk::gdk::Key::Escape || !showing(&fr) {
                 return glib::Propagation::Proceed;
             }

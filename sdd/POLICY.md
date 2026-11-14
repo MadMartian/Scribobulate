@@ -129,7 +129,9 @@ without the operator recording why.
 
 A separate test class and pipeline step, outside the coverage ratchet. It bounds memory
 growth per render after warm-up — never absolute memory, and never a single
-render-free-measure, which a correct implementation cannot pass.
+render-free-measure, which a correct implementation cannot pass. One of its gates cycles
+a whole window (open, close, repeat): a retention owned by a window is invisible to every
+per-render series, because no render repeats it.
 
 ### Manual integration testing
 

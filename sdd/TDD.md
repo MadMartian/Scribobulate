@@ -1020,6 +1020,14 @@
 - **When** the growth assertion is applied to it
 - **Then** it fails, so that "only one allocation" alone can never pass an arbitrarily large one
 
+### 6.13 Opening and closing a window leaves nothing of it behind
+- **Given** a window held open throughout, as the reader's own is
+- **When** a second window is opened from it (View ▸ New Window) and closed again, many times, after a few warm-up cycles are discarded
+- **Then** process memory does not grow repeatedly across the remaining cycles, by the same measure as 6.6
+- **And** every widget of a closed window, and its editor's buffer with the document's text, is gone once the application has dropped its references and the main loop has drained — the only survivors allowed are the toolkit's own (GTK's shared tooltip window and the line-number renderer GtkSourceView leaves behind), named in the test so the list can only shrink. A survivor is reported by type, which names the root a leaked subtree hangs from
+- **And** the cycle is the application's own: the window is built by the production path and ended by the production close
+- **Evidence, recorded here for the same reason as 6.9's**: a window kept about 0.6 MB per cycle with no plateau over 80 cycles, which 6.6–6.10 could not see because no render repeats a retention owned by a window. Three independent retentions were found by weak reference and each, reintroduced on its own, reddens the finalization half: the editor Annotate card and the find bar each had a closure, reached from widgets inside them, that owned the widget it hid, stranding the card and the bar with the editor they point at; and a tab's editor never finalized because GtkSourceView 5.4.1 keeps `view → gutter → view` alive once line numbers are shown. A residue of about 0.1 MB per cycle remains and is not the application's: GTK 4.6.9 keeps every submenu model bound to a menu bar or menu button alive after its window closes (measured on a bare window), which the footprint half's bound absorbs
+
 ---
 
 ## 7. Window & layout
