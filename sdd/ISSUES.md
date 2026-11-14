@@ -66,7 +66,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
-| N | Any | Production | File ▸ Open from a slow mount never shows "Opening…": it is armed on link-follow only | Low |
 | W | Any | Production | Each window open/close cycle retains ~0.6 MB, linearly, with no plateau | Medium |
 | Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
@@ -79,7 +78,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
 | AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
 | AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
-| AV | Linux | Production | On X11, a middle-click paste on a blank line, past a line's end or on the empty last line is dropped | Low |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
@@ -496,15 +494,6 @@ firing. Evidence: 1.0.0 dry run, Windows seat, on the build of "Merge bug/nul-by
 …" (2026-11-13) and its predecessors. Known issues: *"On Windows, live reload stops after
 the document's folder is deleted and recreated — reopen the file."*
 
-## N. File ▸ Open from a slow mount never shows "Opening…"
-
-**Severity**: Low (a missing message; no edit is lost).
-
-TDD 1.4e: from a slow mount, 15–20 frames at 1.5 s and 4 s read delay never show
-"Opening…"; it is armed on link-follow only. "Reloading…" shows at ~0.5 s. Cross-platform
-by code path. Evidence: 1.0.0 dry run (Linux, Windows), filed in "File the 1.0.0 dry run's
-deferrals…" (2026-11-14). No Known-issues line.
-
 ## W. Each window open/close cycle retains ~0.6 MB
 
 **Severity**: Medium (unbounded retention).
@@ -620,15 +609,6 @@ TDD 9.14: the chooser opens but a pick (click, Enter, search) never inserts and 
 dismiss it; Linux and Windows insert. Quartz-only path in `GtkEmojiChooser`. Evidence: 1.0.0
 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Insert
 Emoji does not insert on macOS — type the emoji or paste it."*
-
-## AV. On Linux/X11, a middle-click paste off a glyph is dropped
-
-**Severity**: Low.
-
-On a blank line, past a line's end or on the empty last line the PRIMARY paste is dropped
-(6/6): the handler bails when no iter is under the pointer; falling back to the line's end
-iter fixes it. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
 
 ## AX. On Windows, typing above the selected annotation clears the list's selection
 

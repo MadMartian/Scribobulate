@@ -100,16 +100,36 @@ pub(super) fn on_open(app: &Application, files: &[gtk::gio::File], hint: &str) {
     if cold_start {
         super::coldstart::note_open_cold_start();
     }
+    // File ▸ Open is a gesture the user made FROM the active window, so a slow mount must
+    // say so there (TDD 1.4e); a CLI or D-Bus batch has no window to speak in. Captured
+    // against that window's own stack and retracted by `Drop` once the reads end, on every
+    // path (Status-notice CAM row 6).
+    let busy = busy_notice_for(&app, &hint);
     gtk::glib::MainContext::default().spawn_local(async move {
         let _hold = hold;
         let mut docs = Vec::with_capacity(to_open.len());
         for f in &to_open {
             docs.push(crate::docio::read_document(f.path().as_deref()).await);
         }
+        drop(busy);
         build_opened_batch(&app, docs, &hint, cold_start).await;
         #[cfg(test)]
         BATCHES_BUILT.with(|n| n.set(n.get() + 1));
     });
+}
+
+/// The `open` hint File ▸ Open passes, which marks a batch as the user acting from a window.
+pub(super) const INTERACTIVE_HINT: &str = "interactive";
+
+/// The "Opening…" notice for an interactive open, armed on the active window's footer;
+/// `None` for any other hint, or when no document window is active.
+fn busy_notice_for(app: &Application, hint: &str) -> Option<crate::winstate::BusyNotice> {
+    if hint != INTERACTIVE_HINT {
+        return None;
+    }
+    let window = app.active_window()?.downcast::<ApplicationWindow>().ok()?;
+    let chrome = crate::winstate::chrome(&window)?;
+    Some(crate::winstate::BusyNotice::arm(&chrome, "Opening…"))
 }
 
 #[cfg(test)]
@@ -139,7 +159,7 @@ async fn build_opened_batch(app: &Application, docs: Vec<LoadedDoc>, hint: &str,
     // active" and "does it still have a blank tab" are questions about the moment
     // the tabs are actually built, and a value captured before the read could name a
     // window the user has since closed or a tab they have since typed into.
-    let interactive = hint == "interactive";
+    let interactive = hint == INTERACTIVE_HINT;
     let active_window = app
         .active_window()
         .and_then(|w| w.downcast::<ApplicationWindow>().ok());
@@ -280,4 +300,54 @@ async fn build_opened_batch(app: &Application, docs: Vec<LoadedDoc>, hint: &str,
     // pump session restore uses (`window::restore_session`), so a multi-file
     // `open` and a session restore share one deferral + warming path.
     start_deferred_prerender_pump(app);
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+
+    /// **File ▸ Open from a slow mount says "Opening…" (TDD 1.4e), and a batch with no
+    /// window of its own to speak in stays silent.** The filesystem is made slow in-process
+    /// (`docio::slow_io`), which parks the latency on the pool thread where a mount's lands.
+    /// Mutation: removing `busy_notice_for`'s call from `on_open` leaves the footer blank.
+    #[gtktest::test]
+    fn an_interactive_open_from_a_slow_mount_shows_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let doc = dir.path().join("slow.md");
+            std::fs::write(&doc, "slow\n").unwrap();
+            let app = crate::window::testkit::test_app_suffixed("openbatchbusy");
+            let window = crate::window::new_window(&app, "IT", "start\n", None);
+            window.present();
+            assert!(
+                crate::docio::settle(|| app.active_window().is_some()),
+                "the window must become the application's active window"
+            );
+            let ch = crate::winstate::chrome(&window).expect("chrome");
+            let file = gtk::gio::File::for_path(&doc);
+
+            let _slow = crate::docio::slow_io(std::time::Duration::from_millis(1500));
+            on_open(&app, std::slice::from_ref(&file), INTERACTIVE_HINT);
+            assert!(
+                crate::docio::settle(|| ch.status.borrow().label_text().contains("Opening")),
+                "an Open outstanding past the busy delay must say so"
+            );
+            assert!(
+                crate::docio::settle(|| !ch.status.borrow().label_text().contains("Opening")),
+                "and retract when the read ends"
+            );
+            window.destroy();
+        });
+    }
+
+    #[gtktest::test]
+    fn a_non_interactive_open_arms_no_notice() {
+        let app = crate::window::testkit::test_app_suffixed("openbatchquiet");
+        let window = crate::window::new_window(&app, "IT", "start\n", None);
+        window.present();
+        assert!(crate::docio::settle(|| app.active_window().is_some()));
+        assert!(busy_notice_for(&app, "").is_none());
+        assert!(busy_notice_for(&app, INTERACTIVE_HINT).is_some());
+        window.destroy();
+    }
 }
