@@ -33,6 +33,11 @@
 //!   bumping — "I am the newest reader of this document";
 //! - a *mutation* supersedes every in-flight read, because it bumps too.
 //!
+//! One reader is not superseded by a newer one: an explicit File ▸ Reload. A live-reload
+//! re-read starting while its read is out stands aside and runs after it instead
+//! ([`DocEpoch::claim_explicit`]), because superseding it drops the gesture the user is
+//! waiting on and puts the watcher's decision in its place.
+//!
 //! A write never checks a ticket: it produced the bytes on disk, so its own baseline
 //! update is always the truth and must always land. Only *readers* can be superseded.
 
@@ -51,6 +56,12 @@ pub(crate) struct DocTicket(u64);
 #[derive(Default)]
 pub(crate) struct DocEpoch {
     current: Cell<u64>,
+    /// The ticket of the read an explicit File ▸ Reload has out, if any.
+    explicit: Cell<Option<DocTicket>>,
+    /// A background re-read that stood aside for that reload, to run once it lands:
+    /// `Some(settled)`, where `settled` is true if any that stood aside was the settle
+    /// re-read (`window::reload`'s `check_disk`).
+    yielded: Cell<Option<bool>>,
 }
 
 impl DocEpoch {
@@ -82,6 +93,50 @@ impl DocEpoch {
     /// no longer exists, and there is no way to tell from the answer itself.
     pub(crate) fn is_current(&self, ticket: DocTicket) -> bool {
         self.current.get() == ticket.0
+    }
+
+    /// Start the read of an explicit File ▸ Reload — the one read a user is waiting on.
+    ///
+    /// It supersedes whatever read is already out, as [`claim`](Self::claim) does, and
+    /// until it lands, background re-reads [`yield_to_explicit`](Self::yield_to_explicit)
+    /// instead of claiming over it. Without that, a live-reload re-read starting while
+    /// the reload's read was out took the newer ticket, the reload's answer was discarded
+    /// as superseded, and the re-read decided as the watcher does: over a dirty buffer,
+    /// or a document lost and refilled, that is the conflict prompt again, so the
+    /// gesture was silently dropped (TDD 5.3). MEASURED on Windows, where the folder poll
+    /// re-reads a deleted document's returned file right after re-arming its monitor.
+    pub(crate) fn claim_explicit(&self) -> DocTicket {
+        let ticket = self.claim();
+        self.explicit.set(Some(ticket));
+        ticket
+    }
+
+    /// Whether an explicit reload's read is out and still current, so a background
+    /// re-read must stand aside for it. One a mutation has superseded is doomed already,
+    /// and stands in nobody's way.
+    pub(crate) fn explicit_outstanding(&self) -> bool {
+        self.explicit.get().is_some_and(|t| self.is_current(t))
+    }
+
+    /// A background re-read stood aside for the outstanding explicit reload: record it,
+    /// once however many do, to run when that reload lands.
+    pub(crate) fn yield_to_explicit(&self, settled: bool) {
+        self.yielded
+            .set(Some(self.yielded.get().unwrap_or(false) || settled));
+    }
+
+    /// The explicit reload holding `ticket` came back, whatever it then does with its
+    /// answer. Returns the re-read that stood aside for it, which the caller runs after
+    /// applying its own answer: the change that prompted it may postdate the reload's
+    /// read. A newer explicit reload still out keeps that re-read for itself.
+    pub(crate) fn finish_explicit(&self, ticket: DocTicket) -> Option<bool> {
+        match self.explicit.get() {
+            Some(held) if held != ticket => None,
+            _ => {
+                self.explicit.set(None);
+                self.yielded.take()
+            }
+        }
     }
 }
 
@@ -185,6 +240,57 @@ mod tests {
 
     /// Two independent documents never invalidate each other: the counter is per-tab,
     /// and a ticket is only ever checked against the epoch it came from.
+    /// TDD 5.3: a background re-read starting while File ▸ Reload's read is out stands
+    /// aside rather than superseding it, and runs once the reload lands.
+    #[test]
+    fn an_explicit_reload_is_not_superseded_by_a_background_re_read() {
+        let epoch = DocEpoch::default();
+        let reload = epoch.claim_explicit();
+        assert!(
+            epoch.explicit_outstanding(),
+            "a background re-read must yield"
+        );
+        epoch.yield_to_explicit(false);
+        epoch.yield_to_explicit(true);
+        epoch.yield_to_explicit(false);
+        assert!(epoch.is_current(reload), "standing aside claims nothing");
+        assert_eq!(
+            epoch.finish_explicit(reload),
+            Some(true),
+            "the re-reads that stood aside run once, and the settle re-read among them \
+             keeps its right to conclude a loss"
+        );
+        assert!(!epoch.explicit_outstanding());
+        assert_eq!(epoch.finish_explicit(reload), None, "and only once");
+    }
+
+    /// A mutation still supersedes an explicit reload (a save landing while its read is
+    /// out), and then nothing has to wait for it.
+    #[test]
+    fn a_mutation_supersedes_an_explicit_reload_and_frees_the_re_reads() {
+        let epoch = DocEpoch::default();
+        let reload = epoch.claim_explicit();
+        epoch.bump();
+        assert!(!epoch.is_current(reload), "its answer predates the save");
+        assert!(
+            !epoch.explicit_outstanding(),
+            "a doomed reload holds no background re-read back"
+        );
+    }
+
+    /// A second Reload pressed while the first is out takes over: the first one's
+    /// return leaves the re-reads that stood aside for the second to run.
+    #[test]
+    fn a_newer_explicit_reload_keeps_the_yielded_re_read() {
+        let epoch = DocEpoch::default();
+        let first = epoch.claim_explicit();
+        let second = epoch.claim_explicit();
+        epoch.yield_to_explicit(false);
+        assert_eq!(epoch.finish_explicit(first), None);
+        assert!(epoch.explicit_outstanding(), "the second is still out");
+        assert_eq!(epoch.finish_explicit(second), Some(false));
+    }
+
     #[test]
     fn one_documents_activity_does_not_supersede_anothers() {
         let a = DocEpoch::default();
@@ -201,6 +307,7 @@ mod tests {
     fn the_counter_wraps_instead_of_overflowing() {
         let epoch = DocEpoch {
             current: Cell::new(u64::MAX),
+            ..DocEpoch::default()
         };
         let ticket = epoch.claim();
         assert!(epoch.is_current(ticket));

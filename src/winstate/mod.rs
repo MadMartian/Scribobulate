@@ -129,7 +129,7 @@ pub(crate) use decisions::{
     window_title_for_tabs, BackingLoss, DiskObservation, DiskRead, ExternalChange, TabBadgeState,
     APP_NAME, BACKING_SETTLE,
 };
-pub(crate) use docepoch::{DocEpoch, WriteEpoch};
+pub(crate) use docepoch::{DocEpoch, DocTicket, WriteEpoch};
 pub(crate) use fmtinsert::FmtInsertKind;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) use folderwatch::WatchedFile;

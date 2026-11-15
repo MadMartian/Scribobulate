@@ -10,7 +10,9 @@ pub(crate) fn reload_from_disk(window: &ApplicationWindow) {
     let Some(path) = st.path.borrow().clone() else {
         return;
     };
-    let ticket = st.doc_epoch.claim();
+    // Explicit, so the live-reload re-reads that start while this read is out stand
+    // aside for it rather than superseding it, and run once it lands (`check_disk`).
+    let ticket = st.doc_epoch.claim_explicit();
     let win_weak = window.downgrade();
     let tab_id = st.id;
     // The EXPLICIT reload only — a gesture the user is waiting on. The monitor-driven
@@ -20,53 +22,75 @@ pub(crate) fn reload_from_disk(window: &ApplicationWindow) {
     gtk::glib::MainContext::default().spawn_local(async move {
         let _busy = busy;
         let read = crate::docio::read_document_text(path).await;
-        let (Some(window), Some(st)) = (win_weak.upgrade(), winstate::tab_by_id(tab_id)) else {
+        let Some(st) = winstate::tab_by_id(tab_id) else {
             return;
         };
-        if !st.doc_epoch.is_current(ticket) {
-            // Something happened to this document while the read was out — a newer
-            // read, or a save/reload that landed. Either way this answer describes a
-            // state that no longer exists, and applying it would put stale content in
-            // the buffer and record it as the clean baseline.
-            log::info!("tab {}: discarding a superseded reload read", st.id);
-            return;
+        // Released on every outcome below, or the live-reload re-reads would stand aside
+        // for a reload that is over.
+        let yielded = st.doc_epoch.finish_explicit(ticket);
+        if let Some(window) = win_weak.upgrade() {
+            land_reload(&window, &st, ticket, read);
         }
-        // QA M2 (round 1): this is the explicit File ▸ Reload / conflict-toast
-        // "Reload" gesture — a button the user clicked expecting something to
-        // happen. Silently doing nothing on a read failure (permissions changed,
-        // transient I/O, the path is now a directory or no longer an admissible
-        // document) is the exact "silently dropped operation misleads the user"
-        // mode the save path (C1) was hardened against. Surface it the same way
-        // `show_save_error` does.
-        // (The monitor-driven paths, `check_and_reload`/`check_and_reload_tab`,
-        // deliberately stay silent on a read failure — no user is awaiting a
-        // specific gesture there, and a dialog popping up unprompted from a
-        // background tab would be worse than doing nothing.)
-        let content = match read {
-            Ok(content) => content,
-            Err(e) => {
-                show_reload_error(&window, &e);
-                return;
-            }
-        };
-        // The reload rebuilds the content of whichever tab is ACTIVE (it drives the
-        // view-mode machinery, which is window-scoped). If the user switched tabs
-        // while the read was in flight, applying it here would rewrite the wrong
-        // document — so hand the tab this reload was about to the same
-        // badge-and-replay path a background change already uses, and it is
-        // re-evaluated for real when they switch back.
-        if !state(&window).is_some_and(|active| active.id == st.id) {
-            log::info!(
-                "tab {}: reload completed while another tab was active; deferring to \
-                 the tab-switch replay",
-                st.id
-            );
-            st.pending_external.set(true);
-            badge_tab_label(&st);
-            return;
+        // A re-read that stood aside was prompted by a change that may postdate this
+        // read, so it runs now, against whatever this reload left.
+        if let Some(settled) = yielded {
+            check_disk(&st, settled);
         }
-        apply_reload_from_disk(&window, &st, content);
     });
+}
+
+/// [`reload_from_disk`]'s answer, back from the I/O pool: applied, refused, reported or
+/// deferred, but never silently dropped unless something newer superseded it.
+fn land_reload(
+    window: &ApplicationWindow,
+    st: &Rc<TabState>,
+    ticket: winstate::DocTicket,
+    read: std::io::Result<String>,
+) {
+    if !st.doc_epoch.is_current(ticket) {
+        // Something happened to this document while the read was out — a newer
+        // explicit reload, or a save/reload that landed. Either way this answer
+        // describes a state that no longer exists, and applying it would put stale
+        // content in the buffer and record it as the clean baseline. (A live-reload
+        // re-read never gets here: it stands aside for this read instead.)
+        log::info!("tab {}: discarding a superseded reload read", st.id);
+        return;
+    }
+    // QA M2 (round 1): this is the explicit File ▸ Reload / conflict-toast
+    // "Reload" gesture — a button the user clicked expecting something to
+    // happen. Silently doing nothing on a read failure (permissions changed,
+    // transient I/O, the path is now a directory or no longer an admissible
+    // document) is the exact "silently dropped operation misleads the user"
+    // mode the save path (C1) was hardened against. Surface it the same way
+    // `show_save_error` does.
+    // (The monitor-driven paths, `check_and_reload`/`check_and_reload_tab`,
+    // deliberately stay silent on a read failure — no user is awaiting a
+    // specific gesture there, and a dialog popping up unprompted from a
+    // background tab would be worse than doing nothing.)
+    let content = match read {
+        Ok(content) => content,
+        Err(e) => {
+            show_reload_error(window, &e);
+            return;
+        }
+    };
+    // The reload rebuilds the content of whichever tab is ACTIVE (it drives the
+    // view-mode machinery, which is window-scoped). If the user switched tabs
+    // while the read was in flight, applying it here would rewrite the wrong
+    // document — so hand the tab this reload was about to the same
+    // badge-and-replay path a background change already uses, and it is
+    // re-evaluated for real when they switch back.
+    if !state(window).is_some_and(|active| active.id == st.id) {
+        log::info!(
+            "tab {}: reload completed while another tab was active; deferring to \
+             the tab-switch replay",
+            st.id
+        );
+        st.pending_external.set(true);
+        badge_tab_label(st);
+        return;
+    }
+    apply_reload_from_disk(window, st, content);
 }
 
 /// Make `content`, just read from the tab's file, the tab's document: the editor buffer,
@@ -227,6 +251,18 @@ fn check_disk(tab: &Rc<TabState>, settled: bool) {
     let Some(path) = tab.path.borrow().clone() else {
         return;
     };
+    // File ▸ Reload's read is out. Claiming over it would discard the answer the user is
+    // waiting on and decide this re-read's way instead — over a dirty or lost document,
+    // the conflict prompt again — so the gesture would be silently dropped (TDD 5.3).
+    // Stand aside; `reload_from_disk` runs this once its own answer has landed.
+    if tab.doc_epoch.explicit_outstanding() {
+        log::debug!(
+            "tab {}: live-reload re-read deferred behind an explicit reload",
+            tab.id
+        );
+        tab.doc_epoch.yield_to_explicit(settled);
+        return;
+    }
     let ticket = tab.doc_epoch.claim();
     let tab_id = tab.id;
     gtk::glib::MainContext::default().spawn_local(async move {
@@ -1057,6 +1093,56 @@ mod gtk_integration_tests {
                 "still guarded after the file reappeared"
             );
             assert_eq!(tab.editor_text(), ORIGINAL, "and never silently adopted");
+            window.destroy();
+        });
+    }
+
+    /// TDD 5.3: File ▸ Reload over a conflict takes the file, even when a live-reload
+    /// re-read starts while its read is out.
+    ///
+    /// The divergence is forced, not raced: `spawn_local` does not poll until the loop
+    /// iterates, so the re-read issued on the next line is deterministically the newer
+    /// reader. Before the fix it superseded the reload, whose answer was discarded, and
+    /// decided the watcher's way — the buffer is dirty, so the conflict prompt again —
+    /// and the user's Reload did nothing. MEASURED as the Windows CI flake in
+    /// `window::rewatch`'s recreated-folder test, where the folder poll's re-read of the
+    /// returned file landed inside the reload's read under load.
+    #[gtktest::test]
+    fn file_reload_is_not_dropped_by_a_live_reload_re_read_in_flight() {
+        const ORIGINAL: &str = "# Plan\n\nThe only copy.\n";
+        const EDITED: &str = "# Plan\n\nThe only copy, edited here.\n";
+        const THEIRS: &str = "# Plan\n\nWritten by somebody else.\n";
+        let state_home = tempfile::tempdir().expect("state home");
+        let docs = tempfile::tempdir().expect("docs");
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let (window, tab, path) = window_over(
+                "com.extollit.scribobulate.it.reloadyield",
+                docs.path(),
+                ORIGINAL,
+            );
+            tab.editor_buf.set_text(EDITED);
+            assert!(tab.is_dirty(), "precondition: unsaved edits");
+            std::fs::write(&path, THEIRS).expect("an external change");
+            check_and_reload_tab(&tab);
+            settle("the conflict prompt is up (TDD 5.1)", || {
+                tab.chrome().conflict_toast.is_visible()
+            });
+
+            // The user answers Reload (the dialog's Accept, or the prompt's button)…
+            reload_from_disk(&window);
+            // …and the watcher re-reads before that read is back.
+            check_and_reload_tab(&tab);
+            settle("File > Reload takes the file's content", || {
+                tab.editor_text() == THEIRS
+            });
+            // Whatever stood aside for the reload runs after it: let it land.
+            drain(std::time::Duration::from_millis(300));
+            assert_eq!(tab.editor_text(), THEIRS, "and nothing undoes it");
+            assert!(!tab.is_dirty(), "the unsaved indicator clears");
+            assert!(
+                !tab.chrome().conflict_toast.is_visible(),
+                "and the prompt it answered is gone"
+            );
             window.destroy();
         });
     }

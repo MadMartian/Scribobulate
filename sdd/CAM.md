@@ -705,7 +705,7 @@ The interference classes (matrix columns):
 | # | Operation in flight | A | B | C | D | E | Mechanism |
 |---|---|:-:|:-:|:-:|:-:|:-:|---|
 | 1 | Read for **open / link-nav / session restore** (builds a tab) | ✗ | n/a | n/a | ✓ | n/a | `app.hold()` + weak window re-resolve; gather-then-build keeps each batch atomic |
-| 2 | Read for **reload** (explicit, and the watcher's) | ✓ | ✓ | ✓ | ✓ | ✓ | `DocEpoch` ticket; `tab_by_id` re-resolve; active-vs-background split |
+| 2 | Read for **reload** (explicit, and the watcher's) | ✓ | ✓ | ✓ | ✓ | ✓ | `DocEpoch` ticket; an explicit Reload's read is never superseded by the watcher's: a watcher re-read starting while it is out stands aside, once however many do, and runs after the reload lands (`DocEpoch::claim_explicit`) — superseded, the user's Reload was discarded and the watcher's decision, a conflict prompt, stood in for it (TDD 5.3); only a mutation or a newer explicit Reload supersedes it; `tab_by_id` re-resolve; active-vs-background split |
 | 3 | **Save's guard read** | ✓ | ◑ | ✓ | ✓ | ✓ | `WriteEpoch` mark **plus a path re-check**, re-reading rather than acting. Deliberately NOT a `DocEpoch` ticket — that counter is claimed by the watcher too, and a guard re-issuing on it never lands on a polled filesystem (the measured livelock in `window/save.rs`) |
 | 4 | **Save's write** | ✓ | ◑ | ✓ | ✓ | ✓ | `WriteGate` (drop, not queue); explicit `Rc<TabState>`; tab-scoped completion |
 | 5 | **Crash-recovery snapshot write** | ✓ | ◑ | ✓ | ✓ | ✓ | `swap.in_flight` + latest-wins coalescing; `tab_by_id` |
