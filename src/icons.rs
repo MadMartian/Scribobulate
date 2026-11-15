@@ -74,21 +74,22 @@ pub(crate) enum Icon {
     SendTo,
     /// Toolbar outline-sidebar toggle.
     ViewList,
-    /// Toolbar annotations-viewer toggle.
-    MailMarkImportant,
+    /// Toolbar annotations-viewer toggle. An APP-OWNED name (`scribobulate-*`),
+    /// bundled in the GResource: the generic name this used to carry,
+    /// `mail-mark-important-symbolic`, resolves in a host theme that draws it as
+    /// something unrelated (Breeze: a badged envelope), and a host theme beats a
+    /// bundled icon of the same name. No host carries a `scribobulate-*` name, so
+    /// the bundled speech-bubble art always wins.
+    Annotations,
     /// Toolbar "go to line".
     GoJump,
-    /// Toolbar "show unsafe images" toggle. `emblem-photos-symbolic`, not
-    /// `image-x-generic-symbolic`: the latter is a *mimetypes*-category icon
-    /// absent from Breeze/Breeze-dark (the operator's theme), whose fallback
-    /// chain never reaches Adwaita's copy, so it rendered the broken-image
-    /// placeholder there (GTK4Rs/AP-48 / GTK4Rs/AP-48). `emblem-photos-symbolic` is present
-    /// in breeze, breeze-dark, and the Adwaita installed on Linux — but NOT in
-    /// gvsbuild's Adwaita 50.0, so it showed the placeholder on Windows until it
-    /// was bundled. Now resolves from the GResource on every platform; the swap
-    /// above is why a *third* name was not tried instead — see
-    /// `data/resources.gresource.xml`.
-    EmblemPhotos,
+    /// Toolbar "show unsafe images" toggle. An APP-OWNED name (`scribobulate-*`),
+    /// bundled in the GResource, for the same reason as [`Icon::Annotations`]: the
+    /// generic `emblem-photos-symbolic` it used to carry is drawn by Breeze as two
+    /// overlapping rectangles, and is absent from gvsbuild's Adwaita 50.0 (GTK4Rs/AP-48),
+    /// so a generic name gave a different glyph, or a placeholder, per platform.
+    /// The bundled framed-landscape art now draws everywhere.
+    UnsafeImages,
     /// Toolbar split "swap panes" toggle.
     ObjectFlipHorizontal,
     /// Toolbar split "vertical split" toggle.
@@ -114,7 +115,7 @@ pub(crate) enum Icon {
     /// File ▸ Save As.
     DocumentSaveAs,
     /// File ▸ Auto-Reload toggle. Bundled fallback for the same reason as
-    /// [`Icon::EmblemPhotos`] — absent from gvsbuild's Adwaita 50.0.
+    /// the generic name `emblem-photos-symbolic` — absent from gvsbuild's Adwaita 50.0.
     EmblemSynchronizing,
     /// File ▸ Load Unsafe Linked Documents toggle; also Format ▸ Insert Link and
     /// Edit ▸ Copy Link Location (all three name a *link*, and the enum is a
@@ -223,9 +224,9 @@ impl Icon {
             Icon::DocumentSave => "document-save-symbolic",
             Icon::SendTo => "send-to-symbolic",
             Icon::ViewList => "view-list-symbolic",
-            Icon::MailMarkImportant => "mail-mark-important-symbolic",
+            Icon::Annotations => "scribobulate-annotations-symbolic",
             Icon::GoJump => "go-jump-symbolic",
-            Icon::EmblemPhotos => "emblem-photos-symbolic",
+            Icon::UnsafeImages => "scribobulate-unsafe-images-symbolic",
             Icon::ObjectFlipHorizontal => "object-flip-horizontal-symbolic",
             Icon::ObjectFlipVertical => "object-flip-vertical-symbolic",
             Icon::ZoomIn => "zoom-in-symbolic",
@@ -322,10 +323,10 @@ impl Icon {
             Icon::ViewRefresh => Some(Icon::DocumentSave),
             Icon::DocumentSave => Some(Icon::SendTo),
             Icon::SendTo => Some(Icon::ViewList),
-            Icon::ViewList => Some(Icon::MailMarkImportant),
-            Icon::MailMarkImportant => Some(Icon::GoJump),
-            Icon::GoJump => Some(Icon::EmblemPhotos),
-            Icon::EmblemPhotos => Some(Icon::ObjectFlipHorizontal),
+            Icon::ViewList => Some(Icon::Annotations),
+            Icon::Annotations => Some(Icon::GoJump),
+            Icon::GoJump => Some(Icon::UnsafeImages),
+            Icon::UnsafeImages => Some(Icon::ObjectFlipHorizontal),
             Icon::ObjectFlipHorizontal => Some(Icon::ObjectFlipVertical),
             Icon::ObjectFlipVertical => Some(Icon::ZoomIn),
             Icon::ZoomIn => Some(Icon::ZoomOriginal),
@@ -420,9 +421,9 @@ impl Icon {
             | Icon::DocumentSave
             | Icon::SendTo
             | Icon::ViewList
-            | Icon::MailMarkImportant
+            | Icon::Annotations
             | Icon::GoJump
-            | Icon::EmblemPhotos
+            | Icon::UnsafeImages
             | Icon::ObjectFlipHorizontal
             | Icon::ObjectFlipVertical
             | Icon::ZoomIn
@@ -557,6 +558,42 @@ mod tests {
             Icon::FormatTextBold.resolution(),
             Resolution::GlyphFallback,
             "format-bar icons degrade to a glyph rather than a placeholder"
+        );
+    }
+
+    /// Every bundled icon file decodes through gdk-pixbuf, the loader GTK's icon theme
+    /// uses for an SVG. `has_icon` answers from the name index alone, so a file the
+    /// loader cannot read passes every resolution check and draws the broken-image
+    /// placeholder. Two did: a long comment before `<svg` pushed the root element out of
+    /// the loader's format sniff ("Unrecognized image file format"), and a host theme
+    /// carrying the same name hid it on every Linux desktop that looked.
+    #[test]
+    fn every_bundled_icon_file_decodes() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/icons");
+        let mut files = Vec::new();
+        let mut dirs = vec![root];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "svg") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(files.len() >= 8, "found only {files:?}");
+        let failed: Vec<String> = files
+            .iter()
+            .filter_map(|f| {
+                gtk::gdk_pixbuf::Pixbuf::from_file(f)
+                    .err()
+                    .map(|e| format!("{}: {e}", f.display()))
+            })
+            .collect();
+        assert!(
+            failed.is_empty(),
+            "bundled icons gdk-pixbuf cannot decode: {failed:?}"
         );
     }
 }

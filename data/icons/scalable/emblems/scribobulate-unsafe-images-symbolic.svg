@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
 <!--
-  emblem-photos-symbolic — a framed landscape (sun over hills), the standard
+  scribobulate-unsafe-images-symbolic — a framed landscape (sun over hills), the standard
   "picture" reading. Drawn for Scribobulate's "show unsafe images" toggle.
 
   Fills only, no strokes — and NOT for the reason you would guess. GTK wraps a
@@ -20,8 +21,11 @@
   so at 16px the frame lands on the pixel grid instead of smearing across two
   rows. Two plain triangles rather than one jagged ridge line: at icon size a
   polyline's shallow notches fill in and the whole thing reads as a blob.
+  This comment sits INSIDE <svg>, not above it, on purpose: gdk-pixbuf's SVG
+  sniffer looks only at the first bytes of the file for `<svg`, and a long
+  header ahead of it makes GTK answer "Unrecognized image file format" and draw
+  the broken-image placeholder (MEASURED on this host with the comment above).
 -->
-<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
  <g fill="#2e3436">
   <!-- frame: top, bottom, left, right bars -->
   <path d="M2 3 h12 v1 h-12 z"/>

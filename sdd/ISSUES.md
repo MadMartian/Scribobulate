@@ -72,7 +72,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
 | AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
-| AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
@@ -554,15 +553,6 @@ does not embed a fallback font for Hangul — Korean text shows as boxes."*
 **Severity**: Low (cosmetic).
 
 Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AN. On a dark Linux desktop, two toolbar icons come from the host theme
-
-**Severity**: Low.
-
-TDD 9.31: Show Unsafe Images draws two overlapping rectangles and Annotations a badged
-envelope. The icon names likely resolve in the host theme before the bundled resource.
-Windows and macOS draw the bundled icons. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 ## AP. On Windows, a click during Ctrl+End's travel leaves the caret off screen
