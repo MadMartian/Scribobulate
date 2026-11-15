@@ -72,7 +72,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 /// Gap in px between the card and the rectangle it points at.
-const GAP: i32 = 4;
+pub(crate) const GAP: i32 = 4;
 
 /// Side in px of the square that, turned 45°, is the card's pointer.
 const ARROW_SIDE: i32 = 10;

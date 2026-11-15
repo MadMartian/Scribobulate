@@ -1005,6 +1005,8 @@ pub(crate) fn wire_annotation_overlay(
             timer.replace(Some(id));
         }
     };
+    // The same, for a reflow under an open card (the width hook below).
+    let rearm = arm.clone();
     // Every selection change: owes the reader a raise, then decides.
     let schedule = {
         let arm = arm.clone();
@@ -1135,24 +1137,59 @@ pub(crate) fn wire_annotation_overlay(
     // that moves nothing. Hiding on that closed the popover in the frame it opened: the
     // first selection after a wheel scroll showed no Annotate popover. Same rule as the
     // editor's formatting overlay.
+    //
+    // Nor does a reflow, which moves the value too: a window resize that re-wraps the
+    // lines above the viewport shifts the value to keep the top line where it was, and
+    // hiding on that closed the card on every resize. So the test is the text
+    // at the top, `PaintedTop`, which covers the fractional write-back as well. A reflow
+    // still moves the selection, so a width change re-runs the decision for a card that is
+    // up, owing no raise: it re-pins over where the selection now is, and flips there if
+    // there is no room above (TDD 17.64).
     {
+        use crate::saferizer::viewport::PaintedTop;
         let vadj = scroller.vadjustment();
-        let painted = std::cell::Cell::new(vadj.value());
+        let painted = Cell::new(PaintedTop::at(view, vadj.value()));
+        let width = Cell::new(view.width());
+        let follow = rearm.clone();
         vadj.connect_value_changed(glib::clone!(
             #[weak(rename_to = p)]
             pop,
+            #[weak(rename_to = v)]
+            view,
             #[strong]
             entry_open,
             move |adj| {
-                let moved = crate::saferizer::viewport::moves_painted_text(
-                    painted.replace(adj.value()),
-                    adj.value(),
-                );
-                if moved && !entry_open.get() {
+                use gtk::subclass::prelude::ObjectSubclassIsExt;
+                let top = PaintedTop::at(&v, adj.value());
+                let moved = painted.replace(top) != top;
+                // Only the READER's scroll closes the card. GTK 4.6.9 does not hold the
+                // top paragraph through a re-wrap: the value lands a line off, and the
+                // view's own re-anchor (`reanchor_to_reading_line`) then animates back
+                // to the reading line — a run of value changes that move the painted
+                // top yet are not the reader's. The first comes with the width change;
+                // the rest are programmatic, which `user_scrolling` (set by every
+                // hand-scroll input, cleared by every programmatic scroll) tells apart,
+                // as the marker card's dismissal does.
+                let resized = width.replace(v.width()) != v.width();
+                if moved && !resized && v.imp().user_scrolling.get() && !entry_open.get() {
                     p.popdown();
+                } else if moved && p.is_visible() && !entry_open.get() {
+                    // The view's own travel moved the word under a card that stays up:
+                    // re-pin it where the word now is. The width hook's re-pin can land
+                    // before the re-anchor's animation ends, leaving the card pinned to
+                    // where the word was mid-travel.
+                    follow();
                 }
             }
         ));
+        let pop = pop.downgrade();
+        scroller
+            .hadjustment()
+            .connect_notify_local(Some("page-size"), move |_, _| {
+                if pop.upgrade().is_some_and(|p| p.is_visible()) {
+                    rearm();
+                }
+            });
     }
     // NB: the scroll handler above deliberately does NOT bump `anchor_gen`. An in-flight
     // anchor poll (GTK4Rs/AP-142) re-reads `selection_start_widget_y` every frame, so it
@@ -1174,6 +1211,9 @@ mod cellpress_tests;
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod catchup_tests;
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod resizeflip_tests;
 
 /// The action card wired onto `view`, for tests.
 #[cfg(all(test, feature = "gtk-integration-tests"))]

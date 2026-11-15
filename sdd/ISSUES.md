@@ -66,7 +66,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
-| BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BJ | Windows | Production | n + U+0303 draws a detached tilde wherever the lead font is Georgia (PDF export; Sepia-like themes in the preview) | Low |
 
 ## Closed issues
@@ -477,13 +476,6 @@ over a file back with identical bytes; Linux clears it in the first frame. Not r
 a later build (2/2, frames to 9 s) — reproduce before working it. Evidence: 1.0.0 dry run,
 Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) or its
 predecessors. No Known-issues line.
-
-## BA. On resize, a card whose anchor word moves up vanishes instead of flipping
-
-**Severity**: Low.
-
-TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
-the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 ## BJ. On Windows, a combining tilde detaches from its base under Georgia
 
