@@ -196,17 +196,20 @@ pub(crate) fn wire_editor_format_overlay(editor: &sourceview::View) {
     // opened: the first selection after a wheel scroll showed no overlay. The floating
     // card no longer re-allocates the editor, but anything that does while the card is
     // up writes the same value back to this handler.
+    //
+    // Nor does a reflow: a window resize that re-wraps the lines above the viewport moves
+    // the value to keep the top line where it was, and hiding on that closed the bar on
+    // every resize. So the test is the text at the top, `PaintedTop`, as the
+    // preview's Annotate pop-up does.
     if let Some(vadj) = editor.vadjustment() {
-        let painted = std::cell::Cell::new(vadj.value());
+        use crate::saferizer::viewport::PaintedTop;
+        let painted = std::cell::Cell::new(PaintedTop::at(editor, vadj.value()));
         vadj.connect_value_changed(gtk::glib::clone!(
             #[weak(rename_to = ed)]
             editor,
             move |adj| {
-                let moved = crate::saferizer::viewport::moves_painted_text(
-                    painted.replace(adj.value()),
-                    adj.value(),
-                );
-                if !moved {
+                let top = PaintedTop::at(&ed, adj.value());
+                if painted.replace(top) == top {
                     return;
                 }
                 if let Some(st) = editor_host_window(&ed).and_then(|w| state(&w)) {
@@ -214,6 +217,27 @@ pub(crate) fn wire_editor_format_overlay(editor: &sourceview::View) {
                 }
             }
         ));
+    }
+
+    // A reflow still moves the selection, so a width change re-places a bar that is up
+    // over where the selection now is, flipping it below when there is no room above
+    // (TDD 17.64). Only one that is up: a bar the reader dismissed stays down.
+    if let Some(hadj) = editor.hadjustment() {
+        hadj.connect_notify_local(
+            Some("page-size"),
+            gtk::glib::clone!(
+                #[weak(rename_to = ed)]
+                editor,
+                move |_, _| {
+                    let Some(w) = editor_host_window(&ed) else {
+                        return;
+                    };
+                    if state(&w).is_some_and(|st| st.chrome().format_overlay.is_visible()) {
+                        schedule_format_overlay(&w);
+                    }
+                }
+            ),
+        );
     }
 
     // Escape dismisses it (a non-autohide popover has no automatic Escape).
@@ -242,7 +266,7 @@ pub(crate) fn wire_editor_format_overlay(editor: &sourceview::View) {
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
-    use crate::testpump::{drain_for, until, Clock};
+    use crate::testpump::{drain_for, until, until_or_for, Clock};
     use crate::window::testkit::test_app_suffixed;
     use std::time::Duration;
 
@@ -256,7 +280,7 @@ mod gtk_integration_tests {
     /// the selection, so the test cannot pass on a value an earlier frame already snapped.
     /// The allocation is planted as well, once the overlay is open, and on GTK 4.6 the
     /// test asserts the write-back happened. Mutation check: hiding on every
-    /// `value-changed` (dropping the `moves_painted_text` early return) fails here.
+    /// `value-changed` (dropping the `PaintedTop` early return) fails here.
     #[gtktest::test]
     fn the_first_selection_after_a_fractional_scroll_keeps_its_overlay() {
         for mode in ["split", "edit"] {
@@ -350,5 +374,131 @@ mod gtk_integration_tests {
             drain_for(Clock::Frame, Duration::from_millis(600));
             win.destroy();
         }
+    }
+
+    /// **A resize that re-wraps the editor keeps the formatting bar up, pointing at where
+    /// the selection now is (TDD 17.64).** Widening the window shortens the wrapped lines
+    /// above the viewport, so the editor moves its scroll value to keep the target
+    /// paragraph at the top, and the selected word moves up from its third line. The
+    /// scroll-hide took that value change for a scroll and closed the bar, and
+    /// nothing re-pinned it, so a bar left up pointed where the word was.
+    ///
+    /// Mutation: comparing the scroll value rather than `PaintedTop` in the scroll-hide
+    /// closes the bar here; dropping the `page-size` hook leaves it pointing at the old
+    /// line.
+    #[gtktest::test]
+    fn a_resize_that_moves_the_word_up_re_pins_the_formatting_bar() {
+        let app = test_app_suffixed("fmtoverlay-resize-reflow");
+        let mut md = String::new();
+        for i in 0..40 {
+            md.push_str(&format!(
+                "Lead paragraph {i} with enough words in it to wrap onto a second line when \
+                 narrow.\n\n"
+            ));
+        }
+        md.push_str(
+            "Target alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi \
+             omicron pi rho sigma tau upsilon phi chi psi omega.\n\n",
+        );
+        for i in 0..40 {
+            md.push_str(&format!("Trail paragraph {i}.\n\n"));
+        }
+        let win = new_window(&app, "IT-fmtoverlay-resize", &md, None);
+        change_action_state(&win, "view-mode", &"edit".to_variant());
+        win.present();
+        let st = state(&win).expect("tab state");
+        let vadj = st.editor.vadjustment().expect("editor vadjustment");
+        until(
+            Clock::Frame,
+            "the editor to map with a scroll range",
+            || st.editor.is_mapped() && vadj.upper() > vadj.page_size() + 400.0,
+        );
+        // Narrowed once mapped: a new window opens at its remembered size, whatever
+        // default is asked for before it is shown.
+        crate::window::testkit::resize_mapped_window(&win, 420, 400);
+        until(Clock::Frame, "the window to narrow", || win.width() <= 420);
+        drain_for(Clock::Frame, Duration::from_millis(300));
+        st.editor.grab_focus();
+
+        // The target paragraph at the top, and a word on its third line selected.
+        let buf = &st.editor_buf;
+        let (target, _) = buf
+            .start_iter()
+            .forward_search("Target alpha", gtk::TextSearchFlags::empty(), None)
+            .expect("the target paragraph");
+        let target = target.offset();
+        let top = st.editor.iter_location(&buf.iter_at_offset(target)).y();
+        crate::saferizer::scrollpos::jump(&vadj, f64::from(top));
+        drain_for(Clock::Frame, Duration::from_millis(300));
+        let mut word = buf.iter_at_offset(target);
+        st.editor.forward_display_line(&mut word);
+        st.editor.forward_display_line(&mut word);
+        let mut word_end = word;
+        word_end.forward_word_end();
+        buf.select_range(&word, &word_end);
+        let chrome = crate::winstate::chrome(&win).expect("chrome");
+        until(Clock::Frame, "the formatting bar to open", || {
+            chrome.format_overlay.is_visible()
+        });
+        drain_for(Clock::Frame, Duration::from_millis(300));
+        let word_y = || {
+            let loc = st.editor.iter_location(&word);
+            st.editor
+                .buffer_to_window_coords(gtk::TextWindowType::Widget, loc.x(), loc.y())
+                .1
+        };
+        let (y_before, value_before) = (word_y(), vadj.value());
+        // Counted, not sampled: the re-pin re-opens a bar the scroll-hide closed, so a
+        // look at the end would miss the close the reader saw.
+        let closes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counting = chrome.format_overlay.connect_closed({
+            let closes = closes.clone();
+            move |_| closes.set(closes.get() + 1)
+        });
+
+        crate::window::testkit::resize_mapped_window(&win, 1000, 400);
+        until(Clock::Frame, "the window to widen", || win.width() >= 1000);
+        // The editor re-measures the lines above the viewport in idle passes, moving the
+        // scroll value after the word has already moved, so wait for both to settle.
+        let settled = crate::testpump::until_stable(
+            Clock::Frame,
+            Duration::from_secs(5),
+            Duration::from_millis(300),
+            || (vadj.value(), word_y()),
+        );
+        assert!(
+            settled.converged,
+            "the editor never settled after the resize"
+        );
+        let re_pinned = until_or_for(Clock::Frame, Duration::from_secs(2), || {
+            chrome.format_overlay.is_visible()
+                && chrome
+                    .format_overlay
+                    .pointing_to()
+                    .is_some_and(|r| r.y() == word_y())
+        });
+        assert!(
+            word_y() < y_before && vadj.value() != value_before,
+            "precondition: the resize must move the word up and the scroll value with it, or \
+             nothing is tested: word y {y_before} -> {}, value {value_before} -> {}",
+            word_y(),
+            vadj.value()
+        );
+        chrome.format_overlay.disconnect(counting);
+        assert_eq!(
+            closes.get(),
+            0,
+            "the resize closed the formatting bar: the scroll-hide took the reflow's \
+             scroll-value change for a scroll"
+        );
+        assert!(
+            re_pinned,
+            "the formatting bar still points where the word was: {:?}, word now at y {}",
+            chrome.format_overlay.pointing_to(),
+            word_y()
+        );
+        chrome.format_overlay.popdown();
+        drain_for(Clock::Frame, Duration::from_millis(600));
+        win.destroy();
     }
 }

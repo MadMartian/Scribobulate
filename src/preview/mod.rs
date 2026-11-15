@@ -38,6 +38,8 @@ pub(crate) mod qdata;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod refusalnotice;
 mod render;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod scripttests;
 mod scroll;
 pub(crate) mod sourcemap;
 pub(crate) mod splice;

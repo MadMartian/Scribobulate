@@ -111,11 +111,13 @@ mod imp {
         /// make.
         pub(super) transient_hide: Cell<bool>,
 
-        /// The vadjustment we track for scroll re-anchoring, and our handler on it. Re-resolved at each
-        /// presentation rather than wired once, so a replaced adjustment cannot leave us
-        /// "connected" to an orphan (GTK4Rs/AP-55); disconnected at teardown so a per-render
-        /// card never accumulates handlers on a longer-lived adjustment.
-        pub(super) vadj: RefCell<Option<(gtk::Adjustment, glib::SignalHandlerId)>>,
+        /// The adjustments we track for re-anchoring, and our handler on each: the
+        /// vadjustment's `value-changed` (a scroll) and the hadjustment's
+        /// `notify::page-size` (a width change, which re-wraps the text and moves the chip).
+        /// Re-resolved at each presentation rather than wired once, so a replaced adjustment
+        /// cannot leave us "connected" to an orphan (GTK4Rs/AP-55); disconnected at teardown
+        /// so a per-render card never accumulates handlers on a longer-lived adjustment.
+        pub(super) tracked: RefCell<Vec<(gtk::Adjustment, glib::SignalHandlerId)>>,
 
         /// The toplevel we watch for outside clicks, and the gesture we put there.
         /// Held so teardown can remove it: the toplevel outlives this card, so leaving the
@@ -397,32 +399,60 @@ impl AnnotationCard {
         self.set_visible(false);
     }
 
-    /// Track the view's vadjustment, re-resolving it each time rather than wiring once: a
-    /// replaced adjustment would otherwise leave us "connected" to an orphan while
+    /// Track the view's adjustments, re-resolving them each time rather than wiring once:
+    /// a replaced adjustment would otherwise leave us "connected" to an orphan while
     /// appearing wired (GTK4Rs/AP-55).
+    ///
+    /// A scroll is not the only thing that moves the chip. A width change re-wraps the
+    /// text, which moves the chip's line, and the chip sits in the right margin, so it
+    /// moves sideways with the width as well. With nothing above the viewport the reflow
+    /// leaves the scroll value alone and no `value-changed` fires, so the card stayed
+    /// pointing where the chip was (TDD 17.64). MEASURED (Windows, GTK 4.24): widening a
+    /// preview from 640 to 1100 px at the top moved the chip from (607, 160) to (1067, 112)
+    /// and left the card pointing at (607, 160). So the width hook the preview's Annotate
+    /// card and the editor's formatting bar use re-anchors this card too: the
+    /// hadjustment's `page-size`, which the view sets to its new width. The notify can
+    /// fire with nothing changed (MEASURED: `notify::lower` fired on the same resize, with
+    /// `lower` still 0), which costs one `reposition`: a chip that did not move is skipped
+    /// by `point_at`.
     fn arm_scroll_tracking(&self) {
         let Some(view) = self.view() else { return };
-        let Some(vadj) = view.vadjustment() else {
+        let (Some(vadj), Some(hadj)) = (view.vadjustment(), view.hadjustment()) else {
             return;
         };
-        if let Some((have, _)) = self.imp().vadj.borrow().as_ref() {
-            if have == &vadj {
-                return;
-            }
+        let current = self
+            .imp()
+            .tracked
+            .borrow()
+            .iter()
+            .map(|(adj, _)| adj.clone())
+            .eq([vadj.clone(), hadj.clone()]);
+        if current {
+            return;
         }
         self.disarm_scroll_tracking();
-        // WEAK: the adjustment outlives the card, and a strong capture here would make
+        // WEAK: the adjustments outlive the card, and a strong capture here would make
         // the card uncollectable for as long as the scroller lives (GTK4Rs/AP-63/GTK4Rs/AP-63).
-        let id = vadj.connect_value_changed(glib::clone!(
+        let scrolled = vadj.connect_value_changed(glib::clone!(
             #[weak(rename_to = card)]
             self,
             move |_| card.reposition()
         ));
-        self.imp().vadj.replace(Some((vadj, id)));
+        let resized = hadj.connect_notify_local(
+            Some("page-size"),
+            glib::clone!(
+                #[weak(rename_to = card)]
+                self,
+                move |_, _| card.reposition()
+            ),
+        );
+        self.imp()
+            .tracked
+            .replace(vec![(vadj, scrolled), (hadj, resized)]);
     }
 
     fn disarm_scroll_tracking(&self) {
-        if let Some((adj, id)) = self.imp().vadj.borrow_mut().take() {
+        for (adj, id) in self.imp().tracked.take() {
             adj.disconnect(id);
         }
     }
@@ -519,6 +549,9 @@ impl AnnotationCard {
         self.detach();
     }
 }
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod resize_tests;
 
 /// Live-display tests for the annotation card's anchoring contract.
 /// Need a real display and a real paint; run with `cargo test --features

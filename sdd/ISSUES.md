@@ -65,24 +65,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
-| W | Any | Production | Each window open/close cycle still retains ~0.14 MB, linearly (GTK submenu models, an unpinned remainder) | Low |
-| Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
-| Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
-| AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
-| AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
-| AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
-| AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
-| AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
-| AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
-| AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
-| AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
-| AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
-| AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
-| BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
-| BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
-| BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
-| BI | Linux | Test | The XInclude screen's bounded-time test took 21.1 s against its 20 s bound in the coverage step on the GitHub Linux runner | Low |
 
 ## Closed issues
 
@@ -96,6 +78,7 @@ reused, and run in a series of their own apart from the IDs above.
 | CLSD-02 | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize |
 | CLSD-04 | Mac | Upstream | In fullscreen, a click issued while the transition animation is still running is never delivered — AppKit blocks input for its own ~250-500ms window, in any Cocoa application. Not ours to fix, and not GTK's |
 | CLSD-05 | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141, informational): `syntect` reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml`; the data is never a user's file |
+| CLSD-06 | Windows | Upstream | After a native file dialog has been used, the process outlives Quit by about a second (network-dependent) while Windows tears down a shell thread blocked in network browsing; the app itself has exited |
 
 
 ## CLSD-01. Tables are selection islands
@@ -482,190 +465,6 @@ critical fires and names the holder; if it points at a closure or idle captured 
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
 
-## M. On Windows, live reload stops after the document's folder is deleted and recreated
-
-**Severity**: Medium (live reload stops silently; Save still warns before overwriting, so
-nothing is lost).
-
-Open `dir\doc.md`, delete `dir`, recreate it with `doc.md` → "File deleted on disk" stays
-and the recreated content is never offered; one File ▸ Reload works, later appends are
-never seen. GIO's Win32 directory monitor loses its handle with the directory; Linux keeps
-firing. Evidence: 1.0.0 dry run, Windows seat, on the build of "Merge bug/nul-byte-document:
-…" (2026-11-13) and its predecessors. Known issues: *"On Windows, live reload stops after
-the document's folder is deleted and recreated — reopen the file."*
-
-## W. Each window open/close cycle still retains ~0.14 MB
-
-**Severity**: Low (unbounded but slow: ~11 MB over 80 cycles).
-
-Release build, 80 × new-window-then-close: +10.4 MB, linear, no plateau, so MANUAL-TEST
-8.6 still fails. The app-side cycles (Annotate card, find bar, the line-numbered editor
-that GtkSourceView 5.4.1 never finalizes, GTK4Rs/AP-386) are fixed and guarded by the window-cycle memory
-gate (TDD 6.13); what remains is not a widget:
-- GTK 4.6.9 keeps every submenu `GMenu` bound to a `GtkPopoverMenuBar` or `GtkMenuButton`
-  alive after its window closes (a bare window with no app code reproduces it), ~50 KB per
-  window from `menubar::build_top_level_menus_with` (GTK4Rs/AP-387: `gtkpopovermenubar.c`
-  drops a transfer-full link ref). An app-side workaround (empty the
-  models at window destroy) runs into GTK4Rs/AP-76; not attempted.
-- ~17 KB of the disposed editor's instance structs, ~4 KB for the preview card's comment
-  `GtkSourceView` (`wire_annotation_overlay`), and ~70 KB not yet attributed (valgrind
-  still-reachable blocks whose count equals the cycle count is the method that found the
-  rest).
-Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
-
-## Y. A tab-switch reveal test assumes a window size it never sets
-
-**Severity**: Low (test-only; CI's macOS runner passes it).
-
-On a 1728×1117 pt (@2×) Mac display, `window::outline_nav`'s
-`a_tab_switch_before_the_reveal_runs_drops_it` fails its "preview is long enough"
-precondition (`upper > 2 × page_size`) — 1 of 813 in the macOS integration step,
-identically on two builds of the 1.0.0 dry run, so not a regression. The test sets no
-default size where its siblings use 900×600; set one. Evidence: filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## Z. On Windows, a document opened through a UNC path never live-reloads
-
-**Severity**: Low (File ▸ Reload still works).
-
-A document opened as `\\localhost\C$\…` gets no monitor events, so live reload never
-fires; a .NET `FileSystemWatcher` on the same share sees them. Evidence: 1.0.0 dry run,
-Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its
-predecessors. Known issues: *"On Windows, a document opened through a network (UNC) path
-does not live-reload — use File ▸ Reload."*
-
-## AA. On Windows, a rename away and back once left a false "deleted" state
-
-**Severity**: Low (intermittent).
-
-Renaming the document away and back within one folder left the notice, badge and prompt up
-over a file back with identical bytes; Linux clears it in the first frame. Not reproduced on
-a later build (2/2, frames to 9 s) — reproduce before working it. Evidence: 1.0.0 dry run,
-Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) or its
-predecessors. No Known-issues line.
-
-## AB. On Windows, `nul.md` opens as the NUL device instead of being refused
-
-**Severity**: Low.
-
-`nul.md` opens as the NUL device ("loaded … (0 bytes)") with no refusal, against TDD 1.4a.
-Win32 treats `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`9`, `LPT1`–`9` with any extension as
-devices; the 1.4a screen should name-check them. Evidence: 1.0.0 dry run, Windows seat, on
-the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its predecessors. No
-Known-issues line.
-
-## AG. PDF export on Windows draws Hangul as tofu
-
-**Severity**: Medium (Korean text is unreadable in the PDF).
-
-TDD 25.18: Hangul draws as hex-box tofu and extracts with its spaces dropped
-(Japanese-then-Korean lines split); n + U+0303 draws a detached tilde. The preview falls
-back to Malgun Gothic; the PDF path's font map does not. Linux is byte-exact. Start at the
-cairo-win32/DirectWrite font map in `src/export/pdf/`. Evidence: 1.0.0 dry run, filed in
-"File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"PDF export on Windows
-does not embed a fallback font for Hangul — Korean text shows as boxes."*
-
-## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
-
-**Severity**: Low (cosmetic).
-
-Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AN. On a dark Linux desktop, two toolbar icons come from the host theme
-
-**Severity**: Low.
-
-TDD 9.31: Show Unsafe Images draws two overlapping rectangles and Annotations a badged
-envelope. The icon names likely resolve in the host theme before the bundled resource.
-Windows and macOS draw the bundled icons. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AP. On Windows, a click during Ctrl+End's travel leaves the caret off screen
-
-**Severity**: Medium (a visible jump; nothing is lost).
-
-TDD 9.33a (3/3 and 2/2): the caret lands where clicked, the viewport snaps to the top or
-runs on to the end, the caret off screen. Linux 0/4 (Ctrl+End completes in < 0.1 s there);
-macOS not read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). Known issues: *"On Windows, clicking while Ctrl+End is still scrolling can
-leave the caret off screen — press Ctrl+End again or click once more."*
-
-## AQ. On macOS, View ▸ Side by Side on a short document shows only the preview's last line
-
-**Severity**: Medium (a visible jump; nothing is lost).
-
-14/14 by menu, 0/12 by ⌥2; Linux 0/15. The menu route alone logs `project_scroll(map) …
-target=16.0 max=32.0` (`src/window/scrollsync.rs`): the editor-driven projection runs on
-map before the preview's range exists. The system menu bar activates the action on a
-different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. Evidence:
-1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues:
-*"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
-press ⌥2 or File ▸ Reload."*
-
-## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
-
-**Severity**: Low (harness only).
-
-`org.gtk.Actions.SetState` on `view-mode` leaves the preview scrolled where the
-accelerator does not; MANUAL-TEST §1.5 drives view mode by accelerator. Evidence: 1.0.0 dry
-run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AU. On macOS, Insert Emoji never inserts
-
-**Severity**: Medium (the command is dead on one platform).
-
-TDD 9.14: the chooser opens but a pick (click, Enter, search) never inserts and Esc does not
-dismiss it; Linux and Windows insert. Quartz-only path in `GtkEmojiChooser`. Evidence: 1.0.0
-dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Insert
-Emoji does not insert on macOS — type the emoji or paste it."*
-
-## AX. On Windows, typing above the selected annotation clears the list's selection
-
-**Severity**: Low (the row re-selects on the next click).
-
-TDD 20.15 (Windows 3/3); Linux passes. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## BA. On resize, a card whose anchor word moves up vanishes instead of flipping
-
-**Severity**: Low.
-
-TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
-the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## BG. A 3000-item nested list stalls first render for about a minute
-
-**Severity**: Low.
-
-A 1.2 MB file holds the main loop ~68 s before the window appears (Linux; 2000 items ~35–39
-s at 100 % CPU on macOS), then renders. A candidate for incremental first render (a PLAN),
-not a point fix. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
-
-## BH. On Windows, the process outlives its windows by 20–30 s after Quit
-
-**Severity**: Low.
-
-Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 s. Unmeasured:
-the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
-Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
-Known-issues line.
-
-## BI. The XInclude screen's bounded-time test overran its bound once on CI
-
-**Severity**: Low (a red pipeline; no user effect).
-
-`imagedecode::xinclude::tests::cap_sized_runs_of_declarations_are_screened_in_bounded_time`
-failed in step 5c (coverage, instrumented build) on the GitHub Linux runner: "xml
-declarations with no `?>`: 21.113728538s" against a 20 s bound (run 43636725601,
-2026-11-14, branch `bug/1.0.0-deferrals`, which does not touch `src/imagedecode/`). The local
-Linux pipeline on the same tree passed, and the six preceding `master` runs were green.
-Before changing anything, measure the shape's time in the coverage build locally and on CI:
-either the bound is too tight for an instrumented build on a shared runner, or the screen's
-cost on that shape is closer to quadratic than the test assumes (a security question —
-read CVE.md's header and ScrSEC-1 first).
-
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
 **Status**: Closed (no public API at the GTK 4.6 floor makes the layout report a width the
@@ -821,3 +620,24 @@ advisory the shipped graph was just cleared of and costs seconds per launch. Lea
 syntax highlighting out is not the product. With no vulnerability to patch, waiting on
 upstream costs nothing. When a syntect release is off bincode 1, take it and delete this
 entry and the `deny.toml` ignore in the same change.
+
+## CLSD-06. On Windows, the process outlives Quit while the shell finishes a network browse
+
+**Status**: Closed (the wait is Windows tearing down a thread the shell owns, after the app
+has exited; nothing the app or GTK's native chooser exposes stops it).
+
+Measured on Windows with a release build of the 1.0.0 platform pass, fresh state, debug
+log, three runs per shape: Quit (WM_CLOSE or `app.quit`) reaches `ExitProcess` in ≤ 0.2 s
+and the process is gone in ≤ 0.25 s, including with 16 heavy documents, a remote image, a
+UNC document and the installed 1.0.0 build. After the native file dialog has been used,
+one thread survives `ExitProcess`: a shell threadpool thread from the dialog's Network
+node, blocked in `NtDeviceIoControlFile ← NetServerEnum ← NPOpenEnum ←
+WNetRestoreAllConnectionsW ← fdWNet`. Windows cannot finish terminating the process until
+that I/O completes or is cancelled: ~1.1 s on the measuring VM, where `NetServerEnum`
+alone takes 16.7 s and fails with 6118. On a network where the cancel is slow, or a mapped
+drive's restore is stuck in an SMB connect, the same mechanism plausibly gives the 20–30 s
+the 1.0.0 dry run saw (inferred; not reproduced). The session bus name is released
+throughout, so a relaunch never reaches the dying process. The only lever, stopping
+`IFileDialog` from enumerating the network, is not exposed by GTK's native chooser, and
+`FOS_HIDEPINNEDPLACES` would strip the whole navigation pane. Time an exit by waiting on
+the process handle: `GetExitCodeProcess` is set at `ExitProcess`, before thread teardown.

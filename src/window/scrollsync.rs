@@ -110,6 +110,23 @@ pub(super) fn queue_scroll_sync(window: &ApplicationWindow) {
     ));
     st.scroll.tick.replace(Some(id));
 }
+/// Whether a follower's scroll range is real enough to write a position into.
+///
+/// Two things must hold: a scrollable span (`upper > page_size`), and an allocated
+/// viewport (`page_size > 0`). The second is the one that was missing. A follower
+/// that was just mounted and has not been allocated reports a stale low `upper`
+/// (MEASURED, macOS: 32) and a `page_size` of 0, so `upper - page_size` is positive
+/// and the span test alone passes. A write then lands on lines whose heights GTK has
+/// not validated, and `gtk_text_view_value_changed` pins whichever paragraph
+/// `line_at_y` resolves there — the LAST one — as the view's first paragraph. The
+/// restore that follows is a one-shot `scroll_to_mark` that the pin defends against,
+/// so the view stays on the last block until something re-renders it (View ▸ Side by
+/// Side from the menu bar on a short document, which is the one route that projects
+/// before the first allocation).
+fn follower_range_established(upper: f64, page_size: f64) -> bool {
+    page_size > 0.0 && upper - page_size > 0.0
+}
+
 /// Re-project the driver pane onto the follower, LINE-ACCURATELY via the render's
 /// `source_map` waypoints (Model A spike): map the driver pane's
 /// top-of-viewport document position to the follower's corresponding document
@@ -186,7 +203,7 @@ fn project_scroll(window: &ApplicationWindow) {
     // Range not established yet (a freshly re-rendered follower's `upper` is a
     // stale low estimate) — skip rather than snap it to the top; the coalesced
     // tick retries on the next `notify::upper` (the edit->split top-snap trap).
-    if max <= 0.0 {
+    if !follower_range_established(dst_adj.upper(), dst_adj.page_size()) {
         return;
     }
     let iter = dst_view.buffer().iter_at_offset(dst_offset);
@@ -1104,5 +1121,77 @@ mod gtk_integration_tests {
             "the tab in front lost a hold that was not the one released"
         );
         window.destroy();
+    }
+
+    /// A projection onto a follower that has no allocation yet writes nothing.
+    ///
+    /// The shape of the macOS defect (Side by Side from the menu bar on a short
+    /// document showed only the preview's last block): the follower is mounted but never
+    /// allocated, so its `upper` is a stale low estimate and its `page_size` is 0, and
+    /// `upper - page_size` is positive. A window that has never been presented is that
+    /// state, which is why the test needs no menu bar and no display of a particular size.
+    #[gtktest::test]
+    fn a_projection_onto_an_unallocated_follower_writes_nothing() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.projectunallocated"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE).expect("register");
+        let mut md = String::new();
+        for n in 1..=10 {
+            md.push_str(&format!("Paragraph {n}\n\n"));
+        }
+        let window = crate::window::new_window(&app, "IT", &md, None);
+        crate::window::change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = state(&window).expect("tab state");
+        let adj = st
+            .split
+            .preview_scroller()
+            .expect("the split's preview")
+            .vadjustment();
+        assert!(
+            adj.page_size() <= 0.0,
+            "precondition: the follower is unallocated (page_size {}), or this test \
+             measures a different state",
+            adj.page_size()
+        );
+        // Put the follower in the state MEASURED in the app at the moment of the defect —
+        // a stale low `upper` over a zero page — rather than waiting for a layout pass
+        // that would end it (an unpresented window reports upper 0 and passes either way).
+        crate::saferizer::scrollpos::reconfigure(&adj, 0.0, 0.0, 32.0, 1.0, 10.0, 0.0);
+        let before = adj.value();
+        st.scroll.driver.set(ScrollDriver::Editor);
+        project_scroll(&window);
+        assert_eq!(
+            adj.value(),
+            before,
+            "a projection wrote {} into a follower with upper {} and no allocated page: \
+             GTK pins the last paragraph as the view's first and the restore cannot undo it",
+            adj.value(),
+            adj.upper()
+        );
+        window.destroy();
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::follower_range_established;
+
+    #[test]
+    fn an_unallocated_follower_has_no_established_range() {
+        // MEASURED on macOS at the moment of the defect: upper 32, page_size 0.
+        assert!(!follower_range_established(32.0, 0.0));
+    }
+
+    #[test]
+    fn a_follower_that_fits_its_viewport_has_no_range_to_write() {
+        assert!(!follower_range_established(577.0, 577.0));
+        assert!(!follower_range_established(300.0, 577.0));
+    }
+
+    #[test]
+    fn an_allocated_scrollable_follower_has_one() {
+        assert!(follower_range_established(1200.0, 577.0));
     }
 }

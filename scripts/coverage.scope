@@ -90,6 +90,7 @@ src/export/pdf/mod.rs
 src/export/pdftable.rs
 src/export/walk.rs
 src/farscroll.rs
+src/farscroll/retire.rs
 src/farscroll/settle.rs
 src/focusrelease.rs
 src/fold.rs
@@ -245,6 +246,7 @@ src/winstate/chrome.rs
 src/winstate/decisions.rs
 src/winstate/docepoch.rs
 src/winstate/fmtinsert.rs
+src/winstate/folderwatch.rs
 src/winstate/ids.rs
 src/winstate/infotoast.rs
 src/winstate/navhistory/decide.rs

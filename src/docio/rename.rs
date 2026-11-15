@@ -90,8 +90,8 @@ pub(crate) enum NameRefusal {
     /// Distinct from [`Self::DotEntry`] and friends because it is not *illegal*, it
     /// is simply a no-op, and the dialog says so differently.
     Unchanged,
-    /// Windows: `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with or
-    /// without an extension.
+    /// Windows: a device name ([`windows_device_name`]) — `CON`, `NUL`, `COM1` and the
+    /// rest — with or without an extension.
     ReservedDeviceName,
     /// Windows: a trailing `.` or space, which the shell silently strips.
     TrailingDotOrSpace,
@@ -144,10 +144,41 @@ pub(crate) enum NameChange {
 }
 
 /// Windows device names, reserved with or without an extension (`CON.md` too).
+///
+/// MEASURED on Windows 10 (19045) with `RtlIsDosDeviceName_U`, the call Win32 path
+/// conversion makes, and `GetFullPathNameW`, which turns each of these into `\\.\<name>`:
+/// the superscript `COM¹`–`COM³` and `LPT¹`–`LPT³` are devices, and so are `CONIN$` and
+/// `CONOUT$`; `COM0`, `LPT0`, `COM⁴` and `CLOCK$` are not, so they stay ordinary names
+/// here rather than refusing a file Windows itself would open.
 const WINDOWS_DEVICE_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
+    "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+    "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ];
+
+/// The device a filename names on Windows, if it names one — its canonical spelling from
+/// [`WINDOWS_DEVICE_NAMES`], so a caller can show it without echoing the filename.
+///
+/// Win32 decides on the part of the name before its first `.` or `:`, with trailing
+/// spaces dropped, in any letter case, so `nul.md`, `Nul.Md.`, `nul .md`, `nul.tar.gz`
+/// and `nul:stream` are all the NUL device while ` nul.md` and `nulbyte.md` are files
+/// (MEASURED, as the table above). A trailing dot or space on the whole name is the
+/// same rule seen from the other end: it falls after the first `.`, or is trimmed.
+///
+/// A pure name rule, applied by [`check_filename`] under [`FsRules::Windows`] and by the
+/// document readers and every atomic write on a Windows host
+/// (`super::content::screen_name`).
+pub(crate) fn windows_device_name(name: &str) -> Option<&'static str> {
+    let stem = name
+        .split(['.', ':'])
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches(' ');
+    WINDOWS_DEVICE_NAMES
+        .iter()
+        .copied()
+        .find(|d| d.eq_ignore_ascii_case(stem))
+}
 
 /// Characters Windows forbids in a filename, beyond the separators.
 const WINDOWS_FORBIDDEN: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
@@ -205,11 +236,7 @@ pub(crate) fn check_filename(name: &str, rules: FsRules) -> Result<(), NameRefus
         if name.ends_with('.') || name.ends_with(' ') {
             return Err(NameRefusal::TrailingDotOrSpace);
         }
-        let stem = name.split('.').next().unwrap_or(name);
-        if WINDOWS_DEVICE_NAMES
-            .iter()
-            .any(|d| d.eq_ignore_ascii_case(stem))
-        {
+        if windows_device_name(name).is_some() {
             return Err(NameRefusal::ReservedDeviceName);
         }
     }
@@ -615,8 +642,17 @@ mod tests {
              would reject a legitimate rename on Linux and macOS"
         );
 
-        // Reserved device names, with and without an extension.
-        for name in ["CON", "con.md", "LPT9.txt", "NUL"] {
+        // Reserved device names, with and without an extension — `nul .md` and the
+        // superscript and console forms included, which the rename once accepted.
+        for name in [
+            "CON",
+            "con.md",
+            "LPT9.txt",
+            "NUL",
+            "nul .md",
+            "com¹.md",
+            "conin$.md",
+        ] {
             assert_eq!(
                 validate_new_name("a.md", name, FsRules::Windows),
                 Err(NameRefusal::ReservedDeviceName),
@@ -656,6 +692,68 @@ mod tests {
             Ok(NameChange::Plain),
             "a colon is legal on POSIX"
         );
+    }
+
+    /// **Every spelling Win32 maps to a device is one, and its near neighbours are not
+    /// (TDD 1.4a).** Each name on both sides was MEASURED on Windows 10 with
+    /// `RtlIsDosDeviceName_U` (see [`WINDOWS_DEVICE_NAMES`]); a pure name rule, so it is
+    /// asserted on every host.
+    #[test]
+    fn the_windows_device_name_rule_matches_what_win32_measured() {
+        let devices = [
+            ("nul", "NUL"),
+            ("NUL", "NUL"),
+            ("nul.md", "NUL"),
+            ("Nul.Md", "NUL"),
+            ("nul.md.", "NUL"),
+            ("nul.md ", "NUL"),
+            ("nul .md", "NUL"),
+            ("nul..md", "NUL"),
+            ("nul.", "NUL"),
+            ("nul ", "NUL"),
+            ("nul:stream", "NUL"),
+            ("nul.tar.gz", "NUL"),
+            ("con.md", "CON"),
+            ("prn.md", "PRN"),
+            ("aux.md", "AUX"),
+            ("com1.md", "COM1"),
+            ("COM9.txt", "COM9"),
+            ("lpt1.md", "LPT1"),
+            ("lpt9.md", "LPT9"),
+            ("com¹.md", "COM¹"),
+            ("com².md", "COM²"),
+            ("COM³.md", "COM³"),
+            ("lpt¹.md", "LPT¹"),
+            ("lpt³.md", "LPT³"),
+            ("conin$", "CONIN$"),
+            ("CONOUT$", "CONOUT$"),
+            ("conin$.md", "CONIN$"),
+            ("conout$.md", "CONOUT$"),
+        ];
+        for (name, device) in devices {
+            assert_eq!(windows_device_name(name), Some(device), "{name:?}");
+        }
+        for file in [
+            "nulbyte.md",
+            "nulx.md",
+            "xnul.md",
+            " nul.md",
+            "nul_.md",
+            "con-x.md",
+            "com.md",
+            "com0.md",
+            "lpt0.md",
+            "com10.md",
+            "lpt10.md",
+            "com⁴.md",
+            "com⁰.md",
+            "clock$.md",
+            "config$",
+            "notes.md",
+            "",
+        ] {
+            assert_eq!(windows_device_name(file), None, "{file:?}");
+        }
     }
 
     /// A case-only change is a *legitimate rename* that must be recognised as its own

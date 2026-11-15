@@ -119,6 +119,72 @@ pub(crate) fn step_index<T: Ord + Copy>(
     .map(|(index, _)| index)
 }
 
+/// Where the annotation that started at `selected` in the scan of `old` starts in the
+/// scan of `new`, or `None` if it is gone — how the viewer's selection follows its
+/// annotation across an edit (TDD 20.15, Document-Reference CAM row 2).
+///
+/// A start byte alone is not an identity across an edit: text typed above the selected
+/// annotation moves its start, and the next rebuild found no annotation at the old byte
+/// and dropped the selection. Two rules, in order:
+///
+/// 1. **The construct's own text**, resolved nearest where it was
+///    ([`crate::docref::AnchoredSpan`], `Nearest`). It follows the annotation through any
+///    edit outside it, including a new annotation typed immediately before it. Captured
+///    without context: an annotation's text carries the reader's own comment, so it names
+///    one place, and neighbours would stop it resolving after the commonest edit there
+///    is, typing right in front of it. Two byte-identical annotations show identical rows.
+/// 2. **The edit's own shape**, for an annotation whose text changed (the reader edited
+///    its comment, which in split mode is exactly what selecting a row sets the caret up
+///    for). Everything before the first changed byte stands still and everything after
+///    the last one moves by the length change, so a start in either stretch maps; a
+///    start inside the changed stretch has no answer.
+///
+/// Either answer counts only if a construct of `new` begins there.
+pub(crate) fn follow_selection(
+    old: &str,
+    old_entries: &[AnnotationEntry],
+    selected: OriginalByteOffset,
+    new: &str,
+    new_entries: &[AnnotationEntry],
+) -> Option<OriginalByteOffset> {
+    let was = old_entries.iter().find(|e| e.src_span.start == selected)?;
+    let starts_one = |at: usize| {
+        new_entries
+            .iter()
+            .any(|e| e.src_span.start.raw() == at)
+            .then_some(OriginalByteOffset::new(at))
+    };
+    let span = was.src_span.start.raw()..was.src_span.end.raw();
+    crate::docref::AnchoredSpan::capture_with(old, span, crate::docref::Ambiguity::Nearest)
+        .and_then(|anchor| anchor.resolve(new))
+        .and_then(|now| starts_one(now.start))
+        .or_else(|| map_through_edit(old, new, selected.raw()).and_then(starts_one))
+}
+
+/// `at`, a byte of `old`, carried to `new` as an edit between them would carry it: the
+/// common prefix stands still, the common suffix moves by the length change, and the
+/// changed stretch between them has no answer. A pure insertion AT `at` moves it, so a
+/// construct typed in front of stays in front.
+fn map_through_edit(old: &str, new: &str, at: usize) -> Option<usize> {
+    let (old, new) = (old.as_bytes(), new.as_bytes());
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let room = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    if at >= old.len() - suffix {
+        Some(at + new.len() - old.len())
+    } else if at < prefix {
+        Some(at)
+    } else {
+        None
+    }
+}
+
 /// The annotations viewer's heading: "Annotations (N)" counting the rows the viewer
 /// lists — the same [`extract_entries`] list — and plain "Annotations" when there are
 /// none (TDD 20.22).
@@ -223,6 +289,109 @@ mod heading_tests {
         assert_eq!(heading(3), "Annotations (3)");
         let md = "{==a==}{>>one<<} and {==b==}{>>two<<}\n";
         assert_eq!(heading(extract_entries(md).len()), "Annotations (2)");
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::*;
+
+    const DOC: &str = "Intro.\n\nA {==first==}{>>one<<} here.\n\nB {==second==}{>>two<<} there.\n";
+
+    /// Where the selection on `DOC`'s annotation `index` lands after `DOC` becomes `new`,
+    /// as the comment text of the annotation it lands on.
+    fn follow(index: usize, new: &str) -> Option<String> {
+        let (old_entries, new_entries) = (extract_entries(DOC), extract_entries(new));
+        let selected = old_entries[index].src_span.start;
+        let at = follow_selection(DOC, &old_entries, selected, new, &new_entries)?;
+        new_entries
+            .iter()
+            .find(|e| e.src_span.start == at)
+            .map(|e| e.comment.clone())
+    }
+
+    #[test]
+    fn an_unchanged_document_keeps_the_selection_where_it_is() {
+        assert_eq!(follow(1, DOC).as_deref(), Some("two"));
+    }
+
+    /// The defect: the start byte moved and nothing at the old byte matched.
+    #[test]
+    fn text_typed_above_the_selected_annotation_carries_the_selection_with_it() {
+        let new = format!("Typed above. {DOC}");
+        assert_eq!(follow(1, &new).as_deref(), Some("two"));
+        assert_eq!(follow(0, &new).as_deref(), Some("one"));
+    }
+
+    #[test]
+    fn text_typed_right_in_front_of_it_carries_it_too() {
+        let new = DOC.replace("B {==second", "B xyz{==second");
+        assert_eq!(follow(1, &new).as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn deleting_text_above_it_carries_it_back() {
+        let new = DOC.replace("Intro.\n\n", "");
+        assert_eq!(follow(1, &new).as_deref(), Some("two"));
+    }
+
+    /// A new annotation typed straight in front of the selected one: the edit's shape
+    /// alone would hand the selection to the newcomer, whose start is the old byte.
+    #[test]
+    fn a_new_annotation_typed_in_front_of_it_does_not_take_the_selection() {
+        let new = DOC.replace("B {==second", "B {>>new<<}{==second");
+        assert_eq!(follow(1, &new).as_deref(), Some("two"));
+    }
+
+    /// Selecting a row in split mode puts the editor caret on the annotation so it can
+    /// be edited there; editing it must not cost the selection.
+    #[test]
+    fn editing_the_selected_annotation_s_own_comment_keeps_it_selected() {
+        let new = DOC.replace("{>>two<<}", "{>>two, revised<<}");
+        assert_eq!(follow(1, &new).as_deref(), Some("two, revised"));
+    }
+
+    #[test]
+    fn an_edit_below_it_leaves_it_where_it_is() {
+        let new = DOC.replace("there.", "there, and more.");
+        assert_eq!(follow(0, &new).as_deref(), Some("one"));
+    }
+
+    #[test]
+    fn a_deleted_annotation_loses_the_selection_rather_than_passing_it_on() {
+        let new = DOC.replace("{==second==}{>>two<<}", "second");
+        assert_eq!(follow(1, &new), None);
+        let new = DOC.replace("A {==first==}{>>one<<} here.\n\n", "");
+        assert_eq!(
+            follow(0, &new),
+            None,
+            "not handed to the annotation that moved up"
+        );
+    }
+
+    #[test]
+    fn a_selection_naming_no_scanned_annotation_follows_nothing() {
+        let entries = extract_entries(DOC);
+        let stray = OriginalByteOffset::new(3);
+        assert_eq!(follow_selection(DOC, &entries, stray, DOC, &entries), None);
+    }
+
+    #[test]
+    fn the_edit_map_moves_the_suffix_and_holds_the_prefix() {
+        assert_eq!(map_through_edit("abcdef", "abXYcdef", 4), Some(6));
+        assert_eq!(
+            map_through_edit("abcdef", "abXYcdef", 2),
+            Some(4),
+            "insertion AT it"
+        );
+        assert_eq!(map_through_edit("abcdef", "abXYcdef", 1), Some(1));
+        assert_eq!(map_through_edit("abcdef", "abef", 4), Some(2));
+        assert_eq!(
+            map_through_edit("abcdef", "abef", 2),
+            None,
+            "inside the deletion"
+        );
+        assert_eq!(map_through_edit("aaaa", "aaaaaa", 0), Some(0));
     }
 }
 

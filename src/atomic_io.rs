@@ -160,6 +160,15 @@ impl AtomicPublish {
     /// a caller that hands the *path* to an external writer drops it and uses
     /// [`temp_path`](Self::temp_path) plus [`publish_external`](Self::publish_external).
     fn stage(path: &Path) -> std::io::Result<(Self, std::fs::File)> {
+        // The name before anything touches the path (TDD 1.4a): on Windows a device
+        // name (`nul.pdf`) addresses the device, and so does every temp staged beside
+        // it, whose name begins the same way — MEASURED, staging `nul.html` succeeded
+        // and the publish then failed as a bare "Incorrect function." (os error 1).
+        // Screened here, at the step every writer through this module passes —
+        // document save, both export sinks and the session file — so none of them can
+        // bypass it. The rule and its wording are `docio`'s, shared with the readers.
+        crate::docio::content::screen_name(path, crate::docio::host_rules())
+            .map_err(crate::docio::content::Refusal::into_io_error)?;
         // Write through an existing symlink to its real target rather than
         // replacing the symlink with a plain file (N3). A target that doesn't
         // exist yet (first save of a new document) has nothing to canonicalize —
@@ -785,6 +794,50 @@ mod tests {
             assert!(
                 no_temp_files_left(&dir),
                 "no temp litter after an overwrite"
+            );
+        }
+    }
+
+    /// **A Windows device name is refused at the staging step, so every writer through
+    /// this module is screened (TDD 1.4a, 25.7).** The PDF export staged through
+    /// [`stage_publish`] directly, past the screen `docio::write_document` applied, so
+    /// `nul.pdf` was never refused by name. Both entry points are asserted: the refusal
+    /// names the device and nothing is staged beside the destination — the temp's own
+    /// name (`nul.html.<pid>…scribtmp`) is a device name too, so staging it at all
+    /// addresses the device. Mutation: with the screen in `stage` removed, the write
+    /// fails, if at all, without naming the device, and `stage_publish` succeeds.
+    ///
+    /// Off Windows these are ordinary names and are written normally.
+    #[test]
+    fn a_windows_device_name_is_refused_before_anything_is_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["nul.html", "NUL.PDF", "com9.html"] {
+            let path = dir.path().join(name);
+            if !cfg!(windows) {
+                write_atomic(&path, "<p>ordinary</p>").unwrap();
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "<p>ordinary</p>");
+                let staged = stage_publish(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+                staged.abandon();
+                continue;
+            }
+            let written = write_atomic(&path, "<p>mine</p>").expect_err(name);
+            assert_eq!(written.kind(), std::io::ErrorKind::InvalidData, "{name}");
+            assert!(
+                written.to_string().contains("is a Windows device name"),
+                "{name}: the refusal names why: {written}"
+            );
+            match stage_publish(&path) {
+                Ok(staged) => {
+                    let temp = staged.temp_path().display().to_string();
+                    staged.abandon();
+                    panic!("{name}: staged a temp at {temp}");
+                }
+                Err(e) => assert!(e.to_string().contains("is a Windows device name"), "{e}"),
+            }
+            assert_eq!(
+                std::fs::read_dir(dir.path()).unwrap().count(),
+                0,
+                "{name}: the refused write left nothing in the folder"
             );
         }
     }

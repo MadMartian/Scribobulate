@@ -55,6 +55,74 @@ fn platform_surface_to_screen(surface: &gtk::gdk::Surface, x: i32, y: i32) -> Op
     None
 }
 
+// ── a face for the scripts a requested stack cannot draw ────────────────────────────
+
+/// The family to lay a run out in after the faces it asked for, so a character none of
+/// them can draw still finds a face rather than Pango's hex box — or `None` where this
+/// platform's font map already falls back over every installed face.
+///
+/// Only Windows answers: Pango's Win32 font map falls back only through its own alias
+/// table, and the tables for the generic families name no Korean face a stock Windows
+/// installs (see `win32::script_fallback`). fontconfig and Core Text supply fallback of
+/// their own, so `None` there leaves every run described exactly as before.
+/// `pangospan::family_with_fallback` is the one place this becomes a family.
+pub(crate) fn script_fallback_family() -> Option<String> {
+    platform_script_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_script_fallback_family() -> Option<String> {
+    win32::script_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_script_fallback_family() -> Option<String> {
+    None
+}
+
+/// The face to LEAD a short symbol string with where the page's own face cannot draw
+/// it — or `None` where this platform's font map already finds a fitting face itself.
+///
+/// Only Windows answers, for the cause above with a worse landing: the alias table
+/// reaches a face that covers the symbol and draws it as a speck (see
+/// `win32::script_fallback`), so leading is the only placement that works. Linux and
+/// macOS return `None` and their indicator is laid out exactly as before.
+pub(crate) fn symbol_fallback_family() -> Option<&'static str> {
+    platform_symbol_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_symbol_fallback_family() -> Option<&'static str> {
+    win32::symbol_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_symbol_fallback_family() -> Option<&'static str> {
+    None
+}
+
+/// The face to set a base letter AND its combining marks in, where the run's own face
+/// has the letter but not every mark — or `None` where nothing is to be changed.
+///
+/// Only Windows answers, for the same cause with a third landing: the alias table takes
+/// a mark the lead face lacks to another face in a run of its own, and HarfBuzz cannot
+/// place a mark against a base in another run, so `n` + U+0303 drew its tilde detached
+/// (see `win32::script_fallback`). Linux and macOS return `None`, and every run there
+/// is laid out exactly as before. `pangospan::mark_cover` is the one place it is used.
+pub(crate) fn mark_fallback_family() -> Option<&'static str> {
+    platform_mark_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_mark_fallback_family() -> Option<&'static str> {
+    win32::mark_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_mark_fallback_family() -> Option<&'static str> {
+    None
+}
+
 // ── which process holds the front (tests only) ────────────────────────────────────
 
 /// The pid of the frontmost application, for a GTK test that needs an active window and
@@ -321,6 +389,19 @@ fn platform_process_footprint_bytes() -> Option<u64> {
 #[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
 fn platform_process_footprint_bytes() -> Option<u64> {
     None
+}
+
+/// What the login session says about the screen being locked, for the memory gates (see
+/// `mac::process::session_screen_lock` for the three-way shape). Only macOS has the idea:
+/// elsewhere there is nothing to read and the screen counts as unlocked.
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn session_screen_lock() -> Option<Option<bool>> {
+    mac::process::session_screen_lock()
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+pub(crate) fn session_screen_lock() -> Option<Option<bool>> {
+    Some(None)
 }
 
 /// Opt this process in or out of the kernel collapsing its memory into huge pages,
@@ -593,6 +674,167 @@ fn platform_mounts_on_lookup(dir: &std::path::Path) -> bool {
 fn platform_mounts_on_lookup(dir: &std::path::Path) -> bool {
     let _ = dir;
     false
+}
+
+// ── whether live reload survives its folder being replaced ──────────────────────────
+
+/// Which directory stands at a path, as the filesystem identifies it: two answers are
+/// equal only for the same directory, so a folder deleted (or moved away) and recreated
+/// under the same name reads as a different one. Opaque outside this module — the only
+/// question asked of it is equality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))] // only Windows constructs one
+pub(crate) struct FolderIdentity {
+    volume: u64,
+    index: u128,
+}
+
+/// Whether this platform's GIO file monitor is bound to the folder it was attached in
+/// rather than to the path, so a folder replaced under it leaves live reload watching
+/// nothing until the application attaches a new one (`window::rewatch`).
+///
+/// - **Windows**: yes — MEASURED, see `platform::win32::folder_identity`.
+/// - **Linux and macOS**: no. GIO keeps watching the path through a folder being
+///   deleted and recreated (the Linux seat observed it keep firing), so the application adds
+///   nothing there and their behaviour is unchanged.
+pub(crate) fn doc_monitor_is_bound_to_its_folder() -> bool {
+    platform_doc_monitor_is_bound_to_its_folder()
+}
+
+/// The identity of the directory at `dir`, or `NotFound` when nothing is there. Asked
+/// only where [`doc_monitor_is_bound_to_its_folder`] is true; elsewhere it answers
+/// `Unsupported`, which the caller treats like any other folder it could not ask about.
+/// Blocking: call it off the main thread (`docio::folder_identity`).
+pub(crate) fn folder_identity(dir: &std::path::Path) -> std::io::Result<FolderIdentity> {
+    platform_folder_identity(dir)
+}
+
+/// Whether the GIO file monitor this platform would attach on `path` never fires, so live
+/// reload for that document has to poll the file itself (`window::rewatch`).
+///
+/// - **Windows**: for a document opened through a share (`\\server\share\…`) or another
+///   non-disk prefix — MEASURED, see `platform::win32::unc_monitor`.
+/// - **Linux and macOS**: never. Their paths have no prefix GIO misspells, and what a
+///   network filesystem reports to inotify or kqueue is not this question.
+pub(crate) fn doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    platform_doc_monitor_is_blind_at(path)
+}
+
+#[cfg(windows)]
+fn platform_doc_monitor_is_bound_to_its_folder() -> bool {
+    true
+}
+
+#[cfg(windows)]
+fn platform_doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    win32::doc_monitor_is_blind_at(path)
+}
+
+#[cfg(not(windows))]
+fn platform_doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    let _ = path;
+    false
+}
+
+#[cfg(windows)]
+fn platform_folder_identity(dir: &std::path::Path) -> std::io::Result<FolderIdentity> {
+    win32::folder_identity(dir)
+}
+
+#[cfg(not(windows))]
+fn platform_doc_monitor_is_bound_to_its_folder() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+fn platform_folder_identity(dir: &std::path::Path) -> std::io::Result<FolderIdentity> {
+    let _ = dir;
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(test)]
+mod folder_identity_tests {
+    use super::*;
+
+    /// The one property `window::rewatch` relies on: the same folder answers the same,
+    /// a folder recreated at the same path answers differently, and a missing one is
+    /// `NotFound` rather than any other failure.
+    #[test]
+    fn a_recreated_folder_is_a_different_folder_and_a_missing_one_is_not_found() {
+        if !doc_monitor_is_bound_to_its_folder() {
+            println!(
+                "SKIPPED [3.6]: the folder identity is asked only where the file monitor \
+                 is bound to its folder (Windows); GIO follows the path here"
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("docs");
+        std::fs::create_dir(&dir).unwrap();
+
+        let first = folder_identity(&dir).expect("an existing folder has an identity");
+        assert_eq!(
+            folder_identity(&dir).unwrap(),
+            first,
+            "asked twice, one folder"
+        );
+
+        let sibling = root.path().join("other");
+        std::fs::create_dir(&sibling).unwrap();
+        assert_ne!(folder_identity(&sibling).unwrap(), first);
+
+        std::fs::remove_dir(&dir).unwrap();
+        let gone = folder_identity(&dir).expect_err("nothing stands at the path");
+        assert_eq!(gone.kind(), std::io::ErrorKind::NotFound, "{gone}");
+        let gone_deeper = folder_identity(&dir.join("deeper")).expect_err("nor below it");
+        assert_eq!(
+            gone_deeper.kind(),
+            std::io::ErrorKind::NotFound,
+            "{gone_deeper}"
+        );
+
+        std::fs::create_dir(&dir).unwrap();
+        assert_ne!(
+            folder_identity(&dir).unwrap(),
+            first,
+            "the same name recreated is a different folder"
+        );
+    }
+}
+
+#[cfg(test)]
+mod blind_monitor_tests {
+    use super::doc_monitor_is_blind_at;
+    use std::path::Path;
+
+    /// Which spellings of a document's path leave GIO's monitor blind: on Windows a share in
+    /// either spelling and the other non-disk prefixes, never a drive path in either
+    /// spelling; elsewhere nothing, since the same strings are ordinary relative names.
+    #[test]
+    fn a_share_is_blind_on_windows_and_a_drive_path_never_is() {
+        let blind_on_windows = [
+            r"\\localhost\C$\docs\plan.md",
+            r"\\server\share\plan.md",
+            r"\\?\UNC\server\share\plan.md",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\plan.md",
+            r"\\.\pipe\plan.md",
+        ];
+        let watchable = [
+            r"C:\docs\plan.md",
+            r"\\?\C:\docs\plan.md",
+            "/home/u/plan.md",
+        ];
+        for path in blind_on_windows {
+            assert_eq!(
+                doc_monitor_is_blind_at(Path::new(path)),
+                cfg!(windows),
+                "{path}"
+            );
+        }
+        for path in watchable {
+            assert!(!doc_monitor_is_blind_at(Path::new(path)), "{path}");
+        }
+    }
 }
 
 #[cfg(test)]

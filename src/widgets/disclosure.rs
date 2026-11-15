@@ -256,6 +256,18 @@ fn indicator(theme: &crate::theme::Theme, expanded: bool, size: i32) -> gtk::Wid
                 // reason (see `MarkerGlyph`).
                 let label = gtk::Label::new(Some(glyph.as_plain()));
                 label.set_size_request(size, size);
+                if let Some(family) = glyph_family(theme, glyph.as_plain(), &label.pango_context())
+                {
+                    // Markup rather than an attribute list: `Label::set_attributes` is
+                    // banned for the table cells' two-writer overlay, and a span is how
+                    // the rest of the project names a face for a run. Both parts go
+                    // through the one Pango escaper, so the glyph stays text.
+                    label.set_markup(&format!(
+                        "<span font_family=\"{}\">{}</span>",
+                        crate::export::markup::escape_pango(&family),
+                        glyph.escaped_for_pango_markup()
+                    ));
+                }
                 return label.upcast();
             }
             MarkerSubstitute::Drawn => {
@@ -272,6 +284,39 @@ fn indicator(theme: &crate::theme::Theme, expanded: bool, size: i32) -> gtk::Wid
     // `candidates()` always ends in `Drawn`, so the loop returns. Kept total rather
     // than unwrapped: a silent indicator is this control's worst failure.
     gtk::Image::from_icon_name(ICON_COLLAPSED).upcast()
+}
+
+/// The family a glyph indicator is laid out in, or `None` to leave it on the face it
+/// inherits from the page — which is every case on a platform whose font map finds a
+/// fitting face itself, and every glyph the page's face can draw.
+///
+/// **Why a glyph can need one.** On Windows Pango falls back only through its own alias
+/// table, and from the desktop's Segoe UI that table reaches MS UI Gothic before any
+/// symbol face. Segoe UI has `▼` but not `▶`, so a theme stating the `▶`/`▼` pair drew
+/// its expanded arrow at 8×7 px and its collapsed one as MS UI Gothic's 9pt bitmap — 4×4
+/// dark pixels, a speck — while Linux draws 10×11. The platform's symbol face
+/// then LEADS the list, with the page's own stack after it: appending it was measured and
+/// changed nothing, because MS UI Gothic covers the character and answers first.
+///
+/// Only a glyph the page's face cannot draw is moved, so a theme whose glyph is set in its
+/// own face (`[+]` in a monospace stack) keeps it. The page's face is the one Pango
+/// actually loads for the stack (`pangospan::lead_face`, the probe the combining-mark
+/// cover shares): under any themed stack this used to probe `Sans` instead, because the
+/// stack reached it spelled with a space after each comma (`CssSafeFontStack::pango_family`).
+fn glyph_family(
+    theme: &crate::theme::Theme,
+    glyph: &str,
+    ctx: &gtk::pango::Context,
+) -> Option<String> {
+    let symbol = crate::platform::symbol_fallback_family()?;
+    // The face the label inherits: the theme's stack, which the theme sheet sets on the
+    // preview, else the desktop's, which the label's own context already carries.
+    let page = match &theme.font_family {
+        Some(stack) => stack.pango_family(),
+        None => ctx.font_description()?.family()?.to_string(),
+    };
+    let face = crate::pangospan::lead_face(ctx, &page)?;
+    (!crate::pangospan::face_covers(&face, glyph)).then(|| format!("{symbol},{page}"))
 }
 
 /// The CSS node an indicator SHAPE draws its mark on, or `None` where the shape carries
@@ -617,6 +662,150 @@ mod tests {
         };
         assert_eq!(at(1.0), 24, "the theme's design-time value");
         assert_eq!(at(2.0), 48, "scaled explicitly, not left at design size");
+    }
+
+    /// **A themed `▶` draws as an arrow at the page's text size, never as a speck.**
+    ///
+    /// The marker size is the indicator's BOX; a glyph inside it is drawn at the page's
+    /// font size (`data/themes.toml` says why), and on Linux `▶` in a 24px box measures
+    /// 10×11 px. On Windows it measured 4×4 dark pixels: Segoe UI lacks `▶`, and Pango's
+    /// alias table lands on MS UI Gothic's 9pt bitmap of it.
+    ///
+    /// Read from the PIXELS of a rendered preview, through the window's own paintable.
+    /// Every proxy short of that misleads here: the label's Pango ink extents report 8×8
+    /// for the speck (the bitmap does not fill the box its font claims), and the toggle's
+    /// own `WidgetPaintable` scales its content to the button's bounds, which drew the
+    /// stock chevron at two thirds of its size while measuring this.
+    ///
+    /// Mutation: dropping the `glyph_family` span from `indicator` fails this on Windows
+    /// (4×4 against 8×10). Linux and macOS take no span and are the control.
+    #[gtktest::test]
+    fn a_themed_triangle_glyph_draws_at_the_pages_text_size() {
+        use gtk::{gdk, gsk};
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.speck]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             disclosure_glyph = \"▶\"\ndisclosure_marker_size = 24\n",
+        );
+        let _guard = crate::theme::activate_for_test(themes.resolve("speck"));
+
+        let widget = crate::preview::render(
+            None,
+            "<details>\n<summary>Summary</summary>\n\nbody\n\n</details>\n",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+        );
+        let window = gtk::Window::new();
+        window.set_default_size(400, 200);
+        window.set_child(Some(&widget));
+        window.present();
+
+        let toggle = std::iter::successors(Some(widget.clone()), |w| {
+            w.first_child().or_else(|| {
+                std::iter::successors(Some(w.clone()), |a| a.parent())
+                    .find_map(|a| a.next_sibling())
+            })
+        })
+        .find_map(|w| {
+            w.downcast::<gtk::ToggleButton>()
+                .ok()
+                .filter(|t| t.has_css_class(CSS_CLASS))
+        })
+        .expect("the preview anchors a disclosure toggle");
+        let label = toggle
+            .child()
+            .and_downcast::<gtk::Label>()
+            .expect("a theme stating a glyph gets a GtkLabel indicator");
+
+        let paint = || {
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                snapshot.upcast_ref::<gdk::Snapshot>(),
+                f64::from(window.width()),
+                f64::from(window.height()),
+            );
+            snapshot.to_node()
+        };
+        crate::testpump::until(crate::testpump::Clock::Frame, "the toggle paints", || {
+            label.is_mapped() && label.width() > 0 && paint().is_some()
+        });
+        let node = paint().expect("the window snapshots to something");
+        let bounds = label
+            .compute_bounds(&window)
+            .expect("the label sits inside the window");
+        let renderer = gsk::CairoRenderer::new();
+        renderer
+            .realize(None::<&gdk::Surface>)
+            .expect("the Cairo renderer realizes without a surface");
+        let texture = renderer.render_texture(&node, Some(&bounds));
+        renderer.unrealize();
+        window.destroy();
+
+        let (w, h) = (texture.width() as usize, texture.height() as usize);
+        let mut px = vec![0u8; w * h * 4];
+        texture.download(&mut px, w * 4);
+        // Ink is whatever stands well apart from the page in the box's corner, which the
+        // centred glyph never reaches; anti-aliased fringes fall below the bar on purpose.
+        let page = [px[0], px[1], px[2]];
+        let (mut cols, mut rows) = (Vec::new(), Vec::new());
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if (0..3).any(|c| p[c].abs_diff(page[c]) > 0x80) {
+                cols.push(i % w);
+                rows.push(i / w);
+            }
+        }
+        let extent = |v: &[usize]| {
+            v.iter()
+                .max()
+                .zip(v.iter().min())
+                .map_or(0, |(a, b)| a - b + 1)
+        };
+        let (ink_w, ink_h) = (extent(&cols), extent(&rows));
+
+        // The page's text size in device pixels, from the face the label is drawn in.
+        let font = label
+            .pango_context()
+            .font_description()
+            .expect("the label has a font");
+        let size = f64::from(font.size()) / f64::from(gtk::pango::SCALE);
+        let font_px = if font.is_size_absolute() {
+            size
+        } else {
+            size * 96.0 / 72.0
+        };
+        let floor = (font_px / 2.0).round() as usize;
+        assert!(
+            ink_w >= floor && ink_h >= floor,
+            "the ▶ indicator drew {ink_w}×{ink_h} px of ink in a {w}×{h} box at a \
+             {font_px}px page font — under half the text size is a speck, not an arrow \
+             (Linux draws 10×11)"
+        );
+    }
+
+    /// **A glyph the page's own face draws stays in that face.** The symbol face leads
+    /// only for a glyph the page cannot draw, so a theme that sets its indicator in its
+    /// own type (`[+]` in a monospace stack) keeps it on every platform. Mutation:
+    /// skipping `glyph_family`'s coverage check fails this on Windows.
+    #[gtktest::test]
+    fn a_glyph_the_page_face_draws_keeps_that_face() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.plus]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             disclosure_glyph = \"[+]\"\n",
+        );
+        let _guard = crate::theme::activate_for_test(themes.resolve("plus"));
+        let label = build(false, 1.0, "Summary")
+            .child()
+            .and_downcast::<gtk::Label>()
+            .expect("a theme stating a glyph gets a GtkLabel indicator");
+        assert!(
+            !label.uses_markup() && label.label() == "[+]",
+            "`[+]` is in every page face, so its label must inherit that face untouched, \
+             not be set as {:?}",
+            label.label()
+        );
     }
 
     /// **A surviving control can be re-pointed at the state it now shows.**

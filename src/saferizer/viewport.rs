@@ -95,21 +95,61 @@ impl ViewportTopIter {
     /// when the adjustment reads `value`. For a value read DURING a `value-changed`
     /// emission, where `visible_rect` may not have caught up yet.
     pub(crate) fn top_y_for_value(view: &impl IsA<gtk::TextView>, value: f64) -> i32 {
-        value as i32 - view.as_ref().top_margin()
+        painted_offset(value) - view.as_ref().top_margin()
     }
 }
 
-/// Whether a `GtkTextView` vadjustment change from `prev` to `next` moves the text on
-/// screen.
+/// The whole-pixel offset a `GtkTextView` paints at when its vadjustment reads `value`.
 ///
 /// The view paints at the TRUNCATED value (`gtk_text_view_value_changed`, GTK 4.6.9
 /// gtktextview.c:8397, `(int) gtk_adjustment_get_value`). A wheel step leaves a fraction
 /// in the value, and the view's next allocation writes the truncated value back
 /// (`gtk_text_view_set_vadjustment_values`, :8331-8365). That write emits `value-changed`
-/// and moves nothing, so a handler that hides something on scroll must ask this, not
-/// react to the signal (GTK4Rs/AP-360).
-pub(crate) fn moves_painted_text(prev: f64, next: f64) -> bool {
-    prev.trunc() != next.trunc()
+/// and moves nothing, so a handler that hides something on scroll compares what is
+/// painted, not the value it was signalled with (GTK4Rs/AP-360).
+fn painted_offset(value: f64) -> i32 {
+    value.trunc() as i32
+}
+
+/// The text at the top of a `GtkTextView`'s viewport when its vadjustment reads a value:
+/// the buffer line there, and how many pixels of that line are above the edge. Two
+/// readings differ exactly when the text on screen moved, which is what a handler that
+/// hides a card on scroll must ask, not whether `value-changed` fired.
+///
+/// The value moves without the text in two ways. The fractional write-back
+/// ([`painted_offset`]): this reads at the truncated value, so it does not change. And a
+/// reflow: when a width change re-wraps the lines above the viewport, the view moves the
+/// value by the height they gained or lost so the line at the top stays put. MEASURED
+/// (Windows, GTK 4.24): widening a preview from 320 to 1000 px moved the value from 1920 to
+/// 1280 with the same paragraph at the top, and a card hidden on the value closed on every
+/// resize.
+///
+/// A view with no viewport has no lines to name; the painted offset stands in, so the
+/// comparison degrades to the write-back's (module contract, GTK4Rs/AP-263).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PaintedTop {
+    line: i32,
+    into: i32,
+}
+
+impl PaintedTop {
+    /// The top of `view`'s viewport at vadjustment `value`. Reads the value rather than
+    /// `visible_rect`, which may not have caught up inside a `value-changed` emission.
+    pub(crate) fn at(view: &impl IsA<gtk::TextView>, value: f64) -> Self {
+        let view: &gtk::TextView = view.as_ref();
+        if !has_viewport(view) {
+            return Self {
+                line: -1,
+                into: painted_offset(value),
+            };
+        }
+        let y = ViewportTopIter::top_y_for_value(view, value);
+        let (iter, line_top) = view.line_at_y(y);
+        Self {
+            line: iter.line(),
+            into: y - line_top,
+        }
+    }
 }
 
 /// The full visible range of a `GtkTextView`'s viewport: the top and bottom
@@ -162,8 +202,8 @@ impl ViewportRange {
     }
 }
 
-/// Whether this GTK is one where the allocation write-back [`moves_painted_text`] guards
-/// against was MEASURED: GTK 4.6.9 writes the truncated value back on the view's next
+/// Whether this GTK is one where the allocation write-back [`painted_offset`] answers was
+/// MEASURED: GTK 4.6.9 writes the truncated value back on the view's next
 /// allocation, and GTK 4.22 (macOS and Windows CI) was measured not to. A test that
 /// plants the write-back asserts it happened here, and reports a skip on any other GTK
 /// rather than pass on a run that never exercised it.
@@ -174,27 +214,28 @@ pub(crate) fn truncated_writeback_measured() -> bool {
 
 #[cfg(test)]
 mod painted_text_tests {
-    use super::moves_painted_text;
+    use super::painted_offset;
+
+    fn moves(prev: f64, next: f64) -> bool {
+        painted_offset(prev) != painted_offset(next)
+    }
 
     /// The values are the ones measured on a wheel scroll in split view: five steps to
     /// 416.40, then the view's allocation writing back 416.
     #[test]
     fn writing_back_the_truncated_value_does_not_move_the_text() {
-        assert!(!moves_painted_text(416.401_609_200_426_4, 416.0));
-        assert!(!moves_painted_text(83.280_321_840_085_28, 83.0));
-        assert!(!moves_painted_text(10.0, 10.0));
-        assert!(!moves_painted_text(10.2, 10.9));
+        assert!(!moves(416.401_609_200_426_4, 416.0));
+        assert!(!moves(83.280_321_840_085_28, 83.0));
+        assert!(!moves(10.0, 10.0));
+        assert!(!moves(10.2, 10.9));
     }
 
     #[test]
     fn a_scroll_across_a_pixel_moves_the_text() {
-        assert!(moves_painted_text(
-            333.121_287_360_341_1,
-            416.401_609_200_426_4
-        ));
-        assert!(moves_painted_text(416.0, 415.0));
-        assert!(moves_painted_text(0.9, 1.0));
-        assert!(moves_painted_text(0.0, 83.28));
+        assert!(moves(333.121_287_360_341_1, 416.401_609_200_426_4));
+        assert!(moves(416.0, 415.0));
+        assert!(moves(0.9, 1.0));
+        assert!(moves(0.0, 83.28));
     }
 }
 

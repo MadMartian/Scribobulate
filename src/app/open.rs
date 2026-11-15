@@ -381,6 +381,10 @@ pub(crate) fn attach_file_backing(
     if let Some(old) = tab.file_monitor.replace(Some(monitor)) {
         old.cancel_and_release();
     }
+    // The folder the monitor just opened travels with it: where a monitor is bound to
+    // that folder rather than to the path (Windows), replacing the folder blinds it, and
+    // this is what notices and attaches a new one (`window::rewatch`).
+    crate::window::follow_document_folder(tab, &path);
 }
 
 #[cfg(test)]

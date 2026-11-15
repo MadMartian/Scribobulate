@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
 <!--
   emblem-synchronizing-symbolic — two arrows chasing round a ring ("keep in
   sync"). Drawn for Scribobulate's File > Auto-Reload toggle.
@@ -20,8 +21,12 @@
   prettier passes (thin band, 150° arcs, small heads) rendered at 16px as a
   featureless ring — the gaps closed up and the arrowheads, the whole point of
   the glyph, were the first detail to vanish.
+
+  The comment sits INSIDE <svg>: gdk-pixbuf sniffs the head of the file for
+  "<svg", and a long comment before the root pushed it out of the sniff
+  window, so this icon failed to load on Linux ("Unrecognized image file
+  format") while a host theme hid the failure.
 -->
-<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
  <g fill="#2e3436">
   <path d="M 1.99 5.81 A 6.4 6.4 0 0 1 12.9 3.89 L 11.37 5.17 A 4.4 4.4 0 0 0 3.87 6.5 Z"/>
   <path d="M 14.2 2.79 L 10.07 6.26 L 13.4 8.19 Z"/>

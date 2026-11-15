@@ -295,10 +295,13 @@ fn assert_a_reported_death(fault: Fault, expect: Expect) -> String {
     }
     assert!(control.report.is_none(), "an unarmed child wrote a report");
 
+    // The exit codes say where a missing report was lost: a raw-thread overflow that
+    // faults again inside Windows' own exception dispatch dies before any filter runs.
     let text = armed.report.unwrap_or_else(|| {
         panic!(
-            "{name}: the armed child died and wrote no report:\n{}",
-            armed.stderr
+            "{name}: the armed child died and wrote no report (armed exited {:#010x}, \
+             control {:#010x}):\n{}",
+            armed.code, control.code, armed.stderr
         )
     });
 

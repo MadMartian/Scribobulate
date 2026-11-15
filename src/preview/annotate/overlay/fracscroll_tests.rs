@@ -116,7 +116,12 @@ fn the_first_selection_after_a_fractional_scroll_keeps_the_annotate_popover() {
     }
 
     // And a scroll that does move the text still hides it, so the test cannot pass on a
-    // scroll-hide that was simply switched off.
+    // scroll-hide that was simply switched off. A READER's scroll: every hand-scroll input
+    // sets `user_scrolling`, and the hide ignores the view's own programmatic travel.
+    {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        view.imp().user_scrolling.set(true);
+    }
     crate::saferizer::scrollpos::jump(&vadj, vadj.value() + 120.0);
     assert!(
         !pop.is_visible(),

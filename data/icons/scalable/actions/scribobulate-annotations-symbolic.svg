@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+<!--
+  scribobulate-annotations-symbolic — a speech bubble holding three lines of
+  text, the plain "comments" reading. Drawn for Scribobulate's Annotations
+  viewer toggle, under an APP-OWNED name: a host icon theme draws its own
+  glyph for a generic name such as `mail-mark-important-symbolic` (Breeze: a
+  badged envelope), and a host theme beats a bundled icon of the same name.
+  No host theme carries a `scribobulate-*` name, so this art always wins.
+
+  Fills only, no strokes — and NOT for the reason you would guess. GTK wraps a
+  symbolic SVG in a generated stylesheet whose first rule is
+  `rect,circle,path { fill: <fg> !important; }`, and that `!important` outranks
+  an authored `fill="none"`. A stroked outline therefore silently changes
+  SHAPE (a hollow ring becomes a solid disc) rather than merely losing its
+  colour; see scribobulate-unsafe-images-symbolic.svg for the measurement.
+  On 4.22+ a stroke is also dropped unless it opts in with
+  `class="foreground-stroke"`, which does not exist on 4.6.9, so fills-only is
+  the one portable spelling.
+
+  The bubble's 1px frame is therefore ONE closed path with an inner hole
+  (`fill-rule="evenodd"`; GTK overrides `fill` but not `fill-rule`), not a
+  stroked rounded rectangle. The tail is part of the same outline. The three
+  text lines are separate 1px bars sitting inside the hole, so they never
+  overlap the evenodd path. Every edge sits on an integer coordinate so the
+  frame and the lines land on the 16px pixel grid instead of smearing across
+  two rows. The lines are bars, not glyphs: text-as-paths would be unreadable
+  at this size anyway.
+  This comment sits INSIDE <svg>, not above it, on purpose: gdk-pixbuf's SVG
+  sniffer looks only at the first bytes of the file for `<svg`, and a long
+  header ahead of it makes GTK answer "Unrecognized image file format" and draw
+  the broken-image placeholder (MEASURED on this host with the comment above).
+-->
+ <g fill="#2e3436">
+  <!-- bubble: outer outline with tail, then the inner hole (evenodd) -->
+  <path fill-rule="evenodd" d="M3 1 H13 A2 2 0 0 1 15 3 V10 A2 2 0 0 1 13 12 H9 L5 15 V12 H3 A2 2 0 0 1 1 10 V3 A2 2 0 0 1 3 1 Z M3 2 A1 1 0 0 0 2 3 V10 A1 1 0 0 0 3 11 H13 A1 1 0 0 0 14 10 V3 A1 1 0 0 0 13 2 Z"/>
+  <!-- three lines of text -->
+  <path d="M4 4 h8 v1 h-8 z"/>
+  <path d="M4 6 h8 v1 h-8 z"/>
+  <path d="M4 8 h5 v1 h-5 z"/>
+ </g>
+</svg>

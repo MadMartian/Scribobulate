@@ -23,6 +23,10 @@
 /// its module docs — and because this one is already past the file-size soft limit.
 mod settle;
 
+/// A caret the reader moves mid-travel retires a buffer-ends key's scroll (TDD 9.33).
+/// Its own file for the same reason as `settle`.
+mod retire;
+
 pub(crate) use settle::after_scroll_settles;
 
 use gtk::glib;
@@ -347,7 +351,9 @@ fn viewport_is_real(page_size: Option<f64>) -> bool {
 /// The re-issue is skipped if the caret is no longer where the keystroke put it
 /// — the caret *is* the generation token, so a later navigation (or the opposite
 /// key) supersedes an earlier pending re-issue without any bookkeeping, and a
-/// stale one can never yank the reader somewhere they have since left.
+/// stale one can never yank the reader somewhere they have since left. Skipping the
+/// re-issue does not stop a scroll already in flight, so a caret the reader puts on
+/// screen mid-travel also ends the travel there ([`retire`]).
 ///
 /// GTK's own cursor movement and its own (doomed) scroll attempt are left
 /// untouched: on a warm document they already do the right thing and this adds
@@ -367,6 +373,9 @@ pub(crate) fn wire_buffer_ends_scroll(view: &gtk::TextView) {
             return;
         }
         let to_end = count > 0;
+        // A click during the travel must end it where the reader clicked; nothing in
+        // GTK retires a scroll animation in flight when the caret moves.
+        retire::arm(view, to_end);
         after_line_heights_validated(view, move |view| {
             let buffer = view.buffer();
             let insert = buffer.get_insert();
@@ -653,7 +662,7 @@ mod gtk_integration_tests {
     /// allocate. NOT pumped to a settled layout: a harness that lets validation
     /// finish first removes the precondition and the test passes on broken code
     /// (GTK4Rs/AP-78).
-    fn cold_editor() -> (
+    pub(super) fn cold_editor() -> (
         sourceview::Buffer,
         sourceview::View,
         gtk::ScrolledWindow,
@@ -719,7 +728,7 @@ mod gtk_integration_tests {
     ///
     /// Callers take this helper rather than writing a predicate, so a second absolute
     /// threshold cannot reappear one test at a time.
-    fn pump_until_layout_validated(adjustment: &gtk::Adjustment) {
+    pub(super) fn pump_until_layout_validated(adjustment: &gtk::Adjustment) {
         let adjustment = adjustment.clone();
         let mut last = f64::NAN;
         let mut unchanged = 0u32;
