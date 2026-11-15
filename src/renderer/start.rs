@@ -255,7 +255,7 @@ impl Renderer {
                 let placeholder_tooltip =
                     image_placeholder_tooltip(&resolution, loaded.is_some(), dest_url.as_ref());
                 if let Some(image) = loaded {
-                    self.anchor_image(&image);
+                    self.anchor_image(&image, None);
                 } else if let Some(tooltip) = placeholder_tooltip {
                     self.anchor_broken(&tooltip);
                     self.report_refused_image(&resolution);
@@ -331,6 +331,7 @@ impl Renderer {
                     self.picture_open = Some(Vec::new());
                 }
                 ImgTag::PictureClose => self.flush_open_picture(),
+                ImgTag::Declared(size) => self.declared_size = Some(size),
                 ImgTag::Candidate(src) => match &mut self.picture_open {
                     Some(group) => group.push(src),
                     None => self.render_image_slot(&[src]),
@@ -540,7 +541,15 @@ impl Renderer {
             .get(span_index)
             .and_then(|span| span.body.clone());
 
-        self.block_sep();
+        // The first child of a list item starts ON the marker's row, as a paragraph does
+        // (`blockspacing`). A `block_sep()` here wrote the gap the marker is drawn beside,
+        // leaving the bullet on an empty row and the summary on the next. Cleared
+        // either way: this block is now the item's content, not its marker's neighbour.
+        if self.inter.list_item_open {
+            self.inter.list_item_open = false;
+        } else {
+            self.block_sep();
+        }
         let mut iter = self.tip();
         // Where the line starts, recorded on the frame before anything is written
         // into it: this is the offset every consumer that must address content
@@ -670,6 +679,7 @@ impl Renderer {
                 self.render_image_slot(&candidates);
             }
         }
+        self.declared_size = None;
     }
 
     /// Render one image slot: the FIRST candidate that decodes wins (reusing the
@@ -679,6 +689,9 @@ impl Renderer {
     /// remote/escaping/other-scheme src is Refused unless "Show Unsafe Images" —
     /// `<picture>`/`<img>` widens what renders, never what is trusted.
     fn render_image_slot(&mut self, candidates: &[String]) {
+        // Taken before any early return, so a size never outlives the slot it was
+        // declared for and lands on the next image.
+        let declared = self.declared_size.take();
         // **A COLLAPSED body's images are not resolved, not fetched and not anchored.**
         // The collapse mechanism's own contract is that a hidden body's events simply
         // do not reach the buffer (`events.rs`), and raw-HTML events are exempted from
@@ -701,7 +714,7 @@ impl Renderer {
         for src in candidates {
             let resolution = resolve_image(src, self.doc_dir.as_deref(), self.allow_unsafe_images);
             if let Some(image) = load_texture(&resolution, self.zoom) {
-                self.anchor_image(&image);
+                self.anchor_image(&image, declared);
                 return;
             }
         }
@@ -723,7 +736,11 @@ impl Renderer {
 
     /// Anchor a loaded texture as a `GtkPicture` (with the selection-tint overlay)
     /// in the buffer — the shared build for a Markdown image and a `<picture>`.
-    fn anchor_image(&mut self, image: &LoadedImage) {
+    fn anchor_image(
+        &mut self,
+        image: &LoadedImage,
+        declared: Option<super::picture::DeclaredSize>,
+    ) {
         self.block_sep();
         let mut iter = self.tip();
         let anchor = self.buf.create_child_anchor(&mut iter);
@@ -747,7 +764,12 @@ impl Renderer {
         // zoom step re-renders the whole preview (`window/zoom.rs`), so a render-time
         // value is always current, and `size_allocate` is the last place this project
         // wants a second consumer of anything (GTK4Rs/AP-22/GTK4Rs/AP-29). TDD 13.11.
-        let extent = super::image::zoomed_extent(image.intrinsic.w, image.intrinsic.h, self.zoom);
+        let extent = super::image::declared_extent(
+            image.intrinsic.w,
+            image.intrinsic.h,
+            declared,
+            self.zoom,
+        );
         const INIT_SEED_W: i32 = 640;
         let seed = super::image::fit_within(extent, extent.w.min(INIT_SEED_W));
         let pic = gtk::Picture::for_paintable(&image.texture);

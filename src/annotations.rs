@@ -1,16 +1,15 @@
 //! Annotations viewer model.
 //!
-//! A *display-free* extraction of the document's comment-bearing annotations
-//! (CriticMarkup comments) for the annotations sidebar — the direct analogue of
+//! A *display-free* extraction of the document's annotations
+//! (CriticMarkup highlights and comments) for the annotations sidebar — the direct analogue of
 //! `outline::extract_headings` for headings. Kept free of any GTK type so it can be
 //! unit-tested under POLICY's no-live-display coverage gate.
 //!
 //! **Identity, not index.** Each entry carries its `src_span` (its byte span in the
 //! ORIGINAL source), and navigation keys on that span — never on the entry's
 //! position in the list. The list is a *filtered subsequence* of every CriticMarkup
-//! construct (bare highlights and the inert suggested-edit kinds are excluded, TDD
-//! 20.2), so a row's position is generally **not** its margin chip's position. A
-//! viewer that navigated by row index would silently open the wrong annotation's
+//! construct (the inert suggested-edit kinds are excluded, TDD 20.2), so a row's
+//! position is generally **not** its margin chip's position. A viewer that navigated by row index would silently open the wrong annotation's
 //! popover on any document containing an excluded construct (GTK4Rs/AP-74).
 
 use crate::annotate::{extract, AnnKind};
@@ -26,26 +25,27 @@ pub(crate) struct AnnotationEntry {
     /// Typed [`OriginalByteOffset`] so it can never be confused with a buffer char
     /// offset or a cleaned-source byte (the source of past displacement bugs).
     pub(crate) src_span: Range<OriginalByteOffset>,
-    /// Which CriticMarkup construct this is (`Highlight` with a comment, or a point
-    /// `Comment`) — the only two kinds `is_listed` admits.
+    /// Which CriticMarkup construct this is (a `Highlight`, with or without a comment, or
+    /// a point `Comment`) — the only two kinds `is_listed` admits.
     pub(crate) kind: AnnKind,
-    /// The comment body text. Always non-empty for a listed annotation (a listed
-    /// annotation is comment-bearing by definition).
+    /// The comment body text. Empty for a bare highlight, which has no comment yet
+    /// (TDD 17.67); non-empty for every other listed annotation.
     pub(crate) comment: String,
     /// The highlighted claim snippet (shown dimmed as secondary text) for a
     /// `Highlight`; `None` for a point comment, which annotates a position, not a span.
     pub(crate) claim: Option<String>,
 }
 
-/// Extract the document's comment-bearing annotations, in document order.
+/// Extract the document's annotations, in document order.
 ///
 /// Membership is exactly [`crate::annotate::Annotation::is_listed`] — the SAME
 /// predicate the preview's margin chips use — so the list and the chips can never
 /// disagree about what is an annotation (TDD 20.2). The claim snippet is read from
-/// the *cleaned* text (the highlighted content range), matching how `build_markers`
-/// derives the chip's claim, so the two presentations stay identical.
+/// the *cleaned* text (the highlighted content range) and read as the page shows it
+/// ([`crate::annotate::plain_claim`]), matching how `build_markers` derives the chip's
+/// claim, so the two presentations stay identical.
 ///
-/// An empty document — or one with no comment-bearing annotations — yields an empty
+/// An empty document — or one with no annotations — yields an empty
 /// vector (the panel renders that as a muted "No annotations" placeholder, not an
 /// error — TDD 20.3).
 pub(crate) fn extract_entries(source: &str) -> Vec<AnnotationEntry> {
@@ -59,13 +59,12 @@ pub(crate) fn extract_entries(source: &str) -> Vec<AnnotationEntry> {
             // re-wrapping, and a cleaned offset here would not compile.
             src_span: a.src_span.clone(),
             kind: a.kind,
-            // `is_listed` guarantees `comment.is_some()`.
+            // Absent only on a bare highlight, which has no comment yet.
             comment: a.comment.clone().unwrap_or_default(),
             claim: match a.kind {
-                AnnKind::Highlight => Some(
-                    ex.cleaned[a.cleaned_content.start.raw()..a.cleaned_content.end.raw()]
-                        .to_string(),
-                ),
+                AnnKind::Highlight => Some(crate::annotate::plain_claim(
+                    &ex.cleaned[a.cleaned_content.start.raw()..a.cleaned_content.end.raw()],
+                )),
                 _ => None,
             },
         })
@@ -253,10 +252,44 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_highlight_is_not_listed() {
-        // A comment-less highlight is a rendering feature, not an annotation (TDD 20.2).
-        let es = extract_entries("The sky is {==blue==} today.");
-        assert!(es.is_empty());
+    fn a_bare_highlight_is_listed_as_a_highlight_with_an_empty_comment() {
+        // `{==claim==}` alone is valid CriticMarkup and renders as a highlight, so the
+        // viewer lists it — with no comment yet — rather than hiding a mark the reader can
+        // see in the document (TDD 17.67, 20.2).
+        let md = "The sky is {==blue==} today.";
+        let es = extract_entries(md);
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].kind, AnnKind::Highlight);
+        assert_eq!(es[0].comment, "");
+        assert_eq!(es[0].claim.as_deref(), Some("blue"));
+        assert_eq!(
+            &md[es[0].src_span.start.raw()..es[0].src_span.end.raw()],
+            "{==blue==}"
+        );
+    }
+
+    #[test]
+    fn a_bare_highlight_and_a_commented_one_are_both_listed_in_order() {
+        let es = extract_entries("a {==one==} b {==two==}{>>note<<} c {>>point<<}");
+        let shape: Vec<_> = es
+            .iter()
+            .map(|e| (e.kind, e.comment.as_str(), e.claim.as_deref()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (AnnKind::Highlight, "", Some("one")),
+                (AnnKind::Highlight, "note", Some("two")),
+                (AnnKind::Comment, "point", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_claim_is_quoted_as_the_page_shows_it() {
+        // The viewer quotes what the reader sees, never the Markdown behind it (TDD 17.69).
+        let es = extract_entries("x {==a **bold** [link](u) `code` word==}{>>c<<} y");
+        assert_eq!(es[0].claim.as_deref(), Some("a bold link code word"));
     }
 
     #[test]
@@ -267,15 +300,15 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_highlight_before_a_comment_does_not_shift_membership() {
-        // The membership-vs-position hazard: the
-        // bare highlight is skipped, so the ONE listed entry is the commented point,
-        // and its src_span identity — not its list position — is what will navigate.
-        let md = "x {==bare==} y {>>real note<<} z";
+    fn an_inert_kind_before_a_comment_does_not_shift_membership() {
+        // The membership-vs-position hazard: the insertion is skipped, so the ONE listed
+        // entry is the commented point, and its src_span identity — not its list
+        // position — is what will navigate.
+        let md = "x {++ins++} y {>>real note<<} z";
         let es = extract_entries(md);
         assert_eq!(es.len(), 1);
         assert_eq!(es[0].comment, "real note");
-        // The identity span points at the real annotation, past the bare highlight.
+        // The identity span points at the real annotation, past the insertion.
         assert!(md[es[0].src_span.start.raw()..es[0].src_span.end.raw()].starts_with("{>>"));
     }
 

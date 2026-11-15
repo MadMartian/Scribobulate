@@ -318,7 +318,26 @@ pub(crate) struct ChromeSession {
     /// corrupt value cannot reach the layout (POLICY: a malformed file must never
     /// break layout, on the same principle that a malformed config never prevents
     /// startup). A session file predating this key restores to the even split.
+    #[serde(deserialize_with = "lenient_split")]
     pub sidebar_split: f64,
+}
+
+/// Reads `sidebar_split` leniently: a value that is not a number (a hand-edited
+/// `"abc"`) costs the window its remembered divider, not the session every window and
+/// tab. A number of any magnitude passes through; [`sidebar_divider_position`] makes an
+/// out-of-range one harmless at the point of use.
+fn lenient_split<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    use serde::Deserialize;
+    let value = toml::Value::deserialize(d)?;
+    let number = match value {
+        toml::Value::Float(f) => Some(f),
+        toml::Value::Integer(i) => Some(i as f64),
+        _ => None,
+    };
+    Ok(number.unwrap_or_else(|| {
+        log::warn!("session: sidebar_split is not a number; using the even split");
+        ChromeSession::default().sidebar_split
+    }))
 }
 
 impl Default for ChromeSession {
@@ -670,6 +689,28 @@ mod tests {
         })
         .unwrap();
         assert_eq!(parse(&text).windows[0].chrome.sidebar_split, 0.75);
+    }
+
+    /// A `sidebar_split` that is not a number costs the window its divider, never the
+    /// session: the tabs beside it (and every other window) must survive.
+    #[test]
+    fn a_wrongly_typed_sidebar_split_keeps_the_session() {
+        for bad in ["\"abc\"", "true", "[1, 2]", "{ a = 1 }"] {
+            let text = format!(
+                "[[windows]]\nwidth = 900\n[[windows.tabs]]\npath = \"/a.md\"\n\
+                 [windows.chrome]\nsidebar_split = {bad}\n\
+                 [[windows]]\nwidth = 800\n"
+            );
+            let s = parse(&text);
+            assert_eq!(s.windows.len(), 2, "{bad}: both windows survive");
+            assert_eq!(s.windows[0].tabs.len(), 1, "{bad}: the tab survives");
+            assert_eq!(s.windows[0].chrome.sidebar_split, 0.5, "{bad}: even split");
+        }
+        let s = parse("[[windows]]\n[windows.chrome]\nsidebar_split = 1\n");
+        assert_eq!(
+            s.windows[0].chrome.sidebar_split, 1.0,
+            "an integer reads as a number"
+        );
     }
 
     /// The stored fraction reaches the layout only through `sidebar_divider_position`,

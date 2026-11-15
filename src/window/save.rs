@@ -667,7 +667,7 @@ fn save_all_next(
                     // Not a navigation (TDD 23.9) — nor were the per-prompt
                     // switches below; the reader asked to save, not to tour the
                     // strip, so Back must not replay the tour.
-                    let _no_history = winstate::nav_suppress(window);
+                    let _no_history = winstate::nav_hold(window);
                     chrome.tabs.focus_page(&t.content_box);
                 }
             }
@@ -688,7 +688,7 @@ fn save_all_next(
         // Make the untitled tab visible so the chooser is about the right document.
         // Not a navigation (TDD 23.9).
         if let Some(chrome) = winstate::chrome(window) {
-            let _no_history = winstate::nav_suppress(window);
+            let _no_history = winstate::nav_hold(window);
             chrome.tabs.focus_page(&tab.content_box);
         }
         let rest = remaining;

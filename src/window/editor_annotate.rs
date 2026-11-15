@@ -57,12 +57,20 @@ pub(crate) fn wire_editor_annotate_card(
     let entry_open = Rc::new(Cell::new(false));
     let pending: Rc<RefCell<Option<PendingTarget>>> = Rc::new(RefCell::new(None));
 
+    //
+    // `hide` is reached from controllers and handlers that live ON `bar` (the focus-leave
+    // controller, the Escape controller, the × button), so it must not own `bar`: a strong
+    // capture closes `bar` → controller → closure → `hide` → `bar` into a cycle that strands
+    // the card, the editor it points at and everything they own on every window close
+    // (GTK4Rs/AP-63, GTK4Rs/AP-140).
     let hide: Rc<dyn Fn()> = Rc::new({
-        let bar = bar.clone();
+        let bar = bar.downgrade();
         let entry_open = entry_open.clone();
         move || {
             entry_open.set(false);
-            bar.set_visible(false);
+            if let Some(bar) = bar.upgrade() {
+                bar.set_visible(false);
+            }
         }
     });
 

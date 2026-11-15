@@ -92,6 +92,10 @@ pub(crate) struct NavHistory {
     cursor: Option<usize>,
     /// Nesting depth of the "this page switch is not a navigation" scopes.
     suppress: u32,
+    /// Nesting depth of the "hold" scopes: a tour that must leave the history exactly as it
+    /// found it, because it ends by returning to the tab it started on. See
+    /// [`hold`](Self::hold).
+    hold: u32,
 }
 
 impl NavHistory {
@@ -102,6 +106,7 @@ impl NavHistory {
             entries: vec![NavPlace::whole(tab)],
             cursor: Some(0),
             suppress: 0,
+            hold: 0,
         }
     }
 
@@ -157,6 +162,26 @@ impl NavHistory {
     /// forever", which would silently disable the whole feature.
     pub(crate) fn unsuppress(&mut self) {
         self.suppress = self.suppress.saturating_sub(1);
+    }
+
+    /// Enter a scope in which page switches leave the history **untouched** — no append, and
+    /// unlike [`suppress`](Self::suppress) no [`follow`](Self::follow) either. For a tour
+    /// that returns to where it began (Save All revealing each untitled document to
+    /// prompt about it, TDD 23.9): a follow overwrites the cursor's entry and collapses
+    /// equal neighbours, so a tour through a tab already adjacent in the history dropped
+    /// that stop for good, and the closing switch home could not put it back.
+    ///
+    /// Only valid while the tour cannot remove a tab or let the reader navigate; a scope
+    /// that can (Close Other Tabs) needs `suppress`, whose follow keeps the history
+    /// pointing at a document that exists.
+    pub(crate) fn hold(&mut self) {
+        self.hold += 1;
+    }
+
+    /// Leave a [`hold`](Self::hold) scope. Saturating, for the reason
+    /// [`unsuppress`](Self::unsuppress) is.
+    pub(crate) fn unhold(&mut self) {
+        self.hold = self.hold.saturating_sub(1);
     }
 
     /// Whether recording is currently suppressed — for tests and for the

@@ -372,6 +372,22 @@ pub(crate) struct DiskObservation<'a> {
     pub(crate) settled: bool,
 }
 
+/// Whether a Dismiss still covers what the file holds now. The user dismissed the
+/// prompt about one on-disk text (`prompted_for`); a different text is a different
+/// conflict and is not answered by it (TDD 5.1). An absent read is covered by
+/// nothing, and a Dismiss with no recorded text covers nothing either, so an
+/// unknowable case prompts rather than silently swallows.
+pub(crate) fn dismissal_covers(
+    dismissed: bool,
+    prompted_for: Option<&str>,
+    disk: DiskRead,
+) -> bool {
+    match (dismissed, prompted_for, disk) {
+        (true, Some(text), DiskRead::Content(disk)) => text == disk,
+        _ => false,
+    }
+}
+
 /// Decide how to respond to an external file change. Pure decision core of
 /// `window::check_and_reload_tab` (TDD 3.1, 3.4, 3.5, 3.6, 4.6, 5.1, 9.13).
 ///
@@ -610,6 +626,18 @@ mod tests {
             ..dirty
         };
         assert_eq!(external_change_action(&dismissed), Ignore);
+    }
+
+    /// TDD 5.1: a Dismiss answers the prompt about ONE on-disk text. The same text
+    /// again stays quiet; a different one is a new conflict.
+    #[test]
+    fn a_dismissal_covers_only_the_text_it_was_given_about() {
+        use super::dismissal_covers as covers;
+        assert!(covers(true, Some("v2"), DiskRead::Content("v2")));
+        assert!(!covers(true, Some("v2"), DiskRead::Content("v3")));
+        assert!(!covers(false, Some("v2"), DiskRead::Content("v2")));
+        assert!(!covers(true, None, DiskRead::Content("v2")));
+        assert!(!covers(true, Some("v2"), DiskRead::Absent));
     }
 
     /// TDD 3.5. The first blank read must neither reload a blank page nor warn: a

@@ -14,7 +14,7 @@
 
 use super::walk::Builder;
 use super::{Block, ExportAnnotation, ExportDoc, Inline, RenderOptions};
-use crate::renderer::{frontmatter, segments_of};
+use crate::renderer::frontmatter;
 
 /// Build the export model for `source`.
 ///
@@ -84,18 +84,14 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
     doc
 }
 
-/// The claim's own text, delimiters and tight-construct markers stripped, for a sink
-/// that shows a comment away from the run it refers to.
+/// The claim's own text as the page shows it ([`crate::annotate::plain_claim`], the
+/// reduction the chips and the viewer quote with), for a sink that shows a comment away
+/// from the run it refers to.
 fn claim_text(cleaned: &str, hs: usize, he: usize) -> String {
-    if hs >= he || he > cleaned.len() {
-        return String::new();
+    match cleaned.get(hs..he) {
+        Some(run) if hs < he => crate::annotate::plain_claim(run),
+        _ => String::new(),
     }
-    let run = &cleaned[hs..he];
-    segments_of(run)
-        .into_iter()
-        .filter(|seg| !seg.marker)
-        .map(|seg| seg.text(run))
-        .collect()
 }
 
 /// Split every [`Inline::Text`] overlapping `range` and wrap the overlap in a
@@ -773,6 +769,33 @@ mod export_doc_tests {
     }
 
     #[test]
+    fn a_claim_crossing_bold_lists_without_its_markers() {
+        let doc = doc_of("The {==a **bold** word==}{>>c<<} end.\n");
+        assert_eq!(doc.annotations[0].claim, "a bold word");
+    }
+
+    #[test]
+    fn a_task_item_with_a_nested_list_keeps_its_checkbox() {
+        let doc = doc_of("- [x] outer\n  - inner\n  - [ ] inner task\n- [ ] next\n");
+        let Some(Block::List { items, .. }) = doc.blocks.first() else {
+            panic!("expected a list, got {:?}", doc.blocks);
+        };
+        assert_eq!(items[0].task, Some(true));
+        assert_eq!(items[1].task, Some(false));
+        let Some(Block::List { items: inner, .. }) = items[0]
+            .blocks
+            .iter()
+            .find(|b| matches!(b, Block::List { .. }))
+        else {
+            panic!("no nested list");
+        };
+        assert_eq!(
+            inner.iter().map(|i| i.task).collect::<Vec<_>>(),
+            vec![None, Some(false)]
+        );
+    }
+
+    #[test]
     fn an_annotated_claim_is_marked_over_exactly_its_own_characters() {
         // TDD 25.13's extent clause, through the SAME mapper the preview uses.
         let doc = doc_of("The {==sky is green==}{>>No, it is blue.<<} today.\n");
@@ -833,10 +856,18 @@ mod export_doc_tests {
     }
 
     #[test]
-    fn a_bare_highlight_without_a_comment_is_not_an_annotation() {
-        // `is_listed`'s predicate — the same one the chips and the viewer use.
+    fn a_bare_highlight_is_an_annotation_with_no_comment() {
+        // `is_listed`'s predicate — the same one the chips and the viewer use (TDD 17.67).
         let doc = doc_of("A {==claim==} with no comment.\n");
-        assert!(doc.annotations.is_empty(), "{:?}", doc.annotations);
+        assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
+        assert_eq!(doc.annotations[0].comment, "");
+        assert_eq!(doc.annotations[0].claim, "claim");
+    }
+
+    #[test]
+    fn an_exported_claim_is_quoted_as_the_page_shows_it() {
+        let doc = doc_of("A {==**bold** and [a link](u)==}{>>c<<} here.\n");
+        assert_eq!(doc.annotations[0].claim, "bold and a link");
     }
 
     #[test]
@@ -874,6 +905,52 @@ mod export_doc_tests {
         );
         // The flag is what lets a sink that cannot follow a URL say so (TDD 25.12).
         assert!(doc.has_unembedded_remote_images);
+    }
+
+    /// TDD 2.21b — an `<img>`'s declared size reaches the model (a `<picture>`'s too, from
+    /// the fallback `<img>` after its `<source>`), and the HTML sink writes it.
+    #[test]
+    fn a_declared_img_size_reaches_the_model_and_the_html() {
+        let opts = RenderOptions {
+            doc_dir: None,
+            allow_unsafe_images: true,
+        };
+        let size = |w, h| {
+            Some(crate::renderer::DeclaredSize {
+                width: w,
+                height: h,
+            })
+        };
+        let bare = find_image(&build(
+            "<img src=\"https://e.com/a.png\" width=\"100\">\n",
+            &opts,
+        ))
+        .expect("an image");
+        assert_eq!(bare.declared, size(Some(100), None));
+        let pic = find_image(&build(
+            "<picture><source srcset=\"https://e.com/a.webp\"><img src=\"https://e.com/a.png\" height=\"40\"></picture>\n",
+            &opts,
+        ))
+        .expect("an image");
+        assert_eq!(pic.declared, size(None, Some(40)));
+        let md = find_image(&build("![a](https://e.com/a.png)\n", &opts)).expect("an image");
+        assert_eq!(md.declared, None);
+
+        let doc = build("<img src=\"https://e.com/a.png\" width=\"100\">\n", &opts);
+        let theme = crate::theme::active();
+        let ink = gtk::gdk::RGBA::BLACK;
+        let palette = crate::palette::Palette::from_base(
+            gtk::gdk::RGBA::WHITE,
+            ink,
+            ink,
+            gtk::gdk::RGBA::new(0.2, 0.5, 0.9, 1.0),
+            &theme,
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        assert!(
+            html.contains("style=\"width:100px;height:auto\" src=\"https://e.com/a.png\""),
+            "{html}"
+        );
     }
 
     fn find_image(doc: &ExportDoc) -> Option<crate::export::ImageRef> {

@@ -172,6 +172,13 @@ pub(crate) const MAX_LOCAL_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 /// needs raising.
 pub(crate) const MAX_IMAGE_PIXELS: i64 = 8192 * 8192;
 
+/// The largest side, in CSS pixels, an `<img width=…>`/`height=…` may ask for (TDD 2.21b).
+///
+/// A declared size only scales a texture that is already decoded and admitted, so this
+/// bounds the extent arithmetic, not memory: the pane clamps what is drawn. Twice
+/// [`MAX_IMAGE_PIXELS`]' side, so no admitted image's own width is cut by it.
+pub(crate) const MAX_DECLARED_IMAGE_SIDE: i32 = 16384;
+
 /// The largest raster the renderer will produce when it re-rasterises a VECTOR image
 /// for zoom, in pixels.
 ///

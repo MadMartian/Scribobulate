@@ -35,6 +35,65 @@ pub(super) fn claim() -> bool {
     CLAIMED.with(Claim::take)
 }
 
+/// How long after a file launch claimed the cold start a bare launch is still owed the
+/// session it asked for. Two launches made in one instant start up side by side and
+/// finish about together, so the loser's forwarded activation lands moments after the
+/// winner's claim whatever the machine's speed; seconds is a generous bound on "moments",
+/// and short enough that a launch the user makes later reads as a re-activation.
+pub(super) const BARE_LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A bare launch that lost the race to a launch carrying files — the file launch became
+/// primary, so the bare one arrives as a re-activation — is still owed the saved session.
+///
+/// A launch carrying files restores no session (it opens its files), so without this the
+/// session was never restored and the next quit overwrote it with the file window and a
+/// blank one. The two launches asked, between them, for the session and the files, and
+/// both are owed. Only the first bare launch inside the grace is owed it, so the session
+/// is restored once however many land (TDD 8.2a).
+pub(super) fn bare_launch_owed_restore() -> bool {
+    LATE_RESTORE.with(|l| l.request(std::time::Instant::now()))
+}
+
+/// Note that a launch carrying files has just claimed the process's cold start.
+pub(super) fn note_open_cold_start() {
+    LATE_RESTORE.with(|l| l.begin(std::time::Instant::now()));
+}
+
+/// The state behind [`bare_launch_owed_restore`], as a value with the clock passed in so
+/// the rule is testable without the process's own copy or any waiting.
+struct LateRestore {
+    began: std::cell::Cell<Option<std::time::Instant>>,
+    spent: std::cell::Cell<bool>,
+}
+
+impl LateRestore {
+    const fn new() -> Self {
+        Self {
+            began: std::cell::Cell::new(None),
+            spent: std::cell::Cell::new(false),
+        }
+    }
+
+    fn begin(&self, now: std::time::Instant) {
+        self.began.set(Some(now));
+        self.spent.set(false);
+    }
+
+    /// `true` to the first request inside the grace of a file launch's claim, and to no
+    /// other.
+    fn request(&self, now: std::time::Instant) -> bool {
+        let inside = self
+            .began
+            .get()
+            .is_some_and(|at| now.saturating_duration_since(at) <= BARE_LAUNCH_GRACE);
+        inside && !self.spent.replace(true)
+    }
+}
+
+thread_local! {
+    static LATE_RESTORE: LateRestore = const { LateRestore::new() };
+}
+
 thread_local! {
     /// Main-thread-only: both callers are GApplication signal handlers, which GTK
     /// emits on the main thread. A process starts up once, so production never resets
@@ -69,6 +128,10 @@ thread_local! {
 pub(crate) fn force_for_test(is_cold_start: bool) -> ClaimGuard {
     // `claim` returns `!claimed`, so "the next claim answers `is_cold_start`" means
     // the flag must hold its negation.
+    LATE_RESTORE.with(|l| {
+        l.began.set(None);
+        l.spent.set(false);
+    });
     let previous = CLAIMED.with(|c| c.0.replace(!is_cold_start));
     ClaimGuard { previous }
 }
@@ -108,7 +171,7 @@ impl Claim {
 
 #[cfg(test)]
 mod tests {
-    use super::Claim;
+    use super::{Claim, LateRestore, BARE_LAUNCH_GRACE};
 
     /// The whole contract: one `true`, then `false` for good.
     ///
@@ -126,6 +189,25 @@ mod tests {
             "a second caller is not, even immediately after"
         );
         assert!(!claim.take(), "and it never becomes available again");
+    }
+
+    /// A bare launch landing within the grace of a file launch's claim is owed the
+    /// session, once; one outside it, or before any file launch, is a re-activation.
+    #[test]
+    fn a_bare_launch_is_owed_the_restore_only_within_the_grace_and_once() {
+        let t0 = std::time::Instant::now();
+        let near = t0 + std::time::Duration::from_millis(400);
+        let far = t0 + BARE_LAUNCH_GRACE + std::time::Duration::from_millis(1);
+        let s = LateRestore::new();
+        assert!(!s.request(t0), "no file launch has claimed anything");
+        s.begin(t0);
+        assert!(
+            s.request(near),
+            "the first bare launch inside the grace is owed"
+        );
+        assert!(!s.request(near), "a second one is a re-activation");
+        s.begin(t0);
+        assert!(!s.request(far), "past the grace it is a re-activation");
     }
 
     /// Two claims are independent, so the rule above is a property of the claim and

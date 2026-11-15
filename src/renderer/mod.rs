@@ -60,9 +60,11 @@ pub(crate) mod start;
 
 pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
-pub(crate) use picture::{scan_image_tags, ImgTag};
+pub(crate) use picture::{scan_image_tags, DeclaredSize, ImgTag};
 pub(crate) use scan::Script;
-pub(crate) use segments::{is_inline_tag, is_inline_tag_end, segments_of, BlockScripts, Seg};
+#[cfg(test)]
+pub(crate) use segments::segments_of;
+pub(crate) use segments::{is_inline_tag, is_inline_tag_end, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
 
@@ -559,6 +561,9 @@ pub(crate) struct Renderer {
     /// Closed and rendered at `</picture>` or its container's end (`start::feed_html`
     /// / `flush_open_picture`). See ScrAP-147.
     picture_open: Option<Vec<String>>,
+    /// The declared `width`/`height` of the `<img>` whose candidate renders next (or, in
+    /// a `<picture>`, of the group's `<img>`), taken by the slot that renders it.
+    declared_size: Option<picture::DeclaredSize>,
     /// Which disclosures the reader has collapsed — a render INPUT, not renderer
     /// state. A collapsed body is never emitted, which is what keeps invisible text
     /// out of the buffer entirely (see `crate::fold`).
@@ -1261,6 +1266,7 @@ impl Renderer {
             html_acc: String::new(),
             in_html_block: false,
             picture_open: None,
+            declared_size: None,
             folds,
             at: None,
             region_start: None,

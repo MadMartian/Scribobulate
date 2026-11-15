@@ -167,6 +167,9 @@ pub(super) fn show_conflict_toast(window: &ApplicationWindow) {
     // display.
     super::chrome_fit::apply_visible_area_inset(toast, super::toast::TOAST_MARGIN_END);
     toast.set_visible(true);
+    // The info toast shares this corner and was drawn over the prompt's buttons; an
+    // acknowledgement ("File saved") is also stale the moment a conflict is raised.
+    st.chrome().retract_info_notices();
     // Both prompts are bottom-end aligned in one overlay, so a document that is BOTH
     // lost and in conflict — a flagged file returning with other content, TDD 3.6 —
     // would otherwise draw them on top of each other. This one takes the corner while
@@ -267,7 +270,11 @@ fn decide(tab: &TabState, seen: winstate::DiskRead<'_>, settled: bool) -> winsta
         source: source.as_str(),
         baseline: baseline.as_str(),
         dirty: tab.is_dirty(),
-        suppressed: tab.suppress_conflict.get(),
+        suppressed: winstate::dismissal_covers(
+            tab.suppress_conflict.get(),
+            tab.conflict_disk.borrow().as_deref(),
+            seen,
+        ),
         backing_loss: tab.backing_loss.get(),
         settled,
     })
@@ -284,7 +291,15 @@ fn apply_for_active(
     use winstate::ExternalChange;
     match decision {
         ExternalChange::Ignore => {}
-        ExternalChange::Toast => show_conflict_toast(window),
+        ExternalChange::Toast => {
+            // A fresh prompt: remember which text it asks about, and retire any
+            // Dismiss given about an earlier one.
+            if let winstate::DiskRead::Content(disk) = seen {
+                *tab.conflict_disk.borrow_mut() = Some(disk.to_owned());
+            }
+            tab.suppress_conflict.set(false);
+            show_conflict_toast(window)
+        }
         ExternalChange::Reload => match seen {
             // Total by construction: an absent read decides `AwaitSettle` or `Lost`
             // and can never reach here. Spelled out rather than unwrapped so that if
@@ -1356,5 +1371,81 @@ mod gtk_integration_tests {
             );
             window.destroy();
         }
+    }
+
+    /// TDD 5.1: a Dismiss answers the prompt about one on-disk text. The same text
+    /// stays quiet, a DIFFERENT one is a new conflict and prompts again, and Save's
+    /// overwrite guard is untouched throughout.
+    #[gtktest::test]
+    fn a_dismissed_conflict_prompts_again_for_a_further_change() {
+        const ORIGINAL: &str = "# Plan\n\nbase\n";
+        let state_home = tempfile::tempdir().expect("state home");
+        let docs = tempfile::tempdir().expect("docs");
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let (window, tab, path) = window_over(
+                "com.extollit.scribobulate.it.redismiss",
+                docs.path(),
+                ORIGINAL,
+            );
+            let conflict = tab.chrome().conflict_toast.clone();
+            let mut at = tab.editor_buf.end_iter();
+            tab.editor_buf.insert(&mut at, "local edit\n");
+            assert!(tab.is_dirty());
+
+            std::fs::write(&path, "# Plan\n\nexternal one\n").expect("first change");
+            check_and_reload_tab(&tab);
+            settle("the first change prompts", || conflict.is_visible());
+
+            // The real Dismiss button.
+            let dismiss = conflict
+                .last_child()
+                .and_downcast::<gtk::Button>()
+                .expect("Dismiss is the prompt's last button");
+            dismiss.emit_clicked();
+            assert!(!conflict.is_visible());
+
+            // The same text again: still answered.
+            check_and_reload_tab(&tab);
+            drain(std::time::Duration::from_millis(300));
+            assert!(!conflict.is_visible(), "the dismissed text stays quiet");
+
+            // A further, different change is a new conflict.
+            std::fs::write(&path, "# Plan\n\nexternal two\n").expect("second change");
+            check_and_reload_tab(&tab);
+            settle("a further change prompts afresh", || conflict.is_visible());
+            assert!(tab.is_dirty(), "the buffer was never touched");
+            window.destroy();
+        });
+    }
+
+    /// An acknowledgement ("File saved") must not outlive, nor draw over, the prompt
+    /// and persistent line of a loss that arrives after it.
+    #[gtktest::test]
+    fn a_backing_loss_retracts_the_acknowledgements_before_it() {
+        const ORIGINAL: &str = "# Plan\n\nbase\n";
+        let state_home = tempfile::tempdir().expect("state home");
+        let docs = tempfile::tempdir().expect("docs");
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let (window, tab, path) = window_over(
+                "com.extollit.scribobulate.it.ackretract",
+                docs.path(),
+                ORIGINAL,
+            );
+            crate::window::toast::show_saved_toast(&window);
+            let info = tab.chrome().info_toast.widget().clone();
+            assert!(info.is_visible());
+            assert_eq!(tab.chrome().status.borrow().label_text(), "File saved");
+
+            std::fs::remove_file(&path).expect("delete");
+            check_and_reload_tab(&tab);
+            settle("the loss is recorded", || tab.backing_loss.get().is_some());
+            assert!(!info.is_visible(), "the toast no longer covers the prompt");
+            assert_eq!(
+                tab.chrome().status.borrow().label_text(),
+                winstate::BackingLoss::Deleted.notice(),
+                "the loss line is not under a stale acknowledgement"
+            );
+            window.destroy();
+        });
     }
 }

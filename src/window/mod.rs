@@ -43,6 +43,8 @@ mod outline_nav;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod outline_reload_tests;
 pub(crate) mod panescroll;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod refill_scroll_tests;
 mod reload;
 mod rename;
 mod save;
@@ -784,6 +786,7 @@ fn build_window_chrome_state(
         overlay_edit_btns: ov_edit_btns,
         fmt_edit_state: Cell::new(None),
         focused_pane: Cell::new(winstate::FocusedPane::Editor),
+        editor_gate_remembered: Cell::new(false),
         ctx_link: RefCell::new(None),
         zoom_level: Cell::new(zoom_level),
         sidebar_split: Cell::new(sidebar_split),
@@ -799,6 +802,7 @@ fn build_window_chrome_state(
         documents_refresh_scheduled: Cell::new(false),
         tab_drag: RefCell::new(None),
         retiring: Cell::new(false),
+        info_notices: RefCell::new(Vec::new()),
     })
 }
 
@@ -1413,12 +1417,12 @@ pub(crate) mod gtk_integration_tests {
         });
     }
 
-    /// The annotations viewer lists exactly the comment-bearing annotations (TDD
-    /// 20.1/20.2): a bare highlight (a rendering feature, not an annotation) and the
-    /// inert suggested-edit kinds are excluded, so a document with two commented
-    /// annotations plus one bare highlight shows two rows.
+    /// The annotations viewer lists exactly the highlights and point comments (TDD
+    /// 20.1/20.2, 17.67): a bare highlight is listed beside the commented ones, and the
+    /// inert suggested-edit kinds are excluded, so a document with a commented highlight,
+    /// a bare one, an insertion and a point comment shows three rows.
     #[gtktest::test]
-    fn the_annotations_viewer_lists_only_comment_bearing_annotations() {
+    fn the_annotations_viewer_lists_highlights_and_comments_but_not_inert_kinds() {
         let app = test_app("com.extollit.scribobulate.integrationtest.annlist");
         let md = "a {==c1==}{>>note one<<} b {==bare==} c {++ins++} d {>>point<<} e";
         let win = new_window(&app, "IT-ann", md, None);
@@ -1426,8 +1430,8 @@ pub(crate) mod gtk_integration_tests {
         let lv = list_view_of(&ch.annotations_scroller).expect("annotations list is a ListView");
         let n = lv.model().expect("selection model").n_items();
         assert_eq!(
-            n, 2,
-            "two comment-bearing annotations; bare highlight + inert kind excluded"
+            n, 3,
+            "commented highlight, bare highlight and point comment listed; inert kind excluded"
         );
     }
 
@@ -1706,20 +1710,24 @@ pub(crate) mod gtk_integration_tests {
     }
 
     /// Viewer navigation resolves to the correct chip by SPAN IDENTITY, even with a
-    /// bare highlight interposed (TDD 20.6): each listed annotation's `src_span` start
+    /// inert kind interposed (TDD 20.6): each listed annotation's `src_span` start
     /// resolves to its own margin-chip index via `marker_index_for_src`.
     #[gtktest::test]
     fn viewer_navigation_resolves_chips_by_identity() {
         let app = test_app("com.extollit.scribobulate.integrationtest.annident");
-        let md = "a {==c1==}{>>note one<<} b {==bare==} c {==c2==}{>>note two<<} d";
+        let md = "a {==c1==}{>>note one<<} b {++ins++} c {==c2==}{>>note two<<} d";
         let win = new_window(&app, "IT-ident", md, None);
         let entries = crate::annotations::extract_entries(md);
-        assert_eq!(entries.len(), 2, "two comment-bearing annotations");
+        assert_eq!(
+            entries.len(),
+            2,
+            "two annotations; the insertion is not listed"
+        );
         let view = preview_text_view(&win)
             .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
             .expect("preview view in preview mode");
-        // Each entry's identity resolves to its own chip index, in order — the bare
-        // highlight has no chip and does not perturb the mapping.
+        // Each entry's identity resolves to its own chip index, in order — the inert
+        // insertion has no chip and does not perturb the mapping.
         assert_eq!(
             view.marker_index_for_src(entries[0].src_span.start.raw()),
             Some(0)

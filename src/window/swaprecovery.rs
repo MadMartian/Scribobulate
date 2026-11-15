@@ -309,7 +309,13 @@ async fn reopen_recovered(app: &Application, swap: &FoundSwap) -> Option<Applica
     // which is the honest answer: everything in the buffer is unsaved.
     let doc = crate::docio::read_document(path.as_deref()).await;
     let resolved = doc.backing;
-    let tab_id = create_tab_in_window(&window, &doc.source, resolved.as_deref(), false, false)?;
+    // Not a navigation (TDD 23.9): revealing a recovered document is the app's doing. On a
+    // launch with no saved session the window's only other tab is the blank Untitled one,
+    // and recording the reveal left Back enabled onto it.
+    let tab_id = {
+        let _no_history = winstate::nav_suppress(&window);
+        create_tab_in_window(&window, &doc.source, resolved.as_deref(), false, false)?
+    };
     let tab = winstate::tab_by_id(tab_id)?;
     if let Some(p) = resolved {
         crate::app::attach_file_backing(&window, &tab, p);
@@ -572,7 +578,7 @@ fn announce_recovery(window: &ApplicationWindow, count: usize) {
 /// `OpenProcess` for as long as any handle to it is held, so existence has to be
 /// established separately — see `platform::win32::process` for the measurements and for
 /// why a false "live" is the failure that matters.
-fn owner_is_live(pid: u32) -> bool {
+pub(crate) fn owner_is_live(pid: u32) -> bool {
     if pid == std::process::id() {
         return false;
     }

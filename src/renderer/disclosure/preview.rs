@@ -41,8 +41,13 @@ pub(crate) const MAX_PREVIEW_CHARS: usize = 60;
 /// sequence straddling the cut is never split mid-character (see the unit tests below
 /// for a body engineered to land the cut exactly there).
 pub(crate) fn body_preview(body_src: &str) -> Option<String> {
-    let plain = super::body_plain_text(body_src);
-    let collapsed = collapse_whitespace(&plain);
+    shorten(&super::body_plain_text(body_src))
+}
+
+/// The one shortening both reductions end in: collapse whitespace, cut at the limit,
+/// end in an ellipsis; `None` when nothing is left.
+fn shorten(plain: &str) -> Option<String> {
+    let collapsed = collapse_whitespace(plain);
     if collapsed.is_empty() {
         return None;
     }
@@ -68,10 +73,31 @@ pub(crate) fn preview_insert_text(
     cleaned: &str,
     body_range: Option<std::ops::Range<usize>>,
 ) -> Option<String> {
-    let preview = body_range
-        .and_then(|body| cleaned.get(body))
-        .and_then(body_preview)?;
+    // Front matter's synthetic disclosure spans the opening fence through the body, and
+    // its body is a CODE block, not Markdown. Reducing that span as Markdown showed a
+    // TOML block's `+++` fence (a YAML `---` happened to read as a rule and vanish) and
+    // smart-quoted its strings. So its preview is the metadata text, verbatim, between
+    // the fences.
+    let literal = body_range
+        .as_ref()
+        .and_then(|body| front_matter_body(cleaned, body));
+    let preview = match literal {
+        Some(text) => shorten(text)?,
+        None => body_range
+            .and_then(|body| cleaned.get(body))
+            .and_then(body_preview)?,
+    };
     Some(format!(" {preview}"))
+}
+
+/// The metadata between the fences, when `body` is exactly the span the synthetic
+/// front-matter disclosure takes (its opening fence to its closing one) — and `None`
+/// for every authored disclosure.
+fn front_matter_body<'a>(cleaned: &'a str, body: &std::ops::Range<usize>) -> Option<&'a str> {
+    let fm = crate::renderer::frontmatter::scan(cleaned)?;
+    (body.start == fm.open.start && body.end == fm.close.start)
+        .then(|| cleaned.get(fm.body.clone()))
+        .flatten()
 }
 
 /// Collapse every run of whitespace (spaces, tabs, the `\n`s [`super::body_plain_text`]
@@ -105,6 +131,33 @@ fn collapse_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{body_preview, preview_insert_text, MAX_PREVIEW_CHARS};
+
+    /// 2.27 — a TOML block's collapsed snippet is the metadata verbatim: no `+++`
+    /// fence, and the quotes stay the straight quotes the author typed.
+    #[test]
+    fn a_toml_front_matter_snippet_has_no_fence_and_no_smart_quotes() {
+        let md = "+++\ntitle = \"Post\"\ndraft = true\n+++\n\nBody.\n";
+        let fm = crate::renderer::frontmatter::scan(md).expect("front matter");
+        let text = preview_insert_text(md, Some(fm.open.start..fm.close.start)).expect("previews");
+        assert_eq!(text, " title = \"Post\" draft = true…");
+    }
+
+    /// The YAML dialect is unchanged by it, and an authored `<details>` still reduces
+    /// as Markdown (its `*` is not shown).
+    #[test]
+    fn yaml_front_matter_and_authored_bodies_keep_their_snippets() {
+        let md = "---\nname: dev\n---\n\nBody.\n";
+        let fm = crate::renderer::frontmatter::scan(md).expect("front matter");
+        assert_eq!(
+            preview_insert_text(md, Some(fm.open.start..fm.close.start)).as_deref(),
+            Some(" name: dev…")
+        );
+        let authored = "x *em* y";
+        assert_eq!(
+            preview_insert_text(authored, Some(0..authored.len())).as_deref(),
+            Some(" x em y…")
+        );
+    }
 
     #[test]
     fn an_empty_body_has_no_preview() {

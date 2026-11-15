@@ -272,7 +272,14 @@ pub(crate) async fn restore_session(app: &Application) -> bool {
         }
         docs.push(per_tab);
     }
-    for (ws, window_docs) in session.windows.iter().zip(&docs) {
+    // Ordinarily nothing is open yet and this prunes nothing. A session restored into a
+    // process that already holds documents (a file launch that won the race against a
+    // bare one, TDD 8.2a) must not give any of them a second tab.
+    let windows =
+        crate::session::prune_open_tabs(session.windows.into_iter().zip(docs).collect(), |p| {
+            crate::app::find_open_tab_for_path(app, p).is_some()
+        });
+    for (ws, window_docs) in &windows {
         restore_window(app, ws, window_docs);
     }
     log::info!("session restore: windows built, warming deferred tabs");

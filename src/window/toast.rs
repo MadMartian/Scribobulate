@@ -299,7 +299,7 @@ fn show_info_toast(
     // Through the chrome, never re-resolved through the window/tab at fire time:
     // the handle must be retracted from the stack that issued it. See
     // `WindowChrome::push_timed_notice`.
-    st.chrome().push_timed_notice(status_text, INFO_STATUS_TIME);
+    st.chrome().push_info_notice(status_text, INFO_STATUS_TIME);
 }
 
 /// The crash-recovery safety net has stopped working for this document.

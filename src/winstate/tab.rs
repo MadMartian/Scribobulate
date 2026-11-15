@@ -216,6 +216,10 @@ pub(crate) struct TabState {
     /// After "Dismiss", suppress the conflict toast until the next save/reload so
     /// the user is not nagged about a change they chose to keep editing over.
     pub(crate) suppress_conflict: Cell<bool>,
+    /// The on-disk text the conflict prompt was last raised for. A Dismiss answers
+    /// about THAT text only: the file changing to something else is a new conflict and
+    /// raises a new prompt (TDD 5.1) — see [`winstate::dismissal_covers`].
+    pub(crate) conflict_disk: RefCell<Option<String>>,
     /// Set when this tab's OWN backing file changed on disk while it was in
     /// the BACKGROUND (TDD 15.13) — the conflict/reload
     /// decision was correctly evaluated against this tab's own state, but not
@@ -390,6 +394,11 @@ pub(crate) struct TabState {
     /// widget on tab switch so re-opening find on a tab shows its own last
     /// search rather than whatever the previously active tab left behind.
     pub(crate) find_query: RefCell<String>,
+    /// The text in the replace field while this tab was active — the same per-tab
+    /// ownership as [`find_query`](Self::find_query), so a new or switched-to tab
+    /// shows its own replacement rather than the previous tab's. Not persisted: a
+    /// replacement survives a restart as the head of `replace_history`.
+    pub(crate) replace_text: RefCell<String>,
     /// This tab's find **match options** — case, whole word, regular expression.
     ///
     /// Per tab for the same reason as [`find_query`](Self::find_query), and it has to
@@ -472,6 +481,47 @@ pub(crate) struct TabInit {
 pub(crate) fn cleaned_of(raw: &str) -> String {
     let normalised = crate::renderer::NormalizedMd::new(raw);
     crate::annotate::extract(normalised.as_str()).cleaned
+}
+
+/// A tab's editor never finalizes on its own: once its gutter has a line-number renderer,
+/// GtkSourceView holds the view from that renderer (GTK4Rs/AP-386), and the gutter is the
+/// view's child, so `view → gutter → renderer → view` is a cycle no reference-counting
+/// owner can break — the view, its buffer and the document's text stay for the life of the
+/// process, on every tab and window close. Removing the renderer from the gutter drops
+/// that reference, so the tab removes it once the tab is gone and the editor is out of
+/// any tree.
+///
+/// Not `run_dispose` on the view: newer GtkSourceView (the Windows and macOS builds)
+/// asserts in its snippets shutdown when a disposed view is disposed again at finalize,
+/// aborting the process.
+///
+/// Deferred to an idle rather than run here: this drop runs inside the registry's
+/// `RefCell` borrow (`unregister`, `remove_tab`), and the removal can emit signals whose
+/// handlers resolve their window through that same registry (GTK4Rs/AP-61). The idle
+/// holds the one strong reference the tab leaves behind, so the editor is finalized when
+/// the idle ends.
+impl Drop for TabState {
+    fn drop(&mut self) {
+        let editor = self.editor.clone();
+        gtk::glib::idle_add_local_once(move || {
+            use gtk::prelude::*;
+            // A parented editor is not the tab's to end (the tab was moved, not closed).
+            if editor.parent().is_some() {
+                return;
+            }
+            let gutter = sourceview::prelude::ViewExt::gutter(&editor, gtk::TextWindowType::Left);
+            let mut child = gutter.first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if let Some(lines) = c
+                    .downcast_ref::<sourceview::GutterRenderer>()
+                    .filter(|r| r.type_().name() == "GtkSourceGutterRendererLines")
+                {
+                    gutter.remove(lines);
+                }
+            }
+        });
+    }
 }
 
 impl TabState {
@@ -625,6 +675,7 @@ impl TabState {
             outline_spy_doc: RefCell::new(None),
             scroll_spy_conn: RefCell::new(None),
             suppress_conflict: Cell::new(false),
+            conflict_disk: RefCell::new(None),
             pending_external: Cell::new(false),
             expect_self_delete: SelfDeleteGuard::default(),
             // A freshly loaded/created tab's file is present (or it is untitled).
@@ -654,6 +705,7 @@ impl TabState {
             search_context,
             search_settings,
             find_query: RefCell::new(String::new()),
+            replace_text: RefCell::new(String::new()),
             // Born at the default — a case-insensitive literal, the behaviour the bar
             // had before options existed. A restored tab's own options are applied
             // after construction by `window::findbar::adopt_find_options`, which is the
@@ -679,9 +731,10 @@ impl TabState {
 
     /// Adopt a persisted document identity, replacing the one generated at construction.
     ///
-    /// **Restore-time only.** Called immediately after a tab is built from a session
-    /// entry, before the tab can become dirty and therefore before anything can be filed
-    /// under the id being replaced.
+    /// Called immediately after a tab is built from a session entry, before the tab can
+    /// become dirty and therefore before anything can be filed under the id being
+    /// replaced; and by the first snapshot's claim check, which swaps in a fresh id before
+    /// anything of this process's is filed under either.
     pub(crate) fn adopt_doc_id(&self, doc_id: crate::swapfile::DocId) {
         *self.doc_id.borrow_mut() = doc_id;
     }
