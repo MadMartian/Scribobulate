@@ -67,7 +67,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
-| BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
 | BJ | Windows | Production | n + U+0303 draws a detached tilde wherever the lead font is Georgia (PDF export; Sepia-like themes in the preview) | Low |
 
 ## Closed issues
@@ -82,6 +81,7 @@ reused, and run in a series of their own apart from the IDs above.
 | CLSD-02 | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize |
 | CLSD-04 | Mac | Upstream | In fullscreen, a click issued while the transition animation is still running is never delivered — AppKit blocks input for its own ~250-500ms window, in any Cocoa application. Not ours to fix, and not GTK's |
 | CLSD-05 | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141, informational): `syntect` reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml`; the data is never a user's file |
+| CLSD-06 | Windows | Upstream | After a native file dialog has been used, the process outlives Quit by about a second (network-dependent) while Windows tears down a shell thread blocked in network browsing; the app itself has exited |
 
 
 ## CLSD-01. Tables are selection islands
@@ -485,15 +485,6 @@ predecessors. No Known-issues line.
 TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
 the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
-## BH. On Windows, the process outlives its windows by 20–30 s after Quit
-
-**Severity**: Low.
-
-Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 s. Unmeasured:
-the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
-Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
-Known-issues line.
-
 ## BJ. On Windows, a combining tilde detaches from its base under Georgia
 
 **Severity**: Low (cosmetic; the text and extraction are correct).
@@ -665,3 +656,24 @@ advisory the shipped graph was just cleared of and costs seconds per launch. Lea
 syntax highlighting out is not the product. With no vulnerability to patch, waiting on
 upstream costs nothing. When a syntect release is off bincode 1, take it and delete this
 entry and the `deny.toml` ignore in the same change.
+
+## CLSD-06. On Windows, the process outlives Quit while the shell finishes a network browse
+
+**Status**: Closed (the wait is Windows tearing down a thread the shell owns, after the app
+has exited; nothing the app or GTK's native chooser exposes stops it).
+
+Measured on Windows with a release build of the 1.0.0 platform pass, fresh state, debug
+log, three runs per shape: Quit (WM_CLOSE or `app.quit`) reaches `ExitProcess` in ≤ 0.2 s
+and the process is gone in ≤ 0.25 s, including with 16 heavy documents, a remote image, a
+UNC document and the installed 1.0.0 build. After the native file dialog has been used,
+one thread survives `ExitProcess`: a shell threadpool thread from the dialog's Network
+node, blocked in `NtDeviceIoControlFile ← NetServerEnum ← NPOpenEnum ←
+WNetRestoreAllConnectionsW ← fdWNet`. Windows cannot finish terminating the process until
+that I/O completes or is cancelled: ~1.1 s on the measuring VM, where `NetServerEnum`
+alone takes 16.7 s and fails with 6118. On a network where the cancel is slow, or a mapped
+drive's restore is stuck in an SMB connect, the same mechanism plausibly gives the 20–30 s
+the 1.0.0 dry run saw (inferred; not reproduced). The session bus name is released
+throughout, so a relaunch never reaches the dying process. The only lever, stopping
+`IFileDialog` from enumerating the network, is not exposed by GTK's native chooser, and
+`FOS_HIDEPINNEDPLACES` would strip the whole navigation pane. Time an exit by waiting on
+the process handle: `GetExitCodeProcess` is set at `ExitProcess`, before thread teardown.
