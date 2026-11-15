@@ -1,5 +1,6 @@
-//! The screen a document's **bytes** pass before any of them reach the editor, and the
-//! one refusal type every reader in [`super`] reports.
+//! The screen a document's **bytes** pass before any of them reach the editor, the
+//! screen its **name** passes before anything touches it ([`screen_name`], Windows
+//! device names), and the one refusal type every reader in [`super`] reports.
 //!
 //! [`crate::limits`] admits a path from its metadata alone — a regular file, within the
 //! size cap — and that is all a path can tell you before it is read. Some refusals can
@@ -27,7 +28,9 @@
 //! guard and crash recovery compare against what these readers return, and a reader
 //! that admitted what another refused would make those comparisons disagree.
 
+use super::rename::FsRules;
 use crate::limits;
+use std::path::Path;
 
 /// Why a document's bytes were refused once read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,10 +52,17 @@ impl std::fmt::Display for ContentRefusal {
     }
 }
 
-/// Why a document was refused: from its metadata, before the read, or from its bytes,
-/// after it. One type so the notice and the log are worded by one `Display`.
+/// Why a document was refused: from its name or its metadata, before the read, or from
+/// its bytes, after it. One type so the notice and the log are worded by one `Display`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    /// Windows: the path's filename names a device (`nul.md` is the NUL device), so
+    /// opening it reaches the device, not a file ([`screen_name`], TDD 1.4a).
+    /// Carries the device's canonical name, never the filename, so the notice cannot
+    /// echo a hostile name outside the code span `refusal_doc` builds for it.
+    DeviceName {
+        device: &'static str,
+    },
     Admission(limits::LoadRefusal),
     Content(ContentRefusal),
 }
@@ -72,6 +82,11 @@ impl From<ContentRefusal> for Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Refusal::DeviceName { device } => write!(
+                f,
+                "{device} is a Windows device name, not a file: Windows reserves it under \
+                 any extension, so this path would reach the device instead"
+            ),
             Refusal::Admission(r) => r.fmt(f),
             Refusal::Content(r) => r.fmt(f),
         }
@@ -84,6 +99,38 @@ impl Refusal {
     /// before overwriting, the watcher stays silent).
     pub(crate) fn into_io_error(self) -> std::io::Error {
         std::io::Error::new(std::io::ErrorKind::InvalidData, self.to_string())
+    }
+}
+
+/// The name half of admission, asked before anything touches the path (TDD 1.4a).
+///
+/// On Windows a filename can name a DEVICE rather than a file — `nul.md` is the NUL
+/// device, with any extension, in any case, trailing dots and spaces included
+/// ([`super::rename::windows_device_name`]). Nothing on disk says so, and asking the
+/// disk opens the device. MEASURED on Windows 10 before this screen:
+/// `metadata("nul.md")` fails with "Incorrect function." (os error 1), which the
+/// metadata admission deliberately does not treat as a refusal, and `read_to_string`
+/// then succeeds with nothing — so `nul.md` opened as an empty document with a backing
+/// path ("loaded … (0 bytes)"). `com9.md`, with no such port, read as `NotFound`: a NEW
+/// document whose save would address the port. So the refusal is made from the name,
+/// first, by every reader in [`super`] and, for every writer, by `atomic_io`'s staging
+/// step — both export sinks and the session file, not only the document save.
+///
+/// The one screen here that needs no bytes; it lives beside [`screen`] because it
+/// reports through the same [`Refusal`]. The rules are a parameter for the reason
+/// `rename`'s module doc gives — a pure function over plain data is checkable for every
+/// platform from any host — and the callers pass `host_rules()`, so on Linux and macOS
+/// `nul.md` stays an ordinary name.
+pub(crate) fn screen_name(path: &Path, rules: FsRules) -> Result<(), Refusal> {
+    if rules != FsRules::Windows {
+        return Ok(());
+    }
+    let Some(name) = path.file_name() else {
+        return Ok(());
+    };
+    match super::rename::windows_device_name(&name.to_string_lossy()) {
+        Some(device) => Err(Refusal::DeviceName { device }),
+        None => Ok(()),
     }
 }
 
@@ -129,6 +176,34 @@ mod tests {
         ] {
             assert_eq!(screen(ok), Ok(()), "{ok:?}");
         }
+    }
+
+    /// **The name screen is Windows' rule, applied only under Windows' rules (TDD 1.4a).**
+    /// Pure, so both halves are asserted on every host: a device name is refused under
+    /// [`FsRules::Windows`] with the device named, and is an ordinary name under POSIX.
+    /// Only the last component counts — a folder called `nul` is not a device.
+    #[test]
+    fn the_name_screen_refuses_a_device_only_under_windows_rules() {
+        let dir = Path::new("docs").join("sub");
+        for (name, device) in [
+            ("nul.md", "NUL"),
+            ("Com¹.md", "COM¹"),
+            ("conout$.md.", "CONOUT$"),
+        ] {
+            let path = dir.join(name);
+            assert_eq!(
+                screen_name(&path, FsRules::Windows),
+                Err(Refusal::DeviceName { device }),
+                "{name}"
+            );
+            assert_eq!(screen_name(&path, FsRules::Posix), Ok(()), "{name}");
+        }
+        let in_a_nul_folder = Path::new("nul").join("notes.md");
+        assert_eq!(screen_name(&in_a_nul_folder, FsRules::Windows), Ok(()));
+        let nulbyte = dir.join("nulbyte.md");
+        assert_eq!(screen_name(&nulbyte, FsRules::Windows), Ok(()));
+        let why = Refusal::DeviceName { device: "NUL" }.to_string();
+        assert!(why.contains("NUL is a Windows device name"), "{why}");
     }
 
     /// The notice names the reason in words a reader can act on, and the offset.

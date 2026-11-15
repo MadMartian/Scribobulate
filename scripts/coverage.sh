@@ -934,8 +934,9 @@ IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app
 # `preview/linebreaks.rs` is the fourteenth, and the same kind as `altsuppression`: the
 # `#[gtktest::test]` bodies for TDD 2.20's line breaks, rendered for real and so behind the
 # feature, beside `preview/build.rs` rather than inside it for the same size reason. Named
-# individually for the reason `altsuppression` is.
-IGNORE_TESTONLY='src[/\\](testpump|testmotion|animation[/\\]sprites[/\\]testkit|preview[/\\]markertests|preview[/\\]linebreaks|preview[/\\]altsuppression|preview[/\\]refusalnotice|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*|animation[/\\]visibility[/\\]gtk_tests([/\\][a-z_]+)*|window[/\\]tabs[/\\]documents[/\\]gtk_integration_tests|window[/\\]find[/\\](parity|bartests|splittests|foldtests|testkit)|gtk_log_harness|logrepeat_reproduce)\.rs'
+# individually for the reason `altsuppression` is. `preview/scripttests.rs` is the same
+# kind again: the `#[gtktest::test]` body for Hangul in the preview's code faces (TDD 25.18).
+IGNORE_TESTONLY='src[/\\](testpump|testmotion|animation[/\\]sprites[/\\]testkit|preview[/\\]markertests|preview[/\\]linebreaks|preview[/\\]altsuppression|preview[/\\]refusalnotice|preview[/\\]scripttests|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*|animation[/\\]visibility[/\\]gtk_tests([/\\][a-z_]+)*|window[/\\]tabs[/\\]documents[/\\]gtk_integration_tests|window[/\\]find[/\\](parity|bartests|splittests|foldtests|testkit)|gtk_log_harness|logrepeat_reproduce)\.rs'
 
 # SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
 # worth repeating HERE, where the enforcement lives, is what keeps the two files from

@@ -331,11 +331,11 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // default off). Same view section, per the Action CAM (this toggle appears in the
     // View menu AND this toolbar section, one GAction shared). A SYMBOLIC name (GTK4Rs/AP-125:
     // a non-symbolic icon's baked colour goes invisible on a dark-variant resolve).
-    // `mail-mark-important-symbolic` (a marker/flag glyph, the annotation metaphor) was
-    // verified present in Adwaita, breeze, AND breeze-dark on this system, so no
-    // gresource fallback is needed — unlike expand-all/collapse-all-symbolic (GTK4Rs/AP-48).
+    // An app-owned bundled name (`scribobulate-annotations-symbolic`, a speech bubble):
+    // the generic `mail-mark-important-symbolic` resolved in the host theme to an
+    // unrelated glyph (Breeze: a badged envelope), and a host theme beats the bundle.
     let annotations_btn = gtk::ToggleButton::new();
-    annotations_btn.set_icon_name(Icon::MailMarkImportant.name());
+    annotations_btn.set_icon_name(Icon::Annotations.name());
     crate::a11y::name_from_action(&annotations_btn, "win.annotations");
     annotations_btn.add_css_class("flat");
     annotations_btn.set_action_name(Some("win.annotations"));
@@ -359,13 +359,11 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // "Show Unsafe Images" toggle — when on, remote (http/https) image URLs and
     // local images outside the document folder are loaded.  Driven by the
     // win.show-unsafe-images stateful boolean action registered below.
-    // Icon is `Icon::EmblemPhotos`; the previous `image-x-generic-symbolic` is
-    // missing from Breeze and rendered broken there. The replacement then turned out
-    // to be missing from gvsbuild's Adwaita and rendered broken on Windows, so it is
-    // now bundled in the GResource rather than swapped for a third name (see the Icon
+    // Icon is `Icon::UnsafeImages`, an app-owned bundled name: every generic name tried
+    // here was missing or drawn as something else on some host theme (see the Icon
     // variant's doc — GTK4Rs/AP-48, surfaced by the icon-resolution test).
     let unsafe_images_btn = gtk::ToggleButton::new();
-    unsafe_images_btn.set_icon_name(Icon::EmblemPhotos.name());
+    unsafe_images_btn.set_icon_name(Icon::UnsafeImages.name());
     crate::a11y::name(&unsafe_images_btn, "Show Unsafe Images");
     unsafe_images_btn.add_css_class("flat");
     unsafe_images_btn.set_action_name(Some("win.show-unsafe-images"));

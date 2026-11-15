@@ -392,25 +392,42 @@ impl Node {
     /// The node's full source range (delimiters included), used by a parent to
     /// splice inter-sibling source (block separators, list-item newlines).
     fn src(&self) -> Range<usize> {
+        self.src_start()..self.src_end()
+    }
+
+    /// Where the node's source begins: its own `open` delimiter, or — a delimiter-free
+    /// container's case — wherever its first child begins.
+    ///
+    /// Split from [`Node::src_end`] on purpose. Asking a child for its whole range just to
+    /// read one end of it makes every level of a delimiter-free chain (a list holding an
+    /// item holding a list …) compute BOTH ends, so the cost doubles per level of nesting:
+    /// a 30-deep list took minutes to render. Each end follows one path, so the cost is the
+    /// depth.
+    fn src_start(&self) -> usize {
         match self {
-            Node::Leaf { src, .. } | Node::Opaque { src, .. } => src.clone(),
-            Node::Branch {
-                open,
-                close,
-                children,
-                ..
-            } => {
-                let start = if open.start != open.end {
+            Node::Leaf { src, .. } | Node::Opaque { src, .. } => src.start,
+            Node::Branch { open, children, .. } => {
+                if open.start != open.end {
                     open.start
                 } else {
-                    children.first().map_or(open.start, |c| c.src().start)
-                };
-                let end = if close.start != close.end {
+                    children.first().map_or(open.start, Node::src_start)
+                }
+            }
+        }
+    }
+
+    /// Where the node's source ends; the mirror of [`Node::src_start`].
+    fn src_end(&self) -> usize {
+        match self {
+            Node::Leaf { src, .. } | Node::Opaque { src, .. } => src.end,
+            Node::Branch {
+                close, children, ..
+            } => {
+                if close.start != close.end {
                     close.end
                 } else {
-                    children.last().map_or(close.end, |c| c.src().end)
-                };
-                start..end
+                    children.last().map_or(close.end, Node::src_end)
+                }
             }
         }
     }
@@ -996,8 +1013,8 @@ fn is_opaque(c: Construct) -> bool {
 
 /// The source span covered by a node's children (their full source ranges).
 fn children_span(children: &[Node]) -> Option<Range<usize>> {
-    let start = children.first()?.src().start;
-    let end = children.iter().map(|c| c.src().end).max()?;
+    let start = children.first()?.src_start();
+    let end = children.iter().map(Node::src_end).max()?;
     Some(start..end)
 }
 
@@ -1587,14 +1604,14 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
 /// children so structure survives even when the buffer has no gap between them.
 fn reconstruct(md: &str, children: &[Node], a: i32, b: i32, emit_gaps: bool) -> String {
     let mut out = String::new();
-    let mut prev: Option<Range<usize>> = None;
+    let mut prev_end: Option<usize> = None;
     for child in children {
         let BufSpan { start: k0, end: k1 } = child.buf();
         if a.max(k0) >= b.min(k1) {
             continue; // this child is outside the selection
         }
-        if let Some(prev_src) = &prev {
-            let gap = prev_src.end..child.src().start;
+        if let Some(prev_end) = prev_end {
+            let gap = prev_end..child.src_start();
             if gap.start < gap.end {
                 let g = sl(md, gap);
                 if emit_gaps || emits_leading_marker(child, a, b) {
@@ -1614,7 +1631,7 @@ fn reconstruct(md: &str, children: &[Node], a: i32, b: i32, emit_gaps: bool) -> 
             }
         }
         out.push_str(&resolve_node(md, child, a, b, emit_gaps));
-        prev = Some(child.src());
+        prev_end = Some(child.src_end());
     }
     out
 }

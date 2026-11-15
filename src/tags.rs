@@ -574,7 +574,13 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // different code face changes the page font, and the tag's family still wins
     // over it (`pango_font_description_merge(.., TRUE)` overwrites only the fields
     // the tag set — so the monospace span holds on a serif page).
-    let code_font = config().code.font.clone();
+    //
+    // And because it REPLACES the page's family, the page's script fallback does not
+    // reach it: on Windows `monospace` falls back to no Korean face, and a fenced
+    // block's Hangul drew as hex boxes under prose that drew it. So the family carries
+    // the platform's fallback itself — nothing is appended where there is none
+    // (`pangospan::with_script_fallback`).
+    let code_font = crate::pangospan::with_script_fallback(&config().code.font);
     let code_pad = px(config().code.block_padding);
     // ONE registration per surface an inline-code run can sit on. The family, the
     // wrap mode and the ink (none) are identical across all of them — only the chip's

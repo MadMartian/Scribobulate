@@ -48,18 +48,16 @@
     -->
     <file>scalable/actions/document-open-recent-symbolic.svg</file>
     <!--
-      adwaita-icon-theme REMOVED both of these legacy freedesktop names in
+      adwaita-icon-theme REMOVED this legacy freedesktop name (and the whole emblems set) in
       48.alpha ("symbolic: remove emblems", issue #287), so any host on a recent
       Adwaita loses them — this is icon-theme drift, not a property of any one
-      OS. Measured: Adwaita 41 and the GNOME 46 runtime still carry both; 48+
-      does not. Breeze still has both, so a KDE desktop keeps showing its own
+      OS. Measured: Adwaita 41 and the GNOME 46 runtime still carry it; 48+
+      does not. Breeze still has it, so a KDE desktop keeps showing its own
       art — as with expand/collapse above, the host theme wins and our copy is
       the fallback.
 
-      emblem-photos-symbolic (the "show unsafe images" toggle) has no
-      non-symbolic sibling left either, so without this it renders the literal
-      broken-image placeholder. emblem-synchronizing-symbolic (File ▸
-      Auto-Reload) is the subtler of the two: 50.rc reinstated a legacy 16x16
+      emblem-synchronizing-symbolic (File ▸
+      Auto-Reload) is the subtle case: 50.rc reinstated a legacy 16x16
       RASTER emblem-synchronizing.png, and GTK's lookup strips the `-symbolic`
       suffix and finds it — so the button LOOKS fine while silently rendering a
       baked-colour PNG that does not follow the theme foreground on a dark
@@ -74,7 +72,16 @@
       there drew the legacy full-colour raster amid a row of thin line glyphs —
       worse than a placeholder, because it looks deliberate.
     -->
-    <file>scalable/emblems/emblem-photos-symbolic.svg</file>
+    <!--
+      The two app-specific toolbar toggles (Show Unsafe Images, Annotations) carry
+      APP-OWNED names. A generic name such as emblem-photos-symbolic or
+      mail-mark-important-symbolic lets a host theme draw its own, unrelated glyph
+      (Breeze: two overlapping rectangles; a badged envelope) and a host theme beats
+      a bundled icon of the same name; no host carries a `scribobulate-*` name, so
+      this art always wins.
+    -->
+    <file>scalable/emblems/scribobulate-unsafe-images-symbolic.svg</file>
+    <file>scalable/actions/scribobulate-annotations-symbolic.svg</file>
     <file>scalable/emblems/emblem-synchronizing-symbolic.svg</file>
     <!--
       The application icon. Sits at the freedesktop path an app icon belongs at,

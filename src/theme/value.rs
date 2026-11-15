@@ -154,8 +154,21 @@ impl CssSafeFontStack {
     /// verbatim — one de-quoting projection that only one of the two callers could
     /// reach. The sanitiser has already made the value injection-safe and
     /// generic-terminated; only the quoting goes.
+    ///
+    /// **And the space after each comma goes with it.** Pango splits a family list on
+    /// the bare comma and does not trim what it splits out, so `"Tiempos, Charter,
+    /// Georgia, serif"` asks for ` Charter`, ` Georgia` and ` serif`. Fontconfig
+    /// compares family names ignoring blanks, so Linux never noticed; Pango's Win32
+    /// font map does not, found none of them, and fell back to `Sans` with a
+    /// `couldn't load font` warning — MEASURED (Pango 1.57, Windows 10): Sepia's stack
+    /// loaded Tahoma where the preview, whose CSS GTK joins with a bare comma, drew
+    /// Georgia. This is the spelling GTK hands Pango from the same stack in CSS.
     pub(crate) fn pango_family(&self) -> String {
-        self.0.replace('"', "")
+        self.0
+            .split(',')
+            .map(|family| family.trim().replace('"', ""))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 

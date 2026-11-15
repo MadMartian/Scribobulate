@@ -1346,6 +1346,9 @@ mod disclosure_reveal_tests {
     fn a_tab_switch_before_the_reveal_runs_drops_it() {
         let app = test_app("com.extollit.scribobulate.integrationtest.foldrevealtab");
         let window = new_window(&app, "IT-FOLDTAB", MD, None);
+        // Its siblings set a size; this one took the display's, so how many viewports
+        // tab B's 300 lines make below depended on the display it ran on.
+        window.set_default_size(900, 600);
         crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
             !preview_text(&window).is_empty()
         });
@@ -1371,9 +1374,18 @@ mod disclosure_reveal_tests {
             crate::testpump::Clock::Idle,
             std::time::Duration::from_millis(500),
         );
-        assert!(
-            sw_b.vadjustment().upper() > sw_b.vadjustment().page_size() * 2.0,
-            "precondition: B's preview is long enough for a wrong heading scroll to show"
+        // ASSERTED as a wait, not a fixed drain: a window that is mapped has not necessarily
+        // been laid out, and on a machine whose first frame is slow the half second above
+        // ended with the preview still unallocated (upper 0, page_size 0), so the check
+        // below failed on a state that says nothing about the reveal.
+        crate::testpump::until_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_secs(8),
+            "B's preview to be laid out long enough for a wrong heading scroll to show",
+            || {
+                let adj = sw_b.vadjustment();
+                adj.page_size() > 0.0 && adj.upper() > adj.page_size() * 2.0
+            },
         );
         assert_eq!(
             sw_b.vadjustment().value(),

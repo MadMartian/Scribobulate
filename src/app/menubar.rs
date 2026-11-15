@@ -2,7 +2,8 @@
 //! (GTK4Rs/AP-76) — because `View ▸ Documents` lists THAT window's tabs and
 //! `Format ▸`'s insert section is relabeled per that window's selection — so the
 //! whole `GtkPopoverMenuBar` is assembled here per window rather than once on the
-//! GApplication.
+//! GApplication. Only what differs by window is built per window; the menus no window
+//! changes are built once and shared ([`SharedMenus`]).
 //!
 //! Built from `FILE_CMDS` / `EDIT_CMDS` / `VIEW_CMDS` / `FORMAT_CMDS` so labels stay in
 //! sync with the context menu. Accelerator HINTS are not set here at all — GTK derives
@@ -283,7 +284,14 @@ fn build_toolbar_layout_menu() -> Menu {
     toolbar_menu
 }
 
-fn build_view_menu(themes: &crate::theme::Themes) -> (Menu, Menu) {
+/// The View menu's sections that hold nothing of one window's: built once per application
+/// (see [`SharedMenus`]), the head above the tab-navigation section and the tail below it.
+struct ViewSections {
+    head: Vec<Menu>,
+    tail: Vec<Menu>,
+}
+
+fn build_view_sections(themes: &crate::theme::Themes) -> ViewSections {
     // Back / Forward through this window's document-visit history (TDD §23), in
     // their own leading section — the browser's own placement, above the view
     // modes, so the two navigation commands read as a pair rather than as members
@@ -320,16 +328,8 @@ fn build_view_menu(themes: &crate::theme::Themes) -> (Menu, Menu) {
     let tabs_section = Menu::new();
     tabs_section.append_item(&item("New Window", "win.new-window"));
     tabs_section.append_item(&item("Move Tab to New Window", "win.move-tab-new-window"));
-    // Tab navigation + the Documents submenu (the fast-switch list of THIS
-    // window's open tabs, one `win.select-tab::<id>` radio item each). The
-    // submenu starts empty — its content is filled/refreshed per window by
-    // `window/tabs/refresh_documents_menu` (deferred to idle: mutating a
-    // GMenu bound to a live menubar mid-activation is unsafe, GTK4Rs/AP-76). It groups naturally beside Previous/Next Tab.
-    let tab_nav_section = Menu::new();
-    tab_nav_section.append_item(&item("Previous Tab", "win.previous-tab"));
-    tab_nav_section.append_item(&item("Next Tab", "win.next-tab"));
-    let documents_menu = Menu::new();
-    tab_nav_section.append_submenu(Some(&mnem("Documents")), &documents_menu);
+    // (Tab navigation + the Documents submenu sit between `tabs_section` and the outline
+    // section; they are per-window and built by [`assemble_view_menu`].)
 
     // Outline sidebar toggle — a boolean win.outline action renders as a
     // checkbox item; its own section separates it from the mode radios.
@@ -413,16 +413,41 @@ fn build_view_menu(themes: &crate::theme::Themes) -> (Menu, Menu) {
     split_section.append_item(&item("Swap Panes", "win.split-swap"));
     split_section.append_item(&item("Vertical Split", "win.split-orientation"));
 
+    ViewSections {
+        head: vec![nav_section, section, tabs_section],
+        tail: vec![
+            outline_section,
+            chrome_section,
+            unsafe_images_section,
+            zoom_section,
+            split_section,
+        ],
+    }
+}
+
+/// One window's View menu: the shared sections around this window's own tab-navigation
+/// section. Returns the menu AND a handle to its (initially empty) Documents submenu.
+///
+/// Tab navigation + the Documents submenu (the fast-switch list of THIS window's open
+/// tabs, one `win.select-tab::<id>` radio item each). The submenu starts empty — its
+/// content is filled/refreshed per window by `window/tabs/refresh_documents_menu`
+/// (deferred to idle: mutating a GMenu bound to a live menubar mid-activation is unsafe,
+/// GTK4Rs/AP-76). It groups naturally beside Previous/Next Tab.
+fn assemble_view_menu(parts: &ViewSections) -> (Menu, Menu) {
+    let tab_nav_section = Menu::new();
+    tab_nav_section.append_item(&item("Previous Tab", "win.previous-tab"));
+    tab_nav_section.append_item(&item("Next Tab", "win.next-tab"));
+    let documents_menu = Menu::new();
+    tab_nav_section.append_submenu(Some(&mnem("Documents")), &documents_menu);
+
     let outer = Menu::new();
-    outer.append_section(None, &nav_section);
-    outer.append_section(None, &section);
-    outer.append_section(None, &tabs_section);
+    for section in &parts.head {
+        outer.append_section(None, section);
+    }
     outer.append_section(None, &tab_nav_section);
-    outer.append_section(None, &outline_section);
-    outer.append_section(None, &chrome_section);
-    outer.append_section(None, &unsafe_images_section);
-    outer.append_section(None, &zoom_section);
-    outer.append_section(None, &split_section);
+    for section in &parts.tail {
+        outer.append_section(None, section);
+    }
     (outer, documents_menu)
 }
 
@@ -465,9 +490,9 @@ fn build_edit_menu() -> Menu {
 /// Horizontal Bar — then, after a separator (a second section), the Tier-2
 /// insertions Link / Image / Table.
 /// Heading is a submenu here (a combo box in the toolbar); both drive
-/// win.format::h{1..6}. Returns the Format menu AND its insert-section handle
-/// (per-window now, for the Insert↔Edit relabel — GTK4Rs/AP-76).
-fn build_format_menu() -> (Menu, Menu) {
+/// win.format::h{1..6}. This is the part of the Format menu that is the same in every
+/// window; the insert section below it is per-window (see [`assemble_format_menu`]).
+fn build_format_inline_section() -> Menu {
     // QA round-1 L6: a bare `.unwrap()` here panicked with no context
     // beyond "called `Option::unwrap()` on a `None` value" on a pure
     // typo in one of this closure's literal `t` strings vs.
@@ -512,17 +537,23 @@ fn build_format_menu() -> (Menu, Menu) {
         append(&inline, c.target);
     }
 
+    inline
+}
+
+/// One window's Format menu: the shared styles/blocks section above this window's own
+/// insert section, which `update_format_menu_labels` relabels Insert↔Edit.
+fn assemble_format_menu(inline: &Menu) -> (Menu, Menu) {
     // Insertions go in their own section so GTK draws a separator above them.
     let insert = Menu::new();
     for c in FORMAT_CMDS
         .iter()
         .filter(|c| c.group == FormatGroup::Insert)
     {
-        append(&insert, c.target);
+        insert.append_item(&make_format_item(c.label, c.target));
     }
 
     let outer = Menu::new();
-    outer.append_section(None, &inline);
+    outer.append_section(None, inline);
     outer.append_section(None, &insert);
     (outer, insert)
 }
@@ -596,39 +627,108 @@ pub(crate) struct TopLevelMenus {
     pub format_insert_menu: Menu,
 }
 
+/// The menus, and parts of menus, that no window changes: built ONCE per application and
+/// shared by every window's model, then frozen so a mutation through any handle is
+/// refused rather than seen by all windows.
+///
+/// **Why they are shared.** GTK 4.6.9's `GtkPopoverMenuBar` takes a transfer-full
+/// reference to every submenu model it links and never drops it (`gtkpopovermenubar.c`
+/// 441-442; GTK4Rs/AP-387), so a submenu model built per window is never freed once the
+/// window closes — about 50 KB per window, for every File/Edit/View/… menu and everything
+/// they link. That reference cannot be released from here (emptying the models at destroy
+/// is the mutation of a live-bound `GMenu` GTK4Rs/AP-76 forbids). Sharing makes the
+/// leaked reference pin ONE model for the process instead of one more per window. What a
+/// window does change — `View ▸ Documents`, `Format ▸`'s insert section — stays per-window
+/// and small (their parents are built per window too), so each window still leaks only
+/// those few items.
+///
+/// Sharing is sound because nothing here varies with the window or with time: the
+/// themes are loaded once per process (`crate::theme::themes`), every item binds an
+/// action by name, and the accelerator hints come from the application's registered
+/// accelerators, not from the model.
+struct SharedMenus {
+    file: Menu,
+    edit: Menu,
+    help: Menu,
+    view: ViewSections,
+    format_inline: Menu,
+}
+
+impl SharedMenus {
+    fn build(themes: &crate::theme::Themes) -> Self {
+        let shared = Self {
+            file: build_file_menu(),
+            edit: build_edit_menu(),
+            help: build_help_menu(),
+            view: build_view_sections(themes),
+            format_inline: build_format_inline_section(),
+        };
+        let every_menu = [
+            &shared.file,
+            &shared.edit,
+            &shared.help,
+            &shared.format_inline,
+        ]
+        .into_iter()
+        .chain(shared.view.head.iter().chain(shared.view.tail.iter()));
+        for menu in every_menu {
+            menu.freeze();
+        }
+        shared
+    }
+
+    /// One window's top-level menus: the shared ones, and this window's own View and
+    /// Format around their per-window sections.
+    fn assemble(&self) -> TopLevelMenus {
+        let (view_menu, documents_menu) = assemble_view_menu(&self.view);
+        let (format_menu, format_insert_menu) = assemble_format_menu(&self.format_inline);
+        TopLevelMenus {
+            menus: vec![
+                ("_File", self.file.clone()),
+                ("_Edit", self.edit.clone()),
+                ("Fo_rmat", format_menu),
+                ("_View", view_menu),
+                ("_Help", self.help.clone()),
+            ],
+            documents_menu,
+            format_insert_menu,
+        }
+    }
+}
+
+thread_local! {
+    /// The application's [`SharedMenus`], built from the installed themes on first use.
+    static SHARED_MENUS: std::cell::OnceCell<SharedMenus> = const { std::cell::OnceCell::new() };
+}
+
 /// Build the top-level menus. This is the SINGLE enumeration of the menubar's
-/// structure: [`build_menubar`] assembles the shipped model from it, and the
-/// mnemonics guards in [`super::mnemonics`] derive their per-popover access-key
-/// namespaces from it. Deriving matters — the guard used to compare a
-/// hand-maintained mirror of these menus, which silently stopped matching and
+/// structure: [`build_menubar`] assembles the shipped model from the same
+/// [`SharedMenus::assemble`], and the mnemonics guards in [`super::mnemonics`] derive
+/// their per-popover access-key namespaces from it. Deriving matters — the guard used to
+/// compare a hand-maintained mirror of these menus, which silently stopped matching and
 /// left eight live entries (one of them half of a real access-key collision)
 /// checked by nothing.
 ///
-/// Pure `gio::Menu` models, no widgets, so a caller can build them headlessly.
+/// Pure `gio::Menu` models, no widgets, so a caller can build them headlessly. The
+/// application-wide menus are shared between calls (see [`SharedMenus`]).
 pub(crate) fn build_top_level_menus() -> TopLevelMenus {
-    build_top_level_menus_with(&crate::theme::themes())
+    SHARED_MENUS.with(|shared| {
+        shared
+            .get_or_init(|| SharedMenus::build(&crate::theme::themes()))
+            .assemble()
+    })
 }
 
-/// As [`build_top_level_menus`], with the theme set supplied rather than read from disk.
+/// As [`build_top_level_menus`], with the theme set supplied rather than read from disk,
+/// and nothing shared: a fresh model each call.
 ///
 /// The guard seam. `mnemonics` derives its access-key namespaces from these models, and a
 /// guard whose INPUT varies with the host's installed themes cannot state what it checked:
 /// the same source passes on one machine and fails on another, and the difference is a
 /// config directory. Pass `Themes::builtin()` there and the assertion is about the program.
+#[cfg(test)]
 pub(crate) fn build_top_level_menus_with(themes: &crate::theme::Themes) -> TopLevelMenus {
-    let (view_menu, documents_menu) = build_view_menu(themes);
-    let (format_menu, format_insert_menu) = build_format_menu();
-    TopLevelMenus {
-        menus: vec![
-            ("_File", build_file_menu()),
-            ("_Edit", build_edit_menu()),
-            ("Fo_rmat", format_menu),
-            ("_View", view_menu),
-            ("_Help", build_help_menu()),
-        ],
-        documents_menu,
-        format_insert_menu,
-    }
+    SharedMenus::build(themes).assemble()
 }
 
 /// Build one window's menubar model and wrap it in a `GtkPopoverMenuBar`. Called
@@ -867,6 +967,58 @@ mod tests {
         }
     }
 
+    /// TDD 6.13: two windows' menu models share every submenu no window changes, and own
+    /// the ones a window does. GTK 4.6.9's menu bar never drops its reference to a submenu
+    /// model (GTK4Rs/AP-387), so what is built per window is kept for good: this is what
+    /// makes that leaked reference pin one shared model instead of one per window.
+    /// Mutation: build the shared menus per call and the identity assertions fail; share a
+    /// per-window menu and the inequality ones do. A `GMenu` is plain data, so no display.
+    #[test]
+    fn windows_share_the_menus_none_of_them_changes_and_own_the_rest() {
+        let (first, second) = (build_top_level_menus(), build_top_level_menus());
+        let menu = |menus: &TopLevelMenus, title: &str| -> Menu {
+            menus
+                .menus
+                .iter()
+                .find_map(|(t, m)| (*t == title).then(|| m.clone()))
+                .unwrap_or_else(|| panic!("no {title} menu"))
+        };
+        for title in ["_File", "_Edit", "_Help"] {
+            assert_eq!(
+                menu(&first, title),
+                menu(&second, title),
+                "{title} is built per window"
+            );
+            assert!(
+                !menu(&first, title).is_mutable(),
+                "the shared {title} menu can be mutated through one window's handle"
+            );
+        }
+        for title in ["Fo_rmat", "_View"] {
+            assert_ne!(
+                menu(&first, title),
+                menu(&second, title),
+                "{title} holds a per-window section and cannot be shared whole"
+            );
+        }
+        assert_ne!(first.documents_menu, second.documents_menu);
+        assert_ne!(first.format_insert_menu, second.format_insert_menu);
+        assert!(first.documents_menu.is_mutable() && first.format_insert_menu.is_mutable());
+
+        // Inside the two per-window menus, everything but the per-window section is shared.
+        let section = |menu: &Menu, i: i32| menu.item_link(i, "section").expect("a section");
+        assert_eq!(
+            section(&menu(&first, "Fo_rmat"), 0),
+            section(&menu(&second, "Fo_rmat"), 0),
+            "Format's styles and blocks are built per window"
+        );
+        assert_eq!(
+            section(&menu(&first, "_View"), 0),
+            section(&menu(&second, "_View"), 0),
+            "View's leading sections are built per window"
+        );
+    }
+
     /// The find bar's option toggles are reached only from the bar (TDD 11.13): a menu
     /// item offered them while the bar was closed, where they mean nothing. Mutation:
     /// put any one of them back in a menu and this fails.
@@ -892,7 +1044,11 @@ mod tests {
     /// `no_menu_item_declares_its_own_accel_attribute` above already rely on.
     #[test]
     fn play_animations_shares_the_show_unsafe_images_section() {
-        let (view_menu, _documents) = build_view_menu(&crate::theme::Themes::builtin());
+        let view_menu = build_top_level_menus_with(&crate::theme::Themes::builtin())
+            .menus
+            .into_iter()
+            .find_map(|(title, menu)| (title == "_View").then_some(menu))
+            .expect("the View menu");
 
         let label_at = |section: &Menu, i: i32| -> Option<String> {
             section

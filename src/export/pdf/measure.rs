@@ -29,6 +29,7 @@ use super::{
     decode, BlockFill, Laid, LayoutSpec, Line, LineKind, MarkerImage, QuoteRef, BASE_PT,
     BLOCK_GAP_PT, PANGO_WEIGHT_NORMAL,
 };
+use crate::pangospan::{family_with_fallback, MONOSPACE};
 use crate::theme::{CssSafeFontStack, Theme};
 use gtk::pango;
 
@@ -59,6 +60,7 @@ pub(crate) fn lay_out(
         lines: Vec::new(),
         fragments: Vec::new(),
         quote_seq: 0,
+        script_fallback: crate::platform::script_fallback_family(),
     };
     for block in &doc.blocks {
         b.block(block, doc, 0.0, None, 0);
@@ -155,6 +157,10 @@ struct Layouter<'a> {
     fragments: Vec<Fragment>,
     /// Hands out one [`QuoteRef::id`] per blockquote met, in document order.
     quote_seq: u32,
+    /// The face a run falls back to for a character its own faces cannot draw, where
+    /// the platform's font map needs telling (`platform::script_fallback_family`). Read
+    /// once per export: it is the desktop's face, which does not change mid-layout.
+    script_fallback: Option<String>,
 }
 
 impl Layouter<'_> {
@@ -204,13 +210,34 @@ impl Layouter<'_> {
         // honoured. The seam existed and this sink did not call it; a bare generic
         // (`monospace`) is unquoted by the sanitiser and so came through, which is why
         // the one test aimed here passed.
-        if let Some(family) = spec.family.as_ref().or(self.theme.font_family.as_ref()) {
-            desc.set_family(&family.pango_family());
+        //
+        // Then the platform's script fallback after it, where there is one (TDD 25.18):
+        // on Windows a generic family falls back to no Korean face, and Hangul drew as
+        // tofu while the preview drew it. Elsewhere there is none, and the request is
+        // handed over as it always was — an unthemed run still names no family at all.
+        let requested = spec
+            .family
+            .as_ref()
+            .or(self.theme.font_family.as_ref())
+            .map(CssSafeFontStack::pango_family);
+        let default = self.ctx.font_description().and_then(|d| d.family());
+        if let Some(family) = family_with_fallback(
+            requested,
+            default.as_deref(),
+            self.script_fallback.as_deref(),
+        ) {
+            desc.set_family(&family);
         }
         desc.set_size(pt_to_pango(spec.size_pt));
         desc.set_weight(pango::Weight::__Unknown(spec.weight));
         layout.set_font_description(Some(&desc));
         layout.set_markup(markup);
+        // A letter whose combining marks the face Pango put it in lacks is set in a face
+        // that keeps them on it, cluster by cluster: on Windows `serif` leads with
+        // Georgia, which lacks U+0303, and `n` + U+0303 printed a detached tilde. The
+        // text is not touched, so it still extracts byte-exact (TDD 25.18). Nothing
+        // happens off Windows or in a layout without a mark (`pangospan::mark_cover`).
+        crate::pangospan::cover_marks_in_layout(&layout);
         layout
     }
 
@@ -468,9 +495,18 @@ impl Layouter<'_> {
                 }
             }
             Block::CodeBlock { text, .. } => {
-                // Monospace, and never marked up: a code block's content is literal.
+                // Monospace, and never marked up: a code block's content is literal. The
+                // span replaces the layout's family outright, so it takes the script
+                // fallback itself — `monospace` falls back to no Korean face on Windows.
+                let family = family_with_fallback(
+                    Some(MONOSPACE.to_string()),
+                    None,
+                    self.script_fallback.as_deref(),
+                )
+                .unwrap_or_else(|| MONOSPACE.to_string());
                 let markup = format!(
-                    "<span font_family=\"monospace\">{}</span>",
+                    "<span font_family=\"{}\">{}</span>",
+                    escape_pango(&family),
                     escape_pango(text.trim_end_matches('\n'))
                 );
                 // The block's CARD (TDD 18.7): the same rect at the same column a

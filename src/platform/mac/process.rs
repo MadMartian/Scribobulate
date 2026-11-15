@@ -74,6 +74,58 @@ pub(crate) fn phys_footprint_bytes() -> Option<u64> {
     }
 }
 
+/// What this login session says about the screen, for the memory gates: `None` when the
+/// session dictionary could not be read at all, `Some(None)` when it was read and carries
+/// no `CGSSessionScreenIsLocked` key (an UNLOCKED screen has no such key, it is not
+/// `false`), `Some(Some(flag))` when the key is present.
+///
+/// The three are kept apart because "absent" and "the read failed" mean opposite things and
+/// a gate that folds them together either skips on an unlocked screen or measures on a
+/// locked one.
+#[cfg(test)]
+pub(crate) fn session_screen_lock() -> Option<Option<bool>> {
+    use std::ffi::{c_char, c_void};
+
+    // `kCFStringEncodingUTF8`.
+    const UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGSessionCopyCurrentDictionary() -> *const c_void;
+        fn CFStringCreateWithCString(
+            alloc: *const c_void,
+            c_str: *const c_char,
+            encoding: u32,
+        ) -> *const c_void;
+        fn CFDictionaryGetValue(dict: *const c_void, key: *const c_void) -> *const c_void;
+        fn CFBooleanGetValue(boolean: *const c_void) -> u8;
+        fn CFRelease(object: *const c_void);
+    }
+
+    // SAFETY: each CF object created here is released exactly once, in this function, and
+    // none escapes it; `CFDictionaryGetValue` returns a borrowed value that is read before
+    // the dictionary is released; the key is a NUL-terminated literal.
+    unsafe {
+        let dict = CGSessionCopyCurrentDictionary();
+        if dict.is_null() {
+            return None;
+        }
+        let key =
+            CFStringCreateWithCString(std::ptr::null(), c"CGSSessionScreenIsLocked".as_ptr(), UTF8);
+        if key.is_null() {
+            CFRelease(dict);
+            return None;
+        }
+        let value = CFDictionaryGetValue(dict, key);
+        let flag = (!value.is_null()).then(|| CFBooleanGetValue(value) != 0);
+        CFRelease(key);
+        CFRelease(dict);
+        Some(flag)
+    }
+}
+
 /// The address of `symbol` in the librsvg dyld has already loaded into this process, or
 /// `None` when none is. Found in dyld's image list, not by name lookup, so this names
 /// the decoder in use (Homebrew's, or a bundle's staged copy), never one merely

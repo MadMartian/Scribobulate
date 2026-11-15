@@ -1077,6 +1077,8 @@ impl Renderer {
                 let si = self.buf.iter_at_offset(preview_start);
                 let ei = self.tip();
                 self.apply(crate::tags::TagName::DisclosurePreview, &si, &ei);
+                // `emit_pending_summary` writes its twin through `insert`, which does this.
+                self.cover_marks(preview_start, ei.offset());
             }
         }
         // Before the newline, exactly as `emit_pending_summary` does: the ink covers

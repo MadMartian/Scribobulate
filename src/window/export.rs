@@ -244,6 +244,77 @@ pub(crate) fn describe_export_error(e: &std::io::Error) -> String {
     }
 }
 
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod device_name_tests {
+    use super::run_export;
+    use crate::export::ExportTarget;
+    use crate::winstate::state;
+    use gtk::prelude::*;
+
+    /// **An export to a Windows device name fails by name, through the export's own
+    /// entry point and notice (TDD 1.4a, 25.7, 25.14).** Driven from `run_export` —
+    /// what the chooser calls with the path it returned — for both sinks, so the
+    /// refusal is shown the way any other export write failure is: "Export failed —"
+    /// with the reason, and nothing left in the folder. The PDF sink staged through
+    /// `atomic_io::stage_publish` directly and was never screened; mutation: with
+    /// `atomic_io`'s staging screen removed, `nul.pdf` reports no device name.
+    ///
+    /// `nulbyte.*` is the positive control on every host: a name that merely starts
+    /// with a device's letters exports normally, so the refusal is the name rule's and
+    /// not the export failing for some other reason. Off Windows `nul.*` exports too.
+    #[gtktest::test]
+    fn an_export_to_a_windows_device_name_fails_by_name_and_leaves_nothing() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.exportdevicename"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building a window");
+        let window = crate::window::new_window(&app, "IT", "# Device\n\ntext\n", None);
+        window.present();
+        let pump = |what: &str, done: &mut dyn FnMut() -> bool| {
+            crate::testpump::until_for(
+                crate::testpump::Clock::Idle,
+                std::time::Duration::from_secs(20),
+                what,
+                done,
+            )
+        };
+        pump("toplevel to map", &mut || window.is_mapped());
+        let st = state(&window).expect("state after new_window");
+        let shown = || st.chrome().status.borrow().label_text();
+
+        for target in [ExportTarget::Html, ExportTarget::Pdf] {
+            let ext = target.extension();
+            for (stem, refused) in [("nul", cfg!(windows)), ("nulbyte", false)] {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let name = format!("{stem}.{ext}");
+                let path = dir.path().join(&name);
+                run_export(&window, std::rc::Rc::clone(&st), target, path.clone());
+                let expected = if refused {
+                    "Export failed — NUL is a Windows device name".to_string()
+                } else {
+                    format!("Exported {name}")
+                };
+                pump(&format!("the outcome notice for {name}"), &mut || {
+                    shown().starts_with(&expected)
+                });
+                let left: Vec<_> = std::fs::read_dir(dir.path())
+                    .expect("read dir")
+                    .filter_map(|e| e.ok().map(|e| e.file_name()))
+                    .collect();
+                if refused {
+                    assert!(left.is_empty(), "{name}: the refusal left {left:?}");
+                } else {
+                    assert_eq!(left.len(), 1, "{name}: {left:?}");
+                    assert!(path.is_file(), "{name} was written");
+                }
+            }
+        }
+        window.destroy();
+    }
+}
+
 #[cfg(test)]
 mod export_error_tests {
     use super::describe_export_error;

@@ -241,7 +241,12 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
         window,
         move |_, _| {
             if let Some(st) = state(&w) {
-                st.editor.emit_insert_emoji();
+                // On the NEXT idle, not here: the editor's context-menu row activates this
+                // action and then dismisses its own popover, and a chooser opened first
+                // loses to that dismissal on macOS (the chooser shows, but takes no click
+                // and no Esc).
+                let editor = st.editor.clone();
+                glib::idle_add_local_once(move || editor.emit_insert_emoji());
             }
         }
     ));
@@ -1179,6 +1184,49 @@ mod gtk_integration_tests {
         );
         st.editor.disconnect(handler);
 
+        window.destroy();
+    }
+
+    /// `win.insert-emoji` opens the chooser on the NEXT idle, not inside its own
+    /// activation.
+    ///
+    /// The editor's context-menu row activates this action and then dismisses its own
+    /// popover. On macOS a chooser opened first loses to that dismissal: it shows, but a
+    /// click picks nothing and Esc does not close it. The chooser cannot be
+    /// driven here, so this pins the ordering that fixes it: the editor's `insert-emoji`
+    /// signal has not fired when the activation returns, and fires once the loop turns.
+    #[gtktest::test]
+    fn insert_emoji_opens_the_chooser_after_the_activation_returns() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.emojideferred"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE).expect("register");
+        let window = crate::window::new_window(&app, "IT", "# Emoji\n", None);
+        change_action_state(&window, "view-mode", &"edit".to_variant());
+        let st = state(&window).expect("tab state");
+        let opened = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        st.editor.connect_insert_emoji(glib::clone!(
+            #[strong]
+            opened,
+            move |view| {
+                opened.set(opened.get() + 1);
+                // Stop before GTK builds and shows the chooser.
+                view.stop_signal_emission_by_name("insert-emoji");
+            }
+        ));
+
+        simple_action(&window, "insert-emoji")
+            .expect("the action")
+            .activate(None);
+        assert_eq!(
+            opened.get(),
+            0,
+            "the chooser opened inside the activation, ahead of the popover dismissal \
+             that follows it on the context-menu route"
+        );
+        pump_until(|| opened.get() > 0, "the deferred chooser to open");
+        assert_eq!(opened.get(), 1, "exactly one chooser per activation");
         window.destroy();
     }
 }
