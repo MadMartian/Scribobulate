@@ -4,7 +4,6 @@
 
 use super::scan::{script_tag, Script};
 use super::Renderer;
-use gtk::glib;
 use gtk::prelude::*;
 use pulldown_cmark::{Event, Tag, TagEnd};
 
@@ -79,6 +78,9 @@ impl Renderer {
                     // BLOCK, so the answer comes from `self`, not from `t` alone.
                     let segs = self.scripts.segments(self.event_src.start, &t);
                     let src = self.event_src.clone();
+                    // Asked only where the platform names a cover face at all.
+                    let face =
+                        crate::platform::mark_fallback_family().and_then(|_| self.cell_family());
                     if let Some(ts) = &mut self.table {
                         let before = ts.cell_off;
                         for seg in &segs {
@@ -88,7 +90,9 @@ impl Renderer {
                                 continue;
                             }
                             let run = seg.text(&t);
-                            let esc = glib::markup_escape_text(run);
+                            // A letter whose marks the cell's face lacks is set in a face
+                            // that keeps them on it, as the body's `cover_marks` sets it.
+                            let esc = crate::pangospan::escape_covering_marks(run, face.as_deref());
                             // Highlight's open tag is theme-generated (`mark_open`,
                             // the cell twin of the `TagName::Mark` body tag, Document
                             // Rendering CAM row 12), so `open` is a `Cow`; the rest
@@ -169,10 +173,12 @@ impl Renderer {
                             .fill()
                     };
                     let span = crate::pangospan::code(self.code_chips.on(surface));
+                    let face = crate::pangospan::with_script_fallback(crate::pangospan::MONOSPACE);
                     if let Some(ts) = &mut self.table {
                         let before = ts.cell_off;
                         ts.cell_markup.push_str(&span.open);
-                        ts.cell_markup.push_str(&glib::markup_escape_text(&t));
+                        ts.cell_markup
+                            .push_str(&crate::pangospan::escape_covering_marks(&t, Some(&face)));
                         ts.cell_markup.push_str(span.close);
                         ts.cell_plain.push_str(&t);
                         ts.cell_off += t.chars().count() as i32;
@@ -199,6 +205,9 @@ impl Renderer {
                         self.inter.blockquote_depth,
                     );
                     self.apply(crate::tags::TagName::CodeInline { on }, &si, &ei);
+                    // Again, now the code face is on the run: `insert` decided against
+                    // the page's face.
+                    self.cover_marks(start, ei.offset());
                 }
             }
 

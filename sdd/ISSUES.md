@@ -65,7 +65,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| BJ | Windows | Production | n + U+0303 draws a detached tilde wherever the lead font is Georgia (PDF export; Sepia-like themes in the preview) | Low |
 
 ## Closed issues
 
@@ -465,22 +464,6 @@ whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, unt
 critical fires and names the holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
-
-## BJ. On Windows, a combining tilde detaches from its base under Georgia
-
-**Severity**: Low (cosmetic; the text and extraction are correct).
-
-In a Windows PDF export, and in the preview under any theme whose font list lands on
-Georgia (Sepia), `n` + U+0303 COMBINING TILDE draws with the tilde apart from the `n`.
-Extraction keeps `n` + U+0303 correct (TDD 25.18). Cause, measured with Pango Win32 on the
-1.0.0 stack: Georgia has no U+0303, so Pango itemizes the mark into its own run in the first
-alias font that has it (MS Gothic for `serif`), and HarfBuzz cannot position a mark against
-a base in another run; appending a fallback family does not help. Options: (a) lead with a
-face carrying the combining marks (Times New Roman and Segoe UI both measured composed),
-which changes the Latin face of every Windows PDF and those themes' preview; (b) keep
-Georgia and NFC-compose before shaping, which fixes only bases with a precomposed form and
-changes the extracted text to `ñ`, against TDD 25.18's byte-exact extraction. Evidence:
-Windows seat, found while fixing Hangul in PDF export (2026-11-14). No Known-issues line.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

@@ -1,5 +1,6 @@
-//! A face for the scripts a requested font stack cannot draw, and one for the symbols
-//! (`symbol_fallback_family`).
+//! A face for the scripts a requested font stack cannot draw, one for the symbols
+//! (`symbol_fallback_family`), and one for a letter's combining marks
+//! (`mark_fallback_family`).
 //!
 //! **Cause.** Pango's Win32 font map falls back from one face to the next only through
 //! its own built-in alias table; it never searches the installed faces for a character
@@ -55,4 +56,29 @@ pub(crate) fn script_fallback_family() -> Option<String> {
 /// would skip it and fall back exactly as before.
 pub(crate) fn symbol_fallback_family() -> Option<&'static str> {
     Some("Segoe UI Symbol")
+}
+
+/// The face a base letter and its combining marks are set in together where the run's
+/// lead face has the letter but not every mark.
+///
+/// **The same cause, landing on a face in another RUN.** Georgia — the lead of `serif`,
+/// so of every unthemed PDF, and of Sepia's stack — has 11 of the 112 combining
+/// diacriticals (U+0300–U+036F); it lacks U+0303. `serif`'s alias table takes the tilde
+/// to MS Gothic, which itemizes it into a run of its own, and HarfBuzz positions a mark
+/// only against a base in the same run: `n` + U+0303 drew `n` and a free-standing tilde
+/// beside it (MEASURED, Pango 1.57 / Windows 10 19045: runs `an` Georgia, U+0303 MS
+/// Gothic, the rest Georgia). Appending a face cannot help, for `symbol_fallback_family`'s
+/// reason; leading every run with one would move every Latin letter off Georgia. So only
+/// the CLUSTER — the letter and its marks — is set in this face
+/// (`pangospan::mark_cover`), and shaped in one run it composes.
+///
+/// **Why Times New Roman.** It ships on every Windows the app supports and has all 112
+/// combining diacriticals (measured), and so does Segoe UI, the desktop face. The lead
+/// that lacks them is a SERIF (Tahoma and Courier New, which `sans` and `monospace` reach,
+/// both carry U+0301, U+0303 and U+0323), so the cluster is set in the serif: its
+/// letter keeps the strokes and contrast of the letters around it, where Segoe UI would
+/// put one sans letter in a serif word. A constant for `symbol_fallback_family`'s reason:
+/// Windows has no setting naming such a face.
+pub(crate) fn mark_fallback_family() -> Option<&'static str> {
+    Some("Times New Roman")
 }

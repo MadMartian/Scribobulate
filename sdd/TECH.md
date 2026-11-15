@@ -137,6 +137,14 @@ Platform-specific notes that shape the architecture:
   takes Segoe UI to MS UI Gothic for `▶`, which covers it with a 9pt bitmap speck, so
   a themed disclosure glyph the page's face cannot draw is LED by Segoe UI Symbol
   instead (`widgets/disclosure.rs`'s `glyph_family`; appending would never reach it).
+  And it takes a combining mark the lead face lacks (Georgia, which `serif` and Sepia
+  lead with, lacks U+0303) to another face in a run of its own, where HarfBuzz cannot
+  place it on its letter. So a cluster — a letter and its marks — whose lead face has the
+  letter but not every mark is set in Times New Roman, cluster by cluster, in the
+  preview's buffer (a tag), its table cells (a span) and the PDF's layouts (an
+  attribute), all through `pangospan::mark_cover`; the text is untouched. Both that and
+  `glyph_family` ask `pangospan::lead_face`, which needs the stack spelled as GTK hands
+  it to Pango, names joined by a bare comma (`CssSafeFontStack::pango_family`).
 
 ### Integration boundaries
 

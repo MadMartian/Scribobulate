@@ -101,6 +101,28 @@ fn platform_symbol_fallback_family() -> Option<&'static str> {
     None
 }
 
+/// The face to set a base letter AND its combining marks in, where the run's own face
+/// has the letter but not every mark — or `None` where nothing is to be changed.
+///
+/// Only Windows answers, for the same cause with a third landing: the alias table takes
+/// a mark the lead face lacks to another face in a run of its own, and HarfBuzz cannot
+/// place a mark against a base in another run, so `n` + U+0303 drew its tilde detached
+/// (see `win32::script_fallback`). Linux and macOS return `None`, and every run there
+/// is laid out exactly as before. `pangospan::mark_cover` is the one place it is used.
+pub(crate) fn mark_fallback_family() -> Option<&'static str> {
+    platform_mark_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_mark_fallback_family() -> Option<&'static str> {
+    win32::mark_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_mark_fallback_family() -> Option<&'static str> {
+    None
+}
+
 // ── which process holds the front (tests only) ────────────────────────────────────
 
 /// The pid of the frontmost application, for a GTK test that needs an active window and

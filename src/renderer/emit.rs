@@ -35,6 +35,27 @@ fn is_list_tagged(iter: &gtk::TextIter) -> bool {
         .any(|t| t.name().is_some_and(|n| TagName::is_list_item(&n)))
 }
 
+/// The tag a cluster's cover face rides ([`Renderer::cover_marks`]).
+///
+/// Outside [`TagName`], like the `fg-*` syntect tags, and for a reason of its own: it is
+/// created only on a platform that names a cover face, and only once a cluster needs
+/// one, so the tag vocabulary TDD 18.2 holds byte-identical gains nothing on any other
+/// platform or in any document without such a cluster.
+pub(crate) const MARK_COVER_TAG: &str = "mark-cover";
+
+/// The family the highest-priority tag at `iter` names, other than the cover's own —
+/// the face a run is set in there, where a tag decides it (`tags.rs`'s code and heading
+/// tags). Tags come back in ascending priority.
+fn run_family(iter: &gtk::TextIter) -> Option<String> {
+    iter.tags()
+        .iter()
+        .rev()
+        .filter(|t| t.name().as_deref() != Some(MARK_COVER_TAG))
+        .find(|t| t.is_family_set())
+        .and_then(|t| t.family())
+        .map(|family| family.to_string())
+}
+
 impl Renderer {
     /// The SINGLE sink through which every **fixed** [`TagName`] is applied to the
     /// buffer (harvest N6). The name is resolved from the enum, never a string
@@ -50,6 +71,17 @@ impl Renderer {
 
     pub(super) fn in_table_cell(&self) -> bool {
         self.table.as_ref().is_some_and(|t| t.in_cell)
+    }
+
+    /// The family a table cell's prose is drawn in: a header cell takes the theme's
+    /// heading face where it states one (the header rule in `preview::css`), every other
+    /// cell the page's.
+    pub(super) fn cell_family(&self) -> Option<String> {
+        let in_head = self.table.as_ref().is_some_and(|t| t.in_head);
+        match &self.theme.heading_font {
+            Some(stack) if in_head => Some(stack.pango_family()),
+            _ => crate::pangospan::page_family(&self.theme),
+        }
     }
 
     /// The left inset (px, at this render's zoom) an anchored block child inherits from
@@ -135,8 +167,71 @@ impl Renderer {
             // hand-rolled copies (TDD 2.1a).
             apply(HEADING_TAGS[crate::theme::heading_slot(level as u8)]);
         }
+        // After the tags, because they decide the face each cluster is set in.
+        self.cover_marks(start, self.end_offset());
         self.inter.trailing_newlines = 0;
         self.inter.at_start = false;
+    }
+
+    /// Set each cluster in `[from, to)` whose combining marks its run's face lacks in the
+    /// face that keeps them on its letter, and lift that face from any cluster whose run's
+    /// face now has them (`pangospan::mark_cover`, the decision every surface shares).
+    ///
+    /// The run's face at a cluster is the family of the highest-priority tag there that
+    /// names one — a code tag, a heading's face — else the page's. Re-run wherever a tag
+    /// naming a family lands on text already inserted (inline code, a code block), so the
+    /// decision is always taken against the face the cluster is finally drawn in.
+    ///
+    /// Inert off Windows: the platform names no face, so this returns before reading the
+    /// buffer and no tag is ever created.
+    pub(crate) fn cover_marks(&self, from: i32, to: i32) {
+        if crate::platform::mark_fallback_family().is_none() || to <= from {
+            return;
+        }
+        let (si, ei) = (self.buf.iter_at_offset(from), self.buf.iter_at_offset(to));
+        // `slice`, which keeps a U+FFFC per anchored child, so a char count into it is a
+        // buffer offset (ScrAP-74).
+        let text = self.buf.slice(&si, &ei, true).to_string();
+        if !crate::pangospan::has_combining_mark(&text) {
+            return;
+        }
+        let table = self.buf.tag_table();
+        let existing = table.lookup(MARK_COVER_TAG);
+        if let Some(tag) = &existing {
+            self.buf.remove_tag(tag, &si, &ei);
+        }
+        let ctx = crate::pangospan::widget_font_context();
+        let page = crate::pangospan::page_family(&self.theme);
+        let offset_of = |byte: usize| from + text[..byte].chars().count() as i32;
+        // One probe per family named in the span, not per cluster.
+        let mut faces: Vec<(String, Option<gtk::pango::Font>)> = Vec::new();
+        let lead_at = |byte: usize| {
+            let family =
+                run_family(&self.buf.iter_at_offset(offset_of(byte))).or_else(|| page.clone())?;
+            if let Some((_, face)) = faces.iter().find(|(named, _)| *named == family) {
+                return face.clone();
+            }
+            let face = crate::pangospan::lead_face(&ctx, &family);
+            faces.push((family, face.clone()));
+            face
+        };
+        let Some(cover) = crate::pangospan::mark_cover(&ctx, &text, lead_at) else {
+            return;
+        };
+        let tag = existing.unwrap_or_else(|| {
+            let tag = TextTag::new(Some(MARK_COVER_TAG));
+            tag.set_family(Some(cover.family));
+            // Added last, so it outranks every family the vocabulary registered.
+            table.add(&tag);
+            tag
+        });
+        for range in &cover.clusters {
+            self.buf.apply_tag(
+                &tag,
+                &self.buf.iter_at_offset(offset_of(range.start)),
+                &self.buf.iter_at_offset(offset_of(range.end)),
+            );
+        }
     }
 
     /// Draw the level's themed marker immediately after the heading's text (TDD 18.55).
@@ -412,6 +507,8 @@ impl Renderer {
             .blockquote_depth
             .min(usize::from(crate::tags::MAX_QUOTE_DEPTH)) as u8;
         self.apply_tag_per_line(TagName::CodeBlock { quote_depth }, block_start, ei.offset());
+        // The block's text went in without `insert`, and its face is the tag just applied.
+        self.cover_marks(block_start, ei.offset());
         // The depth travels WITH the span: the card is self-drawn, so nothing downstream
         // can ask the tags how far this block's text was pushed in (`CodeBlockSpan`).
         self.code_blocks.push(crate::span::CodeBlockSpan {

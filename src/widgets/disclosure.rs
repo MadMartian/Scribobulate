@@ -286,12 +286,6 @@ fn indicator(theme: &crate::theme::Theme, expanded: bool, size: i32) -> gtk::Wid
     gtk::Image::from_icon_name(ICON_COLLAPSED).upcast()
 }
 
-/// The size the coverage probe in [`glyph_family`] loads the page's face at, in points.
-///
-/// Coverage does not depend on it; it is stated because a description with no size
-/// has taken Pango to a negative-size CRITICAL on one host (`pangospan::host_has_a_face_for`).
-const COVERAGE_PROBE_PT: i32 = 12;
-
 /// The family a glyph indicator is laid out in, or `None` to leave it on the face it
 /// inherits from the page — which is every case on a platform whose font map finds a
 /// fitting face itself, and every glyph the page's face can draw.
@@ -305,14 +299,15 @@ const COVERAGE_PROBE_PT: i32 = 12;
 /// changed nothing, because MS UI Gothic covers the character and answers first.
 ///
 /// Only a glyph the page's face cannot draw is moved, so a theme whose glyph is set in its
-/// own face (`[+]` in a monospace stack) keeps it.
+/// own face (`[+]` in a monospace stack) keeps it. The page's face is the one Pango
+/// actually loads for the stack (`pangospan::lead_face`, the probe the combining-mark
+/// cover shares): under any themed stack this used to probe `Sans` instead, because the
+/// stack reached it spelled with a space after each comma (`CssSafeFontStack::pango_family`).
 fn glyph_family(
     theme: &crate::theme::Theme,
     glyph: &str,
     ctx: &gtk::pango::Context,
 ) -> Option<String> {
-    use gtk::pango;
-    use gtk::pango::prelude::FontExt;
     let symbol = crate::platform::symbol_fallback_family()?;
     // The face the label inherits: the theme's stack, which the theme sheet sets on the
     // preview, else the desktop's, which the label's own context already carries.
@@ -320,14 +315,8 @@ fn glyph_family(
         Some(stack) => stack.pango_family(),
         None => ctx.font_description()?.family()?.to_string(),
     };
-    let mut desc = pango::FontDescription::new();
-    desc.set_family(&page);
-    desc.set_size(COVERAGE_PROBE_PT * pango::SCALE);
-    let coverage = ctx.load_font(&desc)?.coverage(&pango::Language::default());
-    let drawn_by_page = glyph
-        .chars()
-        .all(|c| coverage.get(c as i32) != pango::CoverageLevel::None);
-    (!drawn_by_page).then(|| format!("{symbol},{page}"))
+    let face = crate::pangospan::lead_face(ctx, &page)?;
+    (!crate::pangospan::face_covers(&face, glyph)).then(|| format!("{symbol},{page}"))
 }
 
 /// The CSS node an indicator SHAPE draws its mark on, or `None` where the shape carries

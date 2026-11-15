@@ -310,17 +310,19 @@ mod tests {
         );
     }
 
-    /// The CSS quoting the sanitiser adds is stripped for Pango, and nothing else about
-    /// the stack is touched — the ORDER is the fallback chain.
+    /// The CSS quoting the sanitiser adds is stripped for Pango, and so is the space
+    /// after each comma; nothing else about the stack is touched — the ORDER is the
+    /// fallback chain, and a space INSIDE a name is part of it.
     #[test]
     fn a_font_stack_reaches_pango_unquoted_and_in_order() {
         let stack = crate::theme::sanitize_font_family("Liberation Serif, Georgia, serif")
             .expect("a safe stack");
         assert_eq!(
             stack.pango_family(),
-            "Liberation Serif, Georgia, serif",
-            "a quoted multi-word family breaks Pango's own list parsing, so the whole \
-             stack silently drops to the default sans"
+            "Liberation Serif,Georgia,serif",
+            "a quoted multi-word family breaks Pango's own list parsing, and a name \
+             Pango splits out with a leading space matches no Windows face, so either \
+             way the whole stack silently drops to the default sans"
         );
     }
 }

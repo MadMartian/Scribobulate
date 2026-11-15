@@ -232,6 +232,12 @@ impl Layouter<'_> {
         desc.set_weight(pango::Weight::__Unknown(spec.weight));
         layout.set_font_description(Some(&desc));
         layout.set_markup(markup);
+        // A letter whose combining marks the face Pango put it in lacks is set in a face
+        // that keeps them on it, cluster by cluster: on Windows `serif` leads with
+        // Georgia, which lacks U+0303, and `n` + U+0303 printed a detached tilde. The
+        // text is not touched, so it still extracts byte-exact (TDD 25.18). Nothing
+        // happens off Windows or in a layout without a mark (`pangospan::mark_cover`).
+        crate::pangospan::cover_marks_in_layout(&layout);
         layout
     }
 

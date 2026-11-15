@@ -497,6 +497,96 @@ mod export_destination_tests {
         );
     }
 
+    /// **TDD 25.18 / 25.18a** — a combining mark prints ON its letter, and still extracts
+    /// as the two characters the source has.
+    ///
+    /// On Windows an export lays unthemed text out in `serif`, which leads with Georgia,
+    /// and Georgia lacks U+0303: Pango's alias table took the tilde to MS Gothic in a run
+    /// of its own, HarfBuzz cannot place a mark against a letter in another run, and
+    /// `n` + U+0303 printed a tilde beside the `n`. Extraction could not see it — the
+    /// text layer was right — so the oracle is the runs the page was drawn from: no run
+    /// may BEGIN with a mark, which is what a mark split from its letter looks like, and
+    /// each cluster lies inside one run with no unknown glyph.
+    ///
+    /// The control is `e` + U+0301, which Georgia draws whole: it must stay in the face
+    /// the word around it is in, because only a cluster the lead face cannot draw moves.
+    ///
+    /// `q` + U+0323 is held to the runs and not to the extraction, MEASURED: it has no
+    /// precomposed form, so it is drawn as two glyphs, the dot shifted below the
+    /// baseline, where `ñ` is one composed glyph carrying `/ActualText` `n` + U+0303. The
+    /// file's ToUnicode maps give exactly `q`, U+0323 in order, yet Xpdf 4.00's
+    /// `pdftotext -raw` (the one extractor on the Windows seat) reads `q \u{323}`: a
+    /// space from its own geometry, which it did not insert while the dot sat detached
+    /// on the baseline. Recorded rather than asserted, because asserting it would assert
+    /// a reader's heuristic (25.18a).
+    ///
+    /// Mutation: `pangospan::mark_cover` answering `None` fails this on Windows with
+    /// U+0303 alone in MS Gothic runs and U+0323 alone in a Segoe UI run. Linux and macOS
+    /// name no cover face, so it holds there on their own font maps or reports a defect
+    /// of the same shape.
+    #[gtktest::test]
+    fn a_combining_mark_prints_on_its_letter_and_extracts_uncomposed() {
+        const LINE: &str = "Espan\u{303}a, cafe\u{301}";
+        let md = format!("# Man\u{303}ana\n\n{LINE}\n\nq\u{323}\n");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("marks.pdf");
+        let paged = export_markdown_paged(&md, &path);
+        let runs: Vec<(String, String, usize)> = paged
+            .laid()
+            .lines
+            .iter()
+            .flat_map(|line| line.runs_for_test())
+            .collect();
+        let is_mark = |c: char| {
+            // SAFETY: a pure lookup in GLib's Unicode tables, defined for every code point.
+            unsafe { gtk::glib::ffi::g_unichar_ismark(u32::from(c)) != 0 }
+        };
+
+        let split: Vec<&(String, String, usize)> = runs
+            .iter()
+            .filter(|(text, _, _)| text.chars().next().is_some_and(is_mark))
+            .collect();
+        assert!(
+            split.is_empty(),
+            "a combining mark printed in a run apart from its letter (text, face, boxes): \
+             {split:?}\nall runs: {runs:?}"
+        );
+        for cluster in ["n\u{303}", "e\u{301}", "q\u{323}"] {
+            assert!(
+                runs.iter()
+                    .any(|(text, _, boxes)| text.contains(cluster) && *boxes == 0),
+                "{cluster:?} is not drawn whole in one run: {runs:?}"
+            );
+        }
+        let face_of = |needle: &str| {
+            runs.iter()
+                .find(|(text, _, _)| text.contains(needle))
+                .map(|(_, face, _)| face.clone())
+        };
+        assert_eq!(
+            face_of("e\u{301}"),
+            face_of("caf"),
+            "`e` + U+0301 is drawn whole by the body face, so it must keep that face: {runs:?}"
+        );
+
+        // And the 25.18 round trip, where this host can read the text layer: no NFC.
+        let Some(pdftotext) = pdftotext() else {
+            println!("SKIPPED [TDD 25.18]: no `pdftotext` on this host to read the text layer");
+            return;
+        };
+        let out = std::process::Command::new(pdftotext)
+            .args(["-enc", "UTF-8", "-raw"])
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.lines().any(|l| l.trim_end_matches('\u{c}') == LINE),
+            "the line must extract byte-exact as {LINE:?}, uncomposed; got:\n{text:?}"
+        );
+    }
+
     /// The `/BaseFont` names a PDF's font dictionaries declare. cairo writes those
     /// dictionaries uncompressed, so a byte scan finds them without a PDF parser.
     fn embedded_font_names(pdf: &[u8]) -> Vec<String> {

@@ -3144,9 +3144,11 @@ mod gtk_integration_tests {
         );
         // The family reaches Pango UNQUOTED — `sanitize_font_family` emits CSS quoting,
         // which Pango's own family-list parser does not accept (it would silently drop
-        // to the default sans instead of walking the stack).
-        assert_eq!(h1.family().as_deref(), Some("Courier, monospace"));
-        assert_eq!(h2.family().as_deref(), Some("Georgia, serif"));
+        // to the default sans instead of walking the stack) — and with no space after a
+        // comma, which Pango's Win32 font map would match against no face either
+        // (`CssSafeFontStack::pango_family`).
+        assert_eq!(h1.family().as_deref(), Some("Courier,monospace"));
+        assert_eq!(h2.family().as_deref(), Some("Georgia,serif"));
     }
 
     /// TDD 18.22 — the heading rule and the space above it reach the real heading tags,

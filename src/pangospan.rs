@@ -230,6 +230,311 @@ pub(crate) fn family_with_fallback(
     }
 }
 
+// ── what a face draws, and the combining marks a run's own face lacks ───────────────
+
+/// The size a coverage probe loads a face at, in points.
+///
+/// Coverage does not depend on it; it is stated because a description with no size has
+/// taken Pango to a negative-size CRITICAL on one host (`host_has_a_face_for`).
+const COVERAGE_PROBE_PT: i32 = 12;
+
+/// The face Pango sets text named `family` in — the first family of the list the font
+/// map has — or `None` where it loads nothing.
+///
+/// **The one coverage probe**, for every surface that must know whether a run's own face
+/// draws a character: a themed disclosure glyph (`widgets::disclosure`) and a letter's
+/// combining marks ([`mark_cover`]). `family` is spelled the way Pango splits a list,
+/// names joined by a bare comma, as `CssSafeFontStack::pango_family` gives them and as GTK
+/// hands a CSS stack to Pango. Spelled with a space after each comma, this probe answered
+/// for the wrong face: Pango does not trim the names it splits out, the Win32 font map
+/// matched ` Georgia` to nothing, and with every family but the first missing a themed
+/// stack loaded `Sans` (Tahoma) and warned `couldn't load font`, while the preview drew
+/// Georgia (MEASURED, Pango 1.57 / Windows 10).
+pub(crate) fn lead_face(ctx: &gtk::pango::Context, family: &str) -> Option<gtk::pango::Font> {
+    let mut desc = gtk::pango::FontDescription::new();
+    desc.set_family(family);
+    desc.set_size(COVERAGE_PROBE_PT * gtk::pango::SCALE);
+    ctx.load_font(&desc)
+}
+
+/// Whether `face` has a glyph of its own for every character of `text`.
+pub(crate) fn face_covers(face: &gtk::pango::Font, text: &str) -> bool {
+    use gtk::pango::prelude::FontExt;
+    let coverage = face.coverage(&gtk::pango::Language::default());
+    text.chars()
+        .all(|c| coverage.get(c as i32) != gtk::pango::CoverageLevel::None)
+}
+
+/// Whether `c` is a combining mark: a character shaped against the letter before it.
+fn is_mark(c: char) -> bool {
+    // SAFETY: a pure lookup in GLib's Unicode tables, defined for every code point.
+    unsafe { gtk::glib::ffi::g_unichar_ismark(u32::from(c)) != 0 }
+}
+
+/// Whether `text` carries a combining mark at all — the cheap test a caller makes before
+/// asking [`mark_cover`] anything.
+pub(crate) fn has_combining_mark(text: &str) -> bool {
+    text.chars().any(is_mark)
+}
+
+/// The family the preview sets its prose in: the theme's stack, which the theme sheet
+/// puts on the view, else the desktop's face, which GTK lays an unstyled view out in.
+pub(crate) fn page_family(theme: &Theme) -> Option<String> {
+    match &theme.font_family {
+        Some(stack) => Some(stack.pango_family()),
+        None => {
+            if !gtk::is_initialized_main_thread() {
+                return None;
+            }
+            let name = gtk::Settings::default()?.gtk_font_name()?;
+            let family = gtk::pango::FontDescription::from_string(&name).family()?;
+            Some(family.to_string())
+        }
+    }
+}
+
+/// The byte range of every cluster of `text` that carries a combining mark: a letter and
+/// the marks after it. A mark with no letter before it opens no cluster.
+fn mark_clusters(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    // The current letter's start, and the end of its last mark (equal while it has none).
+    let mut open: Option<(usize, usize)> = None;
+    for (at, c) in text.char_indices() {
+        let end = at + c.len_utf8();
+        match (is_mark(c), open.as_mut()) {
+            (true, Some((_, marks_end))) => *marks_end = end,
+            (true, None) => {}
+            (false, _) => {
+                out.extend(
+                    open.filter(|(start, marks_end)| marks_end > start)
+                        .map(|(s, e)| s..e),
+                );
+                open = Some((at, at));
+            }
+        }
+    }
+    out.extend(
+        open.filter(|(start, marks_end)| marks_end > start)
+            .map(|(s, e)| s..e),
+    );
+    out
+}
+
+/// The clusters of a run its own face would split, and the face that keeps each whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MarkCover {
+    /// The platform's face for them ([`crate::platform::mark_fallback_family`]).
+    pub(crate) family: &'static str,
+    /// Byte ranges into the text asked about, in order, each a letter and its marks.
+    pub(crate) clusters: Vec<std::ops::Range<usize>>,
+}
+
+/// **Where a letter's combining marks would draw detached, the face that keeps them on
+/// it** — the one decision every surface applies, each in its own medium: a tag in the
+/// preview's buffer, a span in a table cell's markup, an attribute in the PDF's layout.
+///
+/// The disclosure glyph's rule (move only what the run's own face cannot draw) applied
+/// per CLUSTER. On Windows a mark the lead face lacks is itemized into a run of its own,
+/// in whatever face Pango's alias table reaches, and HarfBuzz positions a mark only
+/// against a base in the same run, so `n` + U+0303 under Georgia drew a tilde beside the
+/// `n` (`platform::win32::script_fallback`). A cluster set in a face that has its letter
+/// and every mark shapes in one run and composes. Only the cluster moves: Latin text
+/// without marks keeps its face, and the text itself is untouched — `n` + U+0303 stays
+/// two characters, never rewritten to `ñ` (TDD 25.18). (HarfBuzz may DRAW the pair as
+/// the face's composed glyph; cairo then carries the two characters as its
+/// `/ActualText`, so the PDF still extracts them as written.)
+///
+/// `lead_at(byte)` is the face the run is set in at the cluster starting at `byte`: the
+/// face Pango put the letter in, where the caller has the laid-out runs, else
+/// [`lead_face`] of the family the run names.
+///
+/// `None` — leave the text exactly as it is — where the platform names no face (Linux and
+/// macOS: inert, so byte-identical), where `text` carries no combining mark, and where
+/// every cluster's lead face draws all its marks, or cannot draw its letter either: a
+/// letter its run's face lacks is the script fallback's to place, mark and all.
+pub(crate) fn mark_cover(
+    ctx: &gtk::pango::Context,
+    text: &str,
+    mut lead_at: impl FnMut(usize) -> Option<gtk::pango::Font>,
+) -> Option<MarkCover> {
+    let family = crate::platform::mark_fallback_family()?;
+    if !has_combining_mark(text) {
+        return None;
+    }
+    // Loaded at the first cluster that needs it, and only then.
+    let mut cover: Option<Option<gtk::pango::Font>> = None;
+    let mut clusters = Vec::new();
+    for range in mark_clusters(text) {
+        let cluster = &text[range.clone()];
+        let Some(letter) = cluster.chars().next() else {
+            continue;
+        };
+        let Some(lead) = lead_at(range.start) else {
+            continue;
+        };
+        if !face_covers(&lead, letter.encode_utf8(&mut [0; 4])) || face_covers(&lead, cluster) {
+            continue;
+        }
+        let cover = cover.get_or_insert_with(|| named_face(ctx, family));
+        if cover
+            .as_ref()
+            .is_some_and(|face| face_covers(face, cluster))
+        {
+            clusters.push(range);
+        }
+    }
+    (!clusters.is_empty()).then_some(MarkCover { family, clusters })
+}
+
+/// `family`'s own face, or `None` where the font map would substitute another for it: a
+/// cover face this host does not have covers nothing.
+fn named_face(ctx: &gtk::pango::Context, family: &str) -> Option<gtk::pango::Font> {
+    use gtk::pango::prelude::FontExt;
+    lead_face(ctx, family).filter(|face| {
+        face.describe()
+            .family()
+            .is_some_and(|got| got.eq_ignore_ascii_case(family))
+    })
+}
+
+/// A context on the font map GTK draws widgets with, for a caller that has none of its
+/// own — the preview's renderer, which builds buffer text and cell markup, not widgets.
+pub(crate) fn widget_font_context() -> gtk::pango::Context {
+    use pangocairo::prelude::FontMapExt;
+    pangocairo::FontMap::default().create_context()
+}
+
+/// `text` escaped as Pango markup, with each cluster [`mark_cover`] answers for wrapped in
+/// a span of the face that keeps its marks on it — for a run laid out in `family` whose
+/// markup is built as text (a preview table cell). Off Windows, for a run whose family is
+/// unknown, and for any text without a mark, exactly `glib::markup_escape_text`.
+pub(crate) fn escape_covering_marks(text: &str, family: Option<&str>) -> String {
+    let escape = |s: &str| gtk::glib::markup_escape_text(s).to_string();
+    // Before a context is made, so the platform without a face pays nothing.
+    let family = match family {
+        Some(family)
+            if crate::platform::mark_fallback_family().is_some() && has_combining_mark(text) =>
+        {
+            family
+        }
+        _ => return escape(text),
+    };
+    let ctx = widget_font_context();
+    let lead = lead_face(&ctx, family);
+    let Some(cover) = mark_cover(&ctx, text, |_| lead.clone()) else {
+        return escape(text);
+    };
+    let mut out = String::with_capacity(text.len() + 48 * cover.clusters.len());
+    let mut at = 0;
+    for range in &cover.clusters {
+        let _ = write!(
+            out,
+            "{}<span font_family=\"{}\">{}</span>",
+            escape(&text[at..range.start]),
+            escape(cover.family),
+            escape(&text[range.clone()])
+        );
+        at = range.end;
+    }
+    out.push_str(&escape(&text[at..]));
+    out
+}
+
+/// Set each cluster of an already-built `layout` that [`mark_cover`] answers for in the
+/// face that keeps its marks on it, as a family attribute over the cluster alone — for
+/// the PDF sink, whose layouts are itemized, so a cluster's lead face is the face Pango
+/// actually put its letter in, whatever span chose it. Off Windows, and for a layout
+/// without a mark, nothing is touched and nothing is re-laid out.
+pub(crate) fn cover_marks_in_layout(layout: &gtk::pango::Layout) {
+    if crate::platform::mark_fallback_family().is_none() {
+        return;
+    }
+    let text = layout.text();
+    if !has_combining_mark(&text) {
+        return;
+    }
+    let runs = laid_runs(layout);
+    let lead_at = |at: usize| {
+        runs.iter()
+            .find(|(range, _)| range.contains(&at))
+            .map(|(_, face)| face.clone())
+    };
+    let Some(cover) = mark_cover(&layout.context(), &text, lead_at) else {
+        return;
+    };
+    // A copy, not the layout's own list mutated in place: `set_attributes` with an equal
+    // list keeps the stale itemization.
+    let attrs = layout
+        .attributes()
+        .and_then(|own| own.copy())
+        .unwrap_or_default();
+    for range in &cover.clusters {
+        let (Ok(start), Ok(end)) = (u32::try_from(range.start), u32::try_from(range.end)) else {
+            continue;
+        };
+        // Inserted after every attribute starting at or before it, so it is the family
+        // that wins over the cluster, a code span's included.
+        let mut family = gtk::pango::AttrString::new_family(cover.family);
+        family.set_start_index(start);
+        family.set_end_index(end);
+        attrs.insert(family);
+    }
+    layout.set_attributes(Some(&attrs));
+}
+
+/// Every run of `layout` as its byte range and the face Pango itemized it in.
+fn laid_runs(layout: &gtk::pango::Layout) -> Vec<(std::ops::Range<usize>, gtk::pango::Font)> {
+    let mut runs = Vec::new();
+    let mut iter = layout.iter();
+    loop {
+        if let Some(run) = iter.run_readonly() {
+            let item = run.item();
+            if let (Ok(start), Ok(len)) = (
+                usize::try_from(item.offset()),
+                usize::try_from(item.length()),
+            ) {
+                runs.push((start..start + len, item.analysis().font()));
+            }
+        }
+        if !iter.next_run() {
+            break;
+        }
+    }
+    runs
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use super::mark_clusters;
+
+    /// A cluster is a letter and the marks after it — two marks stay one cluster, a mark
+    /// at the start (no letter) opens none, and a letter with no mark is not one.
+    #[test]
+    fn a_cluster_is_a_letter_and_the_marks_after_it() {
+        let text = "\u{303}an\u{303}o q\u{323}\u{301}!";
+        let got: Vec<&str> = mark_clusters(text).into_iter().map(|r| &text[r]).collect();
+        assert_eq!(got, ["n\u{303}", "q\u{323}\u{301}"]);
+        assert!(mark_clusters("plain Latin, ñ precomposed").is_empty());
+    }
+
+    /// Off Windows the platform names no face, so nothing is ever covered — the text is
+    /// laid out exactly as it was (the inert, byte-identical half of the contract).
+    #[test]
+    fn no_platform_face_covers_nothing_and_escapes_as_before() {
+        if crate::platform::mark_fallback_family().is_some() {
+            println!(
+                "SKIPPED [TDD 25.18]: this platform names a mark face; the GTK tests cover it"
+            );
+            return;
+        }
+        let text = "a<n\u{303}>&";
+        assert_eq!(
+            super::escape_covering_marks(text, Some("serif")),
+            gtk::glib::markup_escape_text(text).as_str()
+        );
+    }
+}
+
 #[cfg(test)]
 mod fallback_tests {
     use super::family_with_fallback;
