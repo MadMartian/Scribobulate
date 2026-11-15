@@ -80,6 +80,7 @@
 - **When** the application tries to open it
 - **Then** the path is refused before it is read, the tab shows a refusal notice naming the reason, and the tab carries no backing path — so a later save cannot write the notice over the user's file
 - **And** a path that merely does not exist is unaffected, still opening as an empty creatable document (1.3)
+- **And** on Windows, a filename Windows reserves for a device is refused the same way, from its name alone, before anything opens it — `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`COM9`, `LPT1`–`LPT9`, their superscript forms `COM¹`–`COM³` and `LPT¹`–`LPT³`, `CONIN$` and `CONOUT$`, under any extension, in any letter case, and with trailing dots or spaces (`nul.md`, `Nul.Md.`, `nul .md`) — the notice says it is a Windows device name, not a file. Opening one reaches the device: `nul.md` read as an empty document with a backing path. A Save As to such a name is refused with the same reason ("Could not save the file"), and the document stays untitled. On Linux and macOS these are ordinary names
 - **And** a regular file within the limit whose bytes contain a NUL (a zero byte) is refused the same way once it has been read — the notice says it holds a NUL and is binary data rather than text, and the tab carries no backing path — because the editor cannot hold a NUL, and a document the editor could not take must never be one a save can write back: admitted, it opened an empty editor against the file's full text, a tab already marked unsaved, and a Save with nothing typed replaced the file with nothing. This holds for every route a document is read by: Open in any form, session restore, link navigation and crash recovery
 - **And** a file whose bytes are not UTF-8 at all is likewise not opened as text: the tab shows a notice that it could not be opened, again with no backing path
 
@@ -4373,6 +4374,7 @@ up doing.
 - **Given** a destination in a read-only directory, or a filesystem with no space
 - **When** the export is attempted
 - **Then** the failure is reported to the reader, and no partial, empty or temporary file is left at or beside the destination
+- **And** on Windows a destination whose filename is a Windows device name (`nul.pdf`, `com9.html`, the names 1.4a lists) is refused from its name before anything is staged, by either sink: the notice reads "Export failed —" and names the device, and nothing is left in the folder. Unscreened, the PDF sink staged its temp on the device itself — the temp's name begins with the device's — and its publish failed as a bare "Incorrect function."
 
 ### 25.8 The export survives its host going away
 - **Given** an export write in flight

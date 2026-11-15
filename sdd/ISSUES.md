@@ -66,7 +66,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
-| AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
@@ -480,16 +479,6 @@ over a file back with identical bytes; Linux clears it in the first frame. Not r
 a later build (2/2, frames to 9 s) — reproduce before working it. Evidence: 1.0.0 dry run,
 Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) or its
 predecessors. No Known-issues line.
-
-## AB. On Windows, `nul.md` opens as the NUL device instead of being refused
-
-**Severity**: Low.
-
-`nul.md` opens as the NUL device ("loaded … (0 bytes)") with no refusal, against TDD 1.4a.
-Win32 treats `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`9`, `LPT1`–`9` with any extension as
-devices; the 1.4a screen should name-check them. Evidence: 1.0.0 dry run, Windows seat, on
-the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its predecessors. No
-Known-issues line.
 
 ## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
 

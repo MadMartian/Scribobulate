@@ -215,8 +215,18 @@ fn without_bom_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
+/// The name half of admission, against this host's rules ([`content::screen_name`]).
+fn screen_name(path: &Path) -> Result<(), Refusal> {
+    content::screen_name(path, host_rules())
+}
+
 /// The blocking half of [`read_document`]: stat, admit, read. Runs on the pool.
 fn read_document_blocking(path: &Path) -> DocRead {
+    // The name before anything else, the orphan scan's `exists()` included: on Windows
+    // that stat is itself an open of the device (`content::screen_name`).
+    if let Err(refusal) = screen_name(path) {
+        return DocRead::Refused(refusal);
+    }
     // Before anything else: a crash between the two steps of a case-only rename
     // leaves the document under `<name>.rename-<pid>-<seq>` and nothing at `path`,
     // so an absence here is not always the intended-new-document it looks like
@@ -449,6 +459,7 @@ pub(crate) async fn read_document_text(path: PathBuf) -> std::io::Result<String>
 
 /// The blocking half of [`read_document_text`]. Runs on the pool.
 fn read_document_text_blocking(path: &Path) -> std::io::Result<String> {
+    screen_name(path).map_err(Refusal::into_io_error)?;
     // `metadata` first so a genuinely missing file still reports `NotFound` — the
     // save guard distinguishes that case (nothing to conflict with, safe to write)
     // from every other failure (cannot verify, ask first), and collapsing the two
@@ -475,6 +486,7 @@ fn read_document_text_blocking(path: &Path) -> std::io::Result<String> {
 /// which never has one ([`without_bom`]).
 pub(crate) async fn read_document_bytes(path: PathBuf) -> std::io::Result<Vec<u8>> {
     off_main(move || {
+        screen_name(&path).map_err(Refusal::into_io_error)?;
         let meta = std::fs::metadata(&path)?;
         if let Err(refusal) = limits::is_regular_file_within_limit(&meta) {
             return Err(Refusal::from(refusal).into_io_error());
@@ -513,6 +525,16 @@ pub(crate) async fn file_stamp(path: PathBuf) -> std::io::Result<crate::winstate
 /// running here — it writes a co-located temp and renames it into place, so an
 /// interruption at any point (including the process dying while the pool thread
 /// is mid-write) leaves the previous file intact rather than truncated.
+///
+/// A Windows device name is refused, as on the read side ([`screen_name`]), before the
+/// write addresses the device — by `atomic_io`'s staging step, with the same
+/// [`Refusal`] wording, so every writer through it is covered and this one carries no
+/// second copy. MEASURED before the screen: a Save As to `nul.md` already failed, but
+/// as a bare "Incorrect function." (os error 1) and `com9.md` as "cannot find the
+/// file", neither saying why — and whether a write fails at all depends on the device,
+/// which is not a property to lean on. The refusal is an ordinary write error, so every
+/// caller's existing handling covers it: Save As shows "Could not save the file" with
+/// the reason, and the document stays untitled.
 pub(crate) async fn write_document(path: PathBuf, content: String) -> std::io::Result<()> {
     off_main(move || crate::atomic_io::write_atomic(&path, &content)).await
 }
@@ -927,7 +949,9 @@ mod tests {
     #[test]
     fn a_file_containing_a_nul_is_refused_by_every_reader() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nul.md");
+        // Not `nul.md`: on Windows that name is the NUL device, so the fixture write went
+        // nowhere and this test asserted the device refusal's ground instead of its own.
+        let path = dir.path().join("nulbyte.md");
         let bytes = b"# Title\n\nbefore\x00after\n\nlast line\n";
         std::fs::write(&path, bytes).unwrap();
 
@@ -965,6 +989,76 @@ mod tests {
         assert_eq!(raw.kind(), std::io::ErrorKind::InvalidData);
 
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "reading never writes");
+    }
+
+    /// **`nul.md` is refused on Windows before anything opens it, by every reader and
+    /// by the writer (TDD 1.4a).** The defect: it opened as the NUL device — "loaded …
+    /// (0 bytes)", an empty document with a backing path — because nothing on disk says
+    /// a name is a device, and asking the disk means opening it. The fixture cannot be
+    /// created there (that is the point), so what is asserted is the refusal itself,
+    /// with the device reason, and that the writer leaves nothing behind. Mutation:
+    /// with `screen_name` disabled, `nul.md` reads as `Loaded` (empty), and the write
+    /// fails only as "Incorrect function.", which names no reason.
+    ///
+    /// On Linux and macOS `nul.md` is an ordinary file, and that is asserted instead:
+    /// the screen must not refuse a legitimate name on a host where it is one.
+    #[test]
+    fn a_windows_device_name_is_refused_before_it_is_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nul.md");
+        if !cfg!(windows) {
+            std::fs::write(&path, "# ordinary\n").unwrap();
+            let doc = describe(&path, title_for(&path), read(&path));
+            assert_eq!(doc.source, "# ordinary\n", "nul.md is a file on this host");
+            assert_eq!(doc.backing.as_deref(), Some(path.as_path()));
+            return;
+        }
+
+        // Variants a careless rule would miss: case, a trailing dot, and a COM port
+        // that does not exist here (pre-fix, that one read as Missing — a NEW document
+        // whose first save would address the port). No CON or CONIN$: unscreened, a
+        // read of those would open the test process's own console.
+        for name in ["nul.md", "NUL.MD.", "com9.md"] {
+            let p = dir.path().join(name);
+            match read(&p) {
+                DocRead::Refused(Refusal::DeviceName { .. }) => {}
+                other => panic!(
+                    "{name}: expected a device-name refusal, got {:?}",
+                    DebugRead(&other)
+                ),
+            }
+        }
+        let doc = describe(&path, "t".into(), read(&path));
+        assert!(
+            doc.source.contains("Refused to open file"),
+            "{}",
+            doc.source
+        );
+        assert!(
+            doc.source.contains("NUL is a Windows device name"),
+            "the notice names why: {}",
+            doc.source
+        );
+        assert!(
+            doc.backing.is_none(),
+            "a refused path has no backing a save could write to"
+        );
+
+        let text = drive(read_document_text(path.clone())).expect_err("re-read refuses");
+        assert!(text.to_string().contains("Windows device name"), "{text}");
+        let raw = drive(read_document_bytes(path.clone())).expect_err("bytes refuse");
+        assert!(raw.to_string().contains("Windows device name"), "{raw}");
+
+        // Save As to the device: refused with the same reason, and no temp file staged
+        // beside it.
+        let write = drive(write_document(path.clone(), "# mine\n".into()))
+            .expect_err("a write to a device name is refused");
+        assert!(write.to_string().contains("Windows device name"), "{write}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "the refused write left nothing in the folder"
+        );
     }
 
     /// Invalid UTF-8 keeps its own, older answer — a "could not open" notice with no
