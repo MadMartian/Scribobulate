@@ -130,7 +130,10 @@ Platform-specific notes that shape the architecture:
   and the PDF sink, which lays unthemed text out in Pango's default `serif`, do not.
   So the desktop face is appended after every family the PDF sink requests and after
   the code face on both surfaces (`platform/win32/script_fallback.rs`, composed by
-  `pangospan::family_with_fallback`). Elsewhere nothing is appended.
+  `pangospan::family_with_fallback`). Elsewhere nothing is appended. The same table
+  takes Segoe UI to MS UI Gothic for `▶`, which covers it with a 9pt bitmap speck, so
+  a themed disclosure glyph the page's face cannot draw is LED by Segoe UI Symbol
+  instead (`widgets/disclosure.rs`'s `glyph_family`; appending would never reach it).
 
 ### Integration boundaries
 

@@ -66,8 +66,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
-| AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
-| AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
 | BJ | Windows | Production | n + U+0303 draws a detached tilde wherever the lead font is Georgia (PDF export; Sepia-like themes in the preview) | Low |
@@ -479,20 +477,6 @@ over a file back with identical bytes; Linux clears it in the first frame. Not r
 a later build (2/2, frames to 9 s) — reproduce before working it. Evidence: 1.0.0 dry run,
 Windows seat, on the build of "Merge bug/nul-byte-document: …" (2026-11-13) or its
 predecessors. No Known-issues line.
-
-## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
-
-**Severity**: Low (cosmetic).
-
-Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AX. On Windows, typing above the selected annotation clears the list's selection
-
-**Severity**: Low (the row re-selects on the next click).
-
-TDD 20.15 (Windows 3/3); Linux passes. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 ## BA. On resize, a card whose anchor word moves up vanishes instead of flipping
 

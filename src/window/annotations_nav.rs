@@ -23,9 +23,25 @@ use crate::span::OriginalByteOffset;
 pub(crate) fn refresh_annotations(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
     let md = st.shown_source(current_mode(window));
+    let entries = extract_entries(&md);
+    // The selection names its annotation by start byte in the PREVIOUS scan; an edit
+    // above it moves that byte, so carry it into this scan before the list re-selects by
+    // it (TDD 20.15, Document-Reference CAM row 2). An annotation that is gone loses it.
+    if let Some(selected) = st.annotations_selected.get() {
+        let followed = crate::annotations::follow_selection(
+            &st.annotation_source.borrow(),
+            &st.annotation_entries.borrow(),
+            OriginalByteOffset::new(selected),
+            &md,
+            &entries,
+        );
+        st.annotations_selected
+            .set(followed.map(OriginalByteOffset::raw));
+    }
     // Cached for the sidebar filter, whose keystrokes re-filter without re-scanning the
-    // document (Hot-path CAM row 8).
-    *st.annotation_entries.borrow_mut() = Rc::new(extract_entries(&md));
+    // document (Hot-path CAM row 8), and with the text it came from, for the next carry.
+    *st.annotation_entries.borrow_mut() = Rc::new(entries);
+    *st.annotation_source.borrow_mut() = md;
     rebuild_annotations_list(window);
 }
 
@@ -441,5 +457,65 @@ mod shown_source_tests {
             0,
             "a derived view is reading the buffer in Preview mode"
         );
+    }
+
+    /// TDD 20.15: text typed ABOVE the selected annotation moves its span, and the list
+    /// the debounce rebuilds keeps that annotation selected.
+    #[gtktest::test]
+    fn typing_above_the_selected_annotation_keeps_it_selected() {
+        use crate::annotations_view::AnnotationObject;
+        const DOC: &str =
+            "Intro.\n\nA {==first==}{>>one<<} here.\n\nB {==second==}{>>two<<} there.\n";
+        let app = test_app("com.extollit.scribobulate.integrationtest.annkeepselect");
+        for mode in ["edit", "split"] {
+            let window = crate::window::new_window(&app, "IT-annkeep", DOC, None);
+            window.present();
+            change_action_state(&window, "view-mode", &mode.to_variant());
+            change_action_state(&window, "annotations", &true.to_variant());
+            let st = state(&window).expect("tab state");
+            let scroller = st.chrome().annotations_scroller.clone();
+            let selection = || {
+                super::super::sidebar::list_view_of(&scroller)
+                    .and_then(|lv| lv.model())
+                    .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
+                    .expect("a document with annotations lists them")
+            };
+
+            // The reader clicks the second row.
+            let before = selection();
+            before.set_selected(1);
+            let second = extract_entries(DOC)[1].src_span.start;
+            assert_eq!(
+                st.annotations_selected.get(),
+                Some(second.raw()),
+                "{mode}: precondition: the click recorded the annotation"
+            );
+
+            // ...then types above it.
+            let mut at = st.editor_buf.start_iter();
+            st.editor_buf.insert(&mut at, "Typed above. ");
+            crate::testpump::until(
+                crate::testpump::Clock::Frame,
+                "the live-edit debounce to rebuild the annotations list",
+                || selection() != before,
+            );
+
+            let moved = extract_entries(&st.editor_text())[1].src_span.start;
+            assert_ne!(
+                moved, second,
+                "{mode}: precondition: the edit moved the span"
+            );
+            let selected = selection()
+                .selected_item()
+                .and_downcast::<AnnotationObject>()
+                .map(|a| a.src_start());
+            assert_eq!(
+                selected,
+                Some(moved),
+                "{mode}: the rebuilt list keeps the SAME annotation selected, at its moved \
+                 span (TDD 20.15)"
+            );
+            window.destroy();
+        }
     }
 }

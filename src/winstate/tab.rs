@@ -166,6 +166,10 @@ pub(crate) struct TabState {
     /// The annotations `refresh_annotations` last extracted — the annotations filter's
     /// equivalent of `outline_headings`, written only by that refresh (Hot-path CAM row 8).
     pub(crate) annotation_entries: RefCell<Rc<Vec<crate::annotations::AnnotationEntry>>>,
+    /// The text `annotation_entries` was extracted from, written beside it. The next
+    /// refresh carries `annotations_selected` from this scan into its own
+    /// (`annotations::follow_selection`), which needs the text the selection was made in.
+    pub(crate) annotation_source: RefCell<String>,
     /// This document's sidebar filters — whether each pane's filter box is open and what
     /// it holds (TDD 12.29, 20.24). Per document for the reason `outline_collapsed` is:
     /// the filter boxes are window chrome shared by every tab, so the reader's filter
@@ -177,8 +181,9 @@ pub(crate) struct TabState {
     /// viewer, if any — its **identity**, not a row index (the list is a filtered
     /// subsequence of all constructs, so position is not identity).
     /// `refresh_annotations` rebuilds the flat list on every document
-    /// change / mode switch and re-selects the row with this span so the panel keeps
-    /// its selection, without re-navigating. No scroll-spy counterpart exists — an
+    /// change / mode switch, first carrying this start into the new scan (an edit above
+    /// the annotation moves it; TDD 20.15), and re-selects the row with that span so the
+    /// panel keeps its selection, without re-navigating. No scroll-spy counterpart exists — an
     /// annotation owns no region to track a caret/viewport against (Q3, TDD 20.10).
     pub(crate) annotations_selected: Cell<Option<usize>>,
     /// Guard: `true` while the scroll-spy is programmatically setting the outline
@@ -673,6 +678,7 @@ impl TabState {
             heading_index: RefCell::new(Vec::new()),
             outline_headings: RefCell::default(),
             annotation_entries: RefCell::default(),
+            annotation_source: RefCell::default(),
             outline_filter: RefCell::default(),
             annotations_filter: RefCell::default(),
             annotations_selected: Cell::new(None),

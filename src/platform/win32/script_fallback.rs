@@ -1,4 +1,5 @@
-//! A face for the scripts a requested font stack cannot draw.
+//! A face for the scripts a requested font stack cannot draw, and one for the symbols
+//! (`symbol_fallback_family`).
 //!
 //! **Cause.** Pango's Win32 font map falls back from one face to the next only through
 //! its own built-in alias table; it never searches the installed faces for a character
@@ -36,4 +37,22 @@ pub(crate) fn script_fallback_family() -> Option<String> {
     let name = gtk::Settings::default()?.gtk_font_name()?;
     let family = gtk::pango::FontDescription::from_string(&name).family()?;
     Some(family.to_string())
+}
+
+/// The face Windows ships for symbols: Geometric Shapes, Arrows, Mathematical Operators.
+///
+/// **The same cause, landing on a face that covers the character and draws it wrong.**
+/// Segoe UI has `▼` but not `▶`, and its alias table reaches MS UI Gothic first, whose
+/// `▶` at the desktop's 9pt is an embedded bitmap a 3×4 px speck (MEASURED, GTK 4.22.4
+/// / Pango 1.57 / Windows 10 19045: 4×4 dark pixels against Segoe UI Symbol's 8×10). So
+/// this face cannot go LAST as the script fallback does: MS UI Gothic covers the
+/// character and answers first. Appending it was measured and changed nothing; only a
+/// family list that leads with it reaches it. Its caller leads with it only for a
+/// string the page's own face cannot draw (`widgets::disclosure`).
+///
+/// A constant rather than read from the system: Windows has no setting naming a symbol
+/// face, and this one ships on every Windows the app supports. Were it absent, Pango
+/// would skip it and fall back exactly as before.
+pub(crate) fn symbol_fallback_family() -> Option<&'static str> {
+    Some("Segoe UI Symbol")
 }

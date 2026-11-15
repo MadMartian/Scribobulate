@@ -80,6 +80,27 @@ fn platform_script_fallback_family() -> Option<String> {
     None
 }
 
+/// The face to LEAD a short symbol string with where the page's own face cannot draw
+/// it — or `None` where this platform's font map already finds a fitting face itself.
+///
+/// Only Windows answers, for the cause above with a worse landing: the alias table
+/// reaches a face that covers the symbol and draws it as a speck (see
+/// `win32::script_fallback`), so leading is the only placement that works. Linux and
+/// macOS return `None` and their indicator is laid out exactly as before.
+pub(crate) fn symbol_fallback_family() -> Option<&'static str> {
+    platform_symbol_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_symbol_fallback_family() -> Option<&'static str> {
+    win32::symbol_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_symbol_fallback_family() -> Option<&'static str> {
+    None
+}
+
 // ── which process holds the front (tests only) ────────────────────────────────────
 
 /// The pid of the frontmost application, for a GTK test that needs an active window and
