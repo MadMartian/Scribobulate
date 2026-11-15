@@ -67,7 +67,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
 | W | Any | Production | Each window open/close cycle still retains ~0.14 MB, linearly (GTK submenu models, an unpinned remainder) | Low |
-| Y | Mac | Test | `window::outline_nav`'s tab-switch reveal test fails its "preview is long enough" precondition on a large Mac display: the test sets no window size | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
@@ -75,8 +74,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
 | AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
-| AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
-| AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
@@ -511,17 +508,6 @@ gate (TDD 6.13); what remains is not a widget:
   rest).
 Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
 
-## Y. A tab-switch reveal test assumes a window size it never sets
-
-**Severity**: Low (test-only; CI's macOS runner passes it).
-
-On a 1728×1117 pt (@2×) Mac display, `window::outline_nav`'s
-`a_tab_switch_before_the_reveal_runs_drops_it` fails its "preview is long enough"
-precondition (`upper > 2 × page_size`) — 1 of 813 in the macOS integration step,
-identically on two builds of the 1.0.0 dry run, so not a regression. The test sets no
-default size where its siblings use 900×600; set one. Evidence: filed in "File the 1.0.0
-dry run's deferrals…" (2026-11-14). No Known-issues line.
-
 ## Z. On Windows, a document opened through a UNC path never live-reloads
 
 **Severity**: Low (File ▸ Reload still works).
@@ -588,27 +574,6 @@ runs on to the end, the caret off screen. Linux 0/4 (Ctrl+End completes in < 0.1
 macOS not read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
 (2026-11-14). Known issues: *"On Windows, clicking while Ctrl+End is still scrolling can
 leave the caret off screen — press Ctrl+End again or click once more."*
-
-## AQ. On macOS, View ▸ Side by Side on a short document shows only the preview's last line
-
-**Severity**: Medium (a visible jump; nothing is lost).
-
-14/14 by menu, 0/12 by ⌥2; Linux 0/15. The menu route alone logs `project_scroll(map) …
-target=16.0 max=32.0` (`src/window/scrollsync.rs`): the editor-driven projection runs on
-map before the preview's range exists. The system menu bar activates the action on a
-different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. Evidence:
-1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues:
-*"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
-press ⌥2 or File ▸ Reload."*
-
-## AU. On macOS, Insert Emoji never inserts
-
-**Severity**: Medium (the command is dead on one platform).
-
-TDD 9.14: the chooser opens but a pick (click, Enter, search) never inserts and Esc does not
-dismiss it; Linux and Windows insert. Quartz-only path in `GtkEmojiChooser`. Evidence: 1.0.0
-dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"Insert
-Emoji does not insert on macOS — type the emoji or paste it."*
 
 ## AX. On Windows, typing above the selected annotation clears the list's selection
 
