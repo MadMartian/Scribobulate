@@ -24,6 +24,7 @@
 //! | [`crash`] | Windows has **no POSIX signals**: a native crash is an unhandled SEH exception or a CRT `abort()`, and without this only Windows Error Reporting sees it. |
 //! | [`process`] | Windows has no `/proc` and no `proc_pidpath`, so crash recovery cannot otherwise tell whether a snapshot's owner is still running. |
 //! | [`folder_identity`] | GIO's Win32 file monitor is bound to the folder it opened, not to its path, so a folder deleted or moved away and recreated leaves live reload watching nothing. |
+//! | [`unc_monitor`] | GIO's Win32 file monitor spells a UNC folder in a form `CreateFileW` refuses, and returns a monitor that never fires, so a document opened from a share would never live-reload. |
 //! | [`script_fallback`] | Pango's Win32 font map falls back only through its own alias table, whose generic families name no Korean face a stock Windows installs, so the PDF export drew Hangul as tofu where the preview did not. |
 //!
 //! Note that `frame` and `appearance` are two causes and not one, though they meet at
@@ -55,6 +56,7 @@ pub(crate) mod privacy;
 pub(crate) mod process;
 pub(crate) mod reduced_motion;
 pub(crate) mod script_fallback;
+pub(crate) mod unc_monitor;
 
 // Re-exported so the split is invisible to callers: every one of these was
 // `platform::win32::X` before the decomposition and still is. Moving a function between
@@ -70,6 +72,7 @@ pub(crate) use privacy::create_private_directory;
 pub(crate) use privacy::{directory_dacl_sddl, inherits_only_from};
 pub(crate) use reduced_motion::{system_reduced_motion, watch_reduced_motion};
 pub(crate) use script_fallback::script_fallback_family;
+pub(crate) use unc_monitor::doc_monitor_is_blind_at;
 
 use std::ffi::c_void;
 

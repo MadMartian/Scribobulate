@@ -653,9 +653,31 @@ pub(crate) fn folder_identity(dir: &std::path::Path) -> std::io::Result<FolderId
     platform_folder_identity(dir)
 }
 
+/// Whether the GIO file monitor this platform would attach on `path` never fires, so live
+/// reload for that document has to poll the file itself (`window::rewatch`).
+///
+/// - **Windows**: for a document opened through a share (`\\server\share\…`) or another
+///   non-disk prefix — MEASURED, see `platform::win32::unc_monitor`.
+/// - **Linux and macOS**: never. Their paths have no prefix GIO misspells, and what a
+///   network filesystem reports to inotify or kqueue is not this question.
+pub(crate) fn doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    platform_doc_monitor_is_blind_at(path)
+}
+
 #[cfg(windows)]
 fn platform_doc_monitor_is_bound_to_its_folder() -> bool {
     true
+}
+
+#[cfg(windows)]
+fn platform_doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    win32::doc_monitor_is_blind_at(path)
+}
+
+#[cfg(not(windows))]
+fn platform_doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
+    let _ = path;
+    false
 }
 
 #[cfg(windows)]
@@ -721,6 +743,41 @@ mod folder_identity_tests {
             first,
             "the same name recreated is a different folder"
         );
+    }
+}
+
+#[cfg(test)]
+mod blind_monitor_tests {
+    use super::doc_monitor_is_blind_at;
+    use std::path::Path;
+
+    /// Which spellings of a document's path leave GIO's monitor blind: on Windows a share in
+    /// either spelling and the other non-disk prefixes, never a drive path in either
+    /// spelling; elsewhere nothing, since the same strings are ordinary relative names.
+    #[test]
+    fn a_share_is_blind_on_windows_and_a_drive_path_never_is() {
+        let blind_on_windows = [
+            r"\\localhost\C$\docs\plan.md",
+            r"\\server\share\plan.md",
+            r"\\?\UNC\server\share\plan.md",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\plan.md",
+            r"\\.\pipe\plan.md",
+        ];
+        let watchable = [
+            r"C:\docs\plan.md",
+            r"\\?\C:\docs\plan.md",
+            "/home/u/plan.md",
+        ];
+        for path in blind_on_windows {
+            assert_eq!(
+                doc_monitor_is_blind_at(Path::new(path)),
+                cfg!(windows),
+                "{path}"
+            );
+        }
+        for path in watchable {
+            assert!(!doc_monitor_is_blind_at(Path::new(path)), "{path}");
+        }
     }
 }
 

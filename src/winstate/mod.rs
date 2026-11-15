@@ -58,7 +58,8 @@
 //! * [`ids`] — the [`TabId`] and [`WindowId`] identity newtypes.
 //! * [`fmtinsert`] — [`FmtInsertKind`] (the Insert↔Edit Link/Image kind).
 //! * [`folderwatch`] — [`FolderWatch`], whether the live-reload monitor still watches the
-//!   folder at its document's path (Windows; `window::rewatch`).
+//!   folder at its document's path, and the file's own stamp where no monitor fires on it
+//!   (Windows; `window::rewatch`).
 //! * [`selfdelete`] — [`SelfDeleteGuard`], the atomic-save round-trip guard (GTK4Rs/AP-62).
 //! * [`status`] — the footer [`StatusStack`].
 //! * [`swap`] — [`SwapState`] plus the crash-recovery snapshot debounce/cap arithmetic.
@@ -130,7 +131,12 @@ pub(crate) use decisions::{
 };
 pub(crate) use docepoch::{DocEpoch, WriteEpoch};
 pub(crate) use fmtinsert::FmtInsertKind;
-pub(crate) use folderwatch::{folder_watch_action, FolderWatch, FolderWatchAction, WatchedFolder};
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) use folderwatch::WatchedFile;
+pub(crate) use folderwatch::{
+    file_watch_action, folder_watch_action, FileStamp, FolderWatch, FolderWatchAction,
+    WatchedFolder,
+};
 pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;
 pub(crate) use navhistory::{departure_stamp, traversal_to, NavDir, NavHistory, NavPlace, NavSpot};

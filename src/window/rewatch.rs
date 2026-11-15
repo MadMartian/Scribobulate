@@ -19,6 +19,10 @@
 //! - **nothing stands there** — re-read once, so a folder moved away, which gives the
 //!   monitor no event at all, is still concluded a deletion by the usual settle.
 //!
+//! Every re-read here stands in for a monitor event, so each is held under the window's
+//! Auto-Reload preference exactly as a monitor event is (TDD 9.13); the re-arm itself is
+//! not, since the monitor is what Auto-Reload's catch-up relies on afterwards.
+//!
 //! Polling the folder's *identity* rather than reacting to the monitor's `Deleted` is what
 //! covers the three measured shapes with one mechanism: a delete and recreate inside one
 //! poll interval is seen only as a different folder, and a move away is seen at all only
@@ -26,6 +30,16 @@
 //! its own folder in turn, so it fails the same way one level up and needs this re-arm
 //! anyway. The poll is the plumbing GIO's inotify backend already does on Linux for a
 //! vanished directory, which is why nothing here runs on Linux or macOS.
+//!
+//! **A document opened through a share has a monitor that never fires at all**
+//! (`platform::doc_monitor_is_blind_at`; the measurement is `platform::win32::unc_monitor`'s):
+//! GIO misspells the share's folder, fails to open it, and says nothing. For such a
+//! document the same poll also stamps the file — size, modified and created times — and a
+//! stamp that moved is re-read as a monitor event would be (`winstate::file_watch_action`).
+//! A hand-rolled `ReadDirectoryChangesW` on the correctly spelled folder was rejected: it is
+//! a second monitor beside GIO's, with its own thread or overlapped-I/O plumbing, for a
+//! case where a change seen within [`REWATCH_INTERVAL`] is what live reload already
+//! promises a folder replaced under it.
 
 use super::*;
 use crate::winstate::FolderWatchAction;
@@ -35,17 +49,27 @@ use crate::winstate::FolderWatchAction;
 /// `BACKING_SETTLE` applies.
 const REWATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// A monitor was just attached for `tab` at `path`: record its folder, start the poll if
-/// this tab has none, and take the baseline now. A no-op where the monitor follows the
-/// path on its own.
+/// A monitor was just attached for `tab` at `path`: record its folder — and the file
+/// itself, where that monitor will never fire — start the poll if this tab has none, and
+/// take the baseline now. A no-op where the monitor follows the path on its own.
 pub(crate) fn follow(tab: &Rc<TabState>, path: &std::path::Path) {
-    if !crate::platform::doc_monitor_is_bound_to_its_folder() {
+    let blind = crate::platform::doc_monitor_is_blind_at(path);
+    if !crate::platform::doc_monitor_is_bound_to_its_folder() && !blind {
         return;
     }
     let Some(dir) = path.parent() else {
         return;
     };
-    tab.folder_watch.restart(dir.to_path_buf());
+    if blind {
+        log::info!(
+            "tab {}: the file monitor cannot watch {}; live reload polls it every {:?}",
+            tab.id,
+            path.display(),
+            REWATCH_INTERVAL
+        );
+    }
+    tab.folder_watch
+        .restart(dir.to_path_buf(), blind.then(|| path.to_path_buf()));
     if !tab.folder_watch.polling.replace(true) {
         let tab_id = tab.id;
         // Captures the id, never the tab: the poll must not keep a closed tab alive, and
@@ -61,18 +85,24 @@ pub(crate) fn follow(tab: &Rc<TabState>, path: &std::path::Path) {
     probe(tab);
 }
 
-/// Ask, off the main thread, which folder stands where `tab`'s monitor was attached.
+/// Ask, off the main thread, which folder stands where `tab`'s monitor was attached — and,
+/// where that monitor never fires, what the file itself looks like now.
 fn probe(tab: &Rc<TabState>) {
     let Some(dir) = tab.folder_watch.dir.borrow().clone() else {
         return;
     };
+    let file = tab.folder_watch.file.borrow().clone();
     if tab.folder_watch.probing.replace(true) {
         return;
     }
     let generation = tab.folder_watch.generation.get();
     let tab_id = tab.id;
     glib::MainContext::default().spawn_local(async move {
-        let seen = crate::docio::folder_identity(dir).await;
+        let folder = crate::docio::folder_identity(dir).await;
+        let stamp = match file {
+            Some(file) => Some(crate::docio::file_stamp(file).await),
+            None => None,
+        };
         let Some(tab) = winstate::tab_by_id(tab_id) else {
             return;
         };
@@ -83,26 +113,95 @@ fn probe(tab: &Rc<TabState>) {
             probe(&tab);
             return;
         }
-        let seen = match seen {
-            Ok(identity) => Some(identity),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            // Could not ask (a share that refused, a folder pending deletion): that is not
-            // an answer, so record nothing and ask again next tick.
-            Err(e) => {
-                log::debug!("tab {}: folder of its document not probed: {e}", tab.id);
+        // Could not ask (a share that refused, a folder pending deletion): that is not an
+        // answer, so record nothing and ask again next tick.
+        if let Some(seen) = answer(&tab, "folder of its document", folder) {
+            let was = tab.folder_watch.recorded.get();
+            let (next, action) = winstate::folder_watch_action(was, seen);
+            tab.folder_watch.recorded.set(next);
+            if action != FolderWatchAction::Nothing {
+                // Re-armed or re-read already: either answers for the file too.
+                apply(&tab, was, action);
                 return;
             }
-        };
-        let (next, action) = winstate::folder_watch_action(tab.folder_watch.recorded.get(), seen);
-        tab.folder_watch.recorded.set(next);
-        apply(&tab, action);
+        }
+        if let Some(seen) = stamp.and_then(|stamp| answer(&tab, "its document", stamp)) {
+            file_changed(&tab, seen);
+        }
     });
 }
 
-fn apply(tab: &Rc<TabState>, action: FolderWatchAction) {
+/// A probe's result as an answer: present, `None` for nothing at the path, or no answer at
+/// all when the question could not be asked.
+fn answer<T>(tab: &TabState, what: &str, result: std::io::Result<T>) -> Option<Option<T>> {
+    match result {
+        Ok(found) => Some(Some(found)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(e) => {
+            log::debug!("tab {}: {what} not probed: {e}", tab.id);
+            None
+        }
+    }
+}
+
+/// The poll's stand-in for the monitor event a blind monitor never delivers: a stamp that
+/// moved is re-read exactly as `app::attach_file_backing`'s handler re-reads an event, under
+/// the same Auto-Reload preference.
+fn file_changed(tab: &Rc<TabState>, seen: Option<winstate::FileStamp>) {
+    let (next, action) = winstate::file_watch_action(tab.folder_watch.file_recorded.get(), seen);
+    if action == FolderWatchAction::Nothing {
+        tab.folder_watch.file_recorded.set(next);
+        return;
+    }
+    // Between windows (a drag in flight): the change stays unrecorded, so the next tick
+    // sees it again from wherever the tab has landed.
+    let Some(window) = window_of_content_box(&tab.content_box) else {
+        return;
+    };
+    tab.folder_watch.file_recorded.set(next);
+    if !auto_reload_is_on(&window) {
+        return;
+    }
+    log::info!(
+        "tab {}: {} changed where no monitor sees it; re-reading",
+        tab.id,
+        tab.path
+            .borrow()
+            .as_ref()
+            .map_or_else(|| "<untitled>".into(), |p| p.display().to_string())
+    );
+    check_and_reload_tab(tab);
+}
+
+/// Whether a change the poll found may be re-read now. The same gate, read the same way, as
+/// `app::attach_file_backing`'s handler puts in front of every monitor event — "when off,
+/// every tab's monitor in this window does nothing at all" — so the poll, which stands in
+/// for that monitor, does nothing either; turning Auto-Reload back on re-reads every tab
+/// of the window, which catches up whatever was held here (TDD 9.13).
+fn auto_reload_is_on(window: &ApplicationWindow) -> bool {
+    bool_action_state(window, "auto-reload", true)
+}
+
+/// Act on the folder poll's `action`; `was` is what was recorded before it, put back when
+/// the action has to wait to be asked again.
+fn apply(
+    tab: &Rc<TabState>,
+    was: winstate::WatchedFolder<crate::platform::FolderIdentity>,
+    action: FolderWatchAction,
+) {
     match action {
         FolderWatchAction::Nothing => {}
         FolderWatchAction::Recheck => {
+            // Between windows (a drag in flight), no window holds the preference: leave the
+            // folder unrecorded as gone, so the next tick sees it gone again from wherever
+            // the tab has landed, as `file_changed` does.
+            let Some(window) = window_of_content_box(&tab.content_box) else {
+                tab.folder_watch.recorded.set(was);
+                return;
+            };
+            if !auto_reload_is_on(&window) {
+                return;
+            }
             log::info!(
                 "tab {}: the folder of {} is gone; re-reading",
                 tab.id,
@@ -114,7 +213,8 @@ fn apply(tab: &Rc<TabState>, action: FolderWatchAction) {
     }
 }
 
-/// Attach a new monitor in the folder that now stands at `tab`'s path, then re-read.
+/// Attach a new monitor in the folder that now stands at `tab`'s path, then re-read under
+/// the Auto-Reload preference.
 fn rearm(tab: &Rc<TabState>) {
     let Some(path) = tab.path.borrow().clone() else {
         return;
@@ -135,8 +235,13 @@ fn rearm(tab: &Rc<TabState>) {
         tab.id,
         path.display()
     );
+    // The monitor is re-armed whatever Auto-Reload says: the preference holds back what a
+    // monitor's events cause, never the monitor, and one left blind here would miss every
+    // write after Auto-Reload is turned back on. Only the re-read is a monitor event's.
     crate::app::attach_file_backing(&window, tab, path);
-    check_and_reload_tab(tab);
+    if auto_reload_is_on(&window) {
+        check_and_reload_tab(tab);
+    }
 }
 
 fn watched_dir_for_log(tab: &TabState) -> String {
@@ -264,6 +369,158 @@ mod gtk_integration_tests {
                 !tab.chrome().conflict_toast.is_visible(),
                 "nothing to ask about"
             );
+            window.destroy();
+        });
+    }
+
+    /// `local`, spelled through this machine's administrative share (`\\localhost\C$\…`) —
+    /// the cheapest way to open a real local file by a UNC path. `None` off Windows, for a
+    /// path without a drive, and where the share is not reachable (no Server service, or a
+    /// policy that removes the administrative shares).
+    fn through_admin_share(local: &std::path::Path) -> Option<std::path::PathBuf> {
+        use std::path::{Component, Prefix};
+        if !cfg!(windows) {
+            return None;
+        }
+        let mut components = local.components();
+        let letter = match components.next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => char::from(letter),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut unc = std::path::PathBuf::from(format!(r"\\localhost\{letter}$\"));
+        unc.extend(components.filter(|c| matches!(c, Component::Normal(_))));
+        unc.exists().then_some(unc)
+    }
+
+    /// The defect as reported: a document opened through a share never
+    /// live-reloaded, because GIO's monitor there never fires
+    /// (`platform::win32::unc_monitor`). Another writer changes the file — through its
+    /// local path, as a writer on the share's host would — and the document must follow
+    /// (TDD 3.1), and keep following for a second write.
+    #[gtktest::test]
+    fn a_document_opened_through_a_share_live_reloads() {
+        const CHANGED: &str = "# Plan\n\nChanged by another writer.\n";
+        const APPENDED: &str = "# Plan\n\nChanged by another writer.\n\nAppended.\n";
+        let state_home = tempfile::tempdir().expect("state home");
+        let root = tempfile::tempdir().expect("root");
+        let local_dir = root.path().join("docs");
+        std::fs::create_dir(&local_dir).expect("folder");
+        let local = local_dir.join("plan.md");
+        std::fs::write(&local, ORIGINAL).expect("fixture");
+        let Some(shared) = through_admin_share(&local) else {
+            println!(
+                "SKIPPED [3.1]: no administrative share reaches this temp folder (Windows \
+                 only, and it needs \\\\localhost\\<drive>$)"
+            );
+            return;
+        };
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let app = crate::window::testkit::test_app("com.extollit.scribobulate.it.rewatch.unc");
+            let window = crate::window::new_window(&app, "IT", ORIGINAL, Some(&shared));
+            let tab = state(&window).expect("the window has a tab");
+            crate::app::attach_file_backing(&window, &tab, shared.clone());
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Idle,
+                std::time::Duration::from_millis(300),
+            );
+            // The poll's baseline is taken off the main thread; a write landing before it
+            // would BE the baseline, and the test would wait for a change it already saw.
+            settle("the poll has its baseline, where there is a poll", || {
+                let watch = &tab.folder_watch;
+                watch.file.borrow().is_none()
+                    || watch.file_recorded.get() != winstate::WatchedFile::Unknown
+            });
+
+            std::fs::write(&local, CHANGED).expect("another writer");
+            settle("a change on the share reloads (TDD 3.1)", || {
+                tab.editor_text() == CHANGED
+            });
+            std::fs::write(&local, APPENDED).expect("append");
+            settle("a later append reloads too (TDD 3.1)", || {
+                tab.editor_text() == APPENDED
+            });
+            assert_eq!(tab.backing_loss.get(), None, "a rewrite is not a loss");
+            window.destroy();
+        });
+    }
+
+    /// Auto-Reload off holds the poll's re-reads exactly as it holds a monitor event (TDD
+    /// 9.13): a folder found gone concludes nothing and a replaced folder reloads nothing.
+    /// The re-arm still happens, so turning Auto-Reload back on catches up, and a later
+    /// write reaches the document through the new monitor (TDD 3.1).
+    #[gtktest::test]
+    fn auto_reload_off_holds_the_rewatch_re_reads_but_not_its_re_arm() {
+        if !crate::platform::doc_monitor_is_bound_to_its_folder() {
+            println!(
+                "SKIPPED [9.13]: the folder poll runs only where the monitor is bound to its \
+                 folder (Windows); elsewhere the monitor alone obeys Auto-Reload"
+            );
+            return;
+        }
+        const REPLACED: &str = "# Plan\n\nReplaced while Auto-Reload was off.\n";
+        const APPENDED: &str = "# Plan\n\nReplaced while Auto-Reload was off.\n\nAppended.\n";
+        // Long enough for an unheld re-read to land, and for a deletion it found to settle.
+        let unheld = winstate::BACKING_SETTLE * 3;
+        let state_home = tempfile::tempdir().expect("state home");
+        let root = tempfile::tempdir().expect("root");
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let (window, tab, path) =
+                watched_window("com.extollit.scribobulate.it.rewatch.held", root.path());
+            let dir = path.parent().expect("folder").to_path_buf();
+            settle("the poll has its baseline", || {
+                matches!(
+                    tab.folder_watch.recorded.get(),
+                    winstate::WatchedFolder::Present(_)
+                )
+            });
+            window.change_action_state("auto-reload", &false.to_variant());
+            assert!(
+                !bool_action_state(&window, "auto-reload", true),
+                "Auto-Reload is off"
+            );
+
+            std::fs::remove_dir_all(&dir).expect("delete the folder");
+            settle("the poll finds the folder gone", || {
+                tab.folder_watch.recorded.get() == winstate::WatchedFolder::Gone
+            });
+            crate::testpump::drain_for(crate::testpump::Clock::Idle, unheld);
+            assert_eq!(
+                tab.backing_loss.get(),
+                None,
+                "a folder found gone concludes nothing while Auto-Reload is off"
+            );
+
+            let generation = tab.folder_watch.generation.get();
+            std::fs::create_dir(&dir).expect("recreate the folder");
+            std::fs::write(&path, REPLACED).expect("with new content");
+            settle(
+                "the replaced folder is re-armed with Auto-Reload off",
+                || tab.folder_watch.generation.get() != generation,
+            );
+            crate::testpump::drain_for(crate::testpump::Clock::Idle, unheld);
+            assert_eq!(
+                tab.editor_text(),
+                ORIGINAL,
+                "a replaced folder is not reloaded while Auto-Reload is off"
+            );
+            assert!(
+                !tab.chrome().conflict_toast.is_visible(),
+                "nor offered: nothing happens until Auto-Reload is back on"
+            );
+
+            window.change_action_state("auto-reload", &true.to_variant());
+            settle("turning Auto-Reload back on catches up (TDD 9.13)", || {
+                tab.editor_text() == REPLACED
+            });
+            std::fs::write(&path, APPENDED).expect("append");
+            settle(
+                "the re-armed monitor reports a later write (TDD 3.1)",
+                || tab.editor_text() == APPENDED,
+            );
+            assert_eq!(tab.backing_loss.get(), None, "a replacement is not a loss");
             window.destroy();
         });
     }

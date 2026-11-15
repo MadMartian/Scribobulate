@@ -7,9 +7,14 @@
 //! that is gone, so the application has to notice the replacement itself and attach a new
 //! one. The noticing is a poll of the folder's identity; this module decides what each
 //! answer means.
+//!
+//! Where the monitor never fires at all (`platform::doc_monitor_is_blind_at`: a document
+//! opened through a Windows share), the same poll also stamps the file itself, and a
+//! stamp that moves is the change the monitor would have reported ([`file_watch_action`]).
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::platform::FolderIdentity;
 
@@ -31,7 +36,8 @@ pub(crate) enum FolderWatchAction {
     Nothing,
     /// The folder is gone. Re-read the file, because a folder moved away (Explorer's
     /// delete into the Recycle Bin) gives the monitor no event at all, and the re-read is
-    /// what concludes a deletion (TDD 3.4).
+    /// what concludes a deletion (TDD 3.4). Also what a moved [`FileStamp`] asks for,
+    /// where the file has no monitor that fires ([`file_watch_action`]).
     Recheck,
     /// A folder the monitor never saw stands at the path. Attach a new monitor there, then
     /// re-read, since whatever was written before the new monitor was watching is not an
@@ -64,6 +70,60 @@ pub(crate) fn folder_watch_action<I: PartialEq + Copy>(
     }
 }
 
+/// What a poll can see of a file without reading it: whether a write, a truncation or a
+/// replacement happened since the last look. The size and the modification time catch a
+/// write in place; the creation time catches a file replaced by another that kept the old
+/// one's size and modification time (a copy that preserves timestamps). A change this
+/// misses entirely leaves all three alone, which no writer of new content does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileStamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+}
+
+impl FileStamp {
+    pub(crate) fn of(meta: &std::fs::Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            created: meta.created().ok(),
+        }
+    }
+}
+
+/// What the last poll found of the document file itself, where no monitor reports on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WatchedFile<S> {
+    /// Not polled since the monitor attached.
+    Unknown,
+    /// The file stood at the path with this stamp.
+    Present(S),
+    /// Nothing stood at the path.
+    Gone,
+}
+
+/// Decide whether the file's stamp `seen` — `None` when nothing is at the path — is a change
+/// since `recorded`, and what to record next. A change is re-read exactly as a monitor event
+/// would be; the re-read decides whether it is a reload, a conflict or a loss (TDD 3.1–3.6).
+///
+/// The first answer after an attach is the baseline: the attach was part of a read that
+/// already answered for the file as it stood.
+pub(crate) fn file_watch_action<S: PartialEq + Copy>(
+    recorded: WatchedFile<S>,
+    seen: Option<S>,
+) -> (WatchedFile<S>, FolderWatchAction) {
+    use FolderWatchAction::{Nothing, Recheck};
+    use WatchedFile::{Gone, Present, Unknown};
+    let next = seen.map_or(Gone, Present);
+    match (recorded, seen) {
+        (Unknown, _) => (next, Nothing),
+        (Present(was), Some(now)) if was == now => (recorded, Nothing),
+        (Gone, None) => (Gone, Nothing),
+        (Present(_) | Gone, _) => (next, Recheck),
+    }
+}
+
 /// One tab's folder watch: which folder its monitor was attached in, and what the poll
 /// last found there. Re-pointed by `window::rewatch::follow`, which
 /// `app::attach_file_backing` — the one place a monitor attaches — calls every time.
@@ -82,6 +142,12 @@ pub(crate) struct FolderWatch {
     /// Whether a probe is out. One at a time, so a folder on a hung share costs one held
     /// slot, not one more every tick.
     pub(crate) probing: Cell<bool>,
+    /// The document file to stamp on every poll, set only when the monitor just attached
+    /// to it never fires (`platform::doc_monitor_is_blind_at`); `None` where the monitor
+    /// reports on the file itself.
+    pub(crate) file: RefCell<Option<PathBuf>>,
+    /// What the last stamp of [`file`](Self::file) found.
+    pub(crate) file_recorded: Cell<WatchedFile<FileStamp>>,
 }
 
 impl Default for FolderWatch {
@@ -92,15 +158,21 @@ impl Default for FolderWatch {
             generation: Cell::new(0),
             polling: Cell::new(false),
             probing: Cell::new(false),
+            file: RefCell::new(None),
+            file_recorded: Cell::new(WatchedFile::Unknown),
         }
     }
 }
 
 impl FolderWatch {
     /// A monitor was just attached in `dir`: forget what was known about the previous one.
-    pub(crate) fn restart(&self, dir: PathBuf) {
+    /// `blind_file` is the document's path when that monitor will never fire, so the poll
+    /// stamps the file in its place.
+    pub(crate) fn restart(&self, dir: PathBuf, blind_file: Option<PathBuf>) {
         *self.dir.borrow_mut() = Some(dir);
         self.recorded.set(WatchedFolder::Unknown);
+        *self.file.borrow_mut() = blind_file;
+        self.file_recorded.set(WatchedFile::Unknown);
         self.generation.set(self.generation.get().wrapping_add(1));
     }
 }
@@ -160,13 +232,74 @@ mod tests {
     fn restarting_forgets_the_previous_folder_and_moves_the_generation() {
         let watch = FolderWatch::default();
         watch.recorded.set(Gone);
+        watch.file_recorded.set(WatchedFile::Gone);
         let before = watch.generation.get();
-        watch.restart(PathBuf::from("docs"));
+        watch.restart(PathBuf::from("docs"), Some(PathBuf::from("plan.md")));
         assert_eq!(watch.recorded.get(), Unknown);
+        assert_eq!(watch.file_recorded.get(), WatchedFile::Unknown);
         assert_eq!(
             watch.dir.borrow().as_deref(),
             Some(std::path::Path::new("docs"))
         );
+        assert_eq!(
+            watch.file.borrow().as_deref(),
+            Some(std::path::Path::new("plan.md"))
+        );
         assert_ne!(watch.generation.get(), before);
+
+        watch.restart(PathBuf::from("docs"), None);
+        assert_eq!(watch.file.borrow().as_deref(), None, "a monitor that fires");
+    }
+
+    #[test]
+    fn the_first_stamp_after_an_attach_is_the_baseline() {
+        use WatchedFile as F;
+        assert_eq!(
+            file_watch_action(F::Unknown, Some(7)),
+            (F::Present(7), Nothing)
+        );
+        assert_eq!(
+            file_watch_action::<u8>(F::Unknown, None),
+            (F::Gone, Nothing)
+        );
+    }
+
+    #[test]
+    fn an_unmoved_stamp_rereads_nothing() {
+        use WatchedFile as F;
+        assert_eq!(
+            file_watch_action(F::Present(7), Some(7)),
+            (F::Present(7), Nothing)
+        );
+        assert_eq!(file_watch_action::<u8>(F::Gone, None), (F::Gone, Nothing));
+    }
+
+    /// Every way the file can move is one re-read: rewritten, gone, and back.
+    #[test]
+    fn a_moved_stamp_is_reread_once() {
+        use WatchedFile as F;
+        assert_eq!(
+            file_watch_action(F::Present(7), Some(8)),
+            (F::Present(8), Recheck)
+        );
+        assert_eq!(file_watch_action(F::Present(7), None), (F::Gone, Recheck));
+        assert_eq!(
+            file_watch_action(F::Gone, Some(8)),
+            (F::Present(8), Recheck)
+        );
+    }
+
+    /// The real stamp moves for a write that changes nothing but the content's length, and
+    /// stays put when nothing is written.
+    #[test]
+    fn a_rewrite_moves_the_stamp_of_a_real_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.md");
+        std::fs::write(&path, "# one\n").unwrap();
+        let stamp = || FileStamp::of(&std::fs::metadata(&path).unwrap());
+        let first = stamp();
+        assert_eq!(stamp(), first, "nothing written, nothing moved");
+        std::fs::write(&path, "# one, longer\n").unwrap();
+        assert_ne!(stamp(), first);
     }
 }

@@ -497,6 +497,16 @@ pub(crate) async fn folder_identity(
     off_main(move || crate::platform::folder_identity(&dir)).await
 }
 
+/// The stamp of the file at `path` — an open document GIO's monitor cannot watch — asked
+/// off the main thread (`window::rewatch`), through the same gate as
+/// [`folder_identity`] for the same reason: the file is on a share, which can hang.
+/// Metadata only: the content is read by the re-read a moved stamp asks for, which takes
+/// the admission check like every other.
+pub(crate) async fn file_stamp(path: PathBuf) -> std::io::Result<crate::winstate::FileStamp> {
+    off_main(move || std::fs::metadata(&path).map(|meta| crate::winstate::FileStamp::of(&meta)))
+        .await
+}
+
 /// Write a document to `path` atomically, off the main thread.
 ///
 /// The atomicity is [`crate::atomic_io::write_atomic`]'s and is unchanged by
