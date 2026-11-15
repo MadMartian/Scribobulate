@@ -410,6 +410,110 @@ mod export_destination_tests {
         );
     }
 
+    /// **TDD 25.18 / 25.18a** — Hangul exports in a face that has its glyphs, not as tofu.
+    ///
+    /// On Windows every Korean syllable was drawn as Pango's hex box, while the preview
+    /// drew the same text in Malgun Gothic. Pango's Win32 font map falls back only
+    /// through its built-in alias table, and the table for `serif` — which is what an
+    /// export lays out in when the theme names no face — names no Korean face a stock
+    /// Windows installs. The text layer still extracted the syllables (cairo is handed
+    /// the UTF-8 with the glyphs), which is why an extraction check alone could not
+    /// see this: the face each run resolved to, and the glyphs it drew, are the oracle.
+    ///
+    /// The Japanese line first, because that is the dry run's fixture: it is what made
+    /// the Korean line's extraction come apart, and it must keep its own face. Then
+    /// inline code and a code block, because each one's `monospace` span replaces the
+    /// paragraph's family and so needs the fallback separately — the inline span from
+    /// `pangospan::code`, the block's from this sink.
+    #[gtktest::test]
+    fn hangul_exports_in_a_face_that_draws_it_rather_than_as_tofu() {
+        const KOREAN: &str = "한국어 텍스트입니다";
+        // Both scripts the fixture carries: a host with a Korean face and no Japanese one
+        // would fail on the kanji, which is not what this asks.
+        if !crate::pangospan::host_has_a_face_for('한')
+            || !crate::pangospan::host_has_a_face_for('日')
+        {
+            println!("SKIPPED [TDD 25.18]: no installed face on this host draws Hangul and kanji");
+            return;
+        }
+        let md = format!(
+            "日本語のテキストです\n\n{KOREAN}\n\nProse with `인라인` code.\n\n```\n코드 블록\n```\n"
+        );
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("hangul.pdf");
+        let paged = export_markdown_paged(&md, &path);
+        let runs: Vec<(String, String, usize)> = paged
+            .laid()
+            .lines
+            .iter()
+            .flat_map(|line| line.runs_for_test())
+            .collect();
+
+        let tofu: Vec<&(String, String, usize)> =
+            runs.iter().filter(|(_, _, boxes)| *boxes > 0).collect();
+        assert!(
+            tofu.is_empty(),
+            "runs drawn as unknown-glyph boxes (text, face, boxes): {tofu:?}"
+        );
+        let (_, hangul_face, _) = runs
+            .iter()
+            .find(|(text, _, _)| text.contains('한'))
+            .expect("the Korean line was laid out");
+
+        // The artefact, not just the layout: the face that drew the syllables is one
+        // the PDF embeds. cairo names a subset `ABCDEF+PostScriptName`, which drops the
+        // family's spaces (`Malgun Gothic` embeds as `MalgunGothic`) and may hyphenate
+        // it, so the comparison keeps letters and digits alone.
+        let bytes = std::fs::read(&path).expect("read the exported PDF");
+        let squash = |s: &str| -> String {
+            s.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect()
+        };
+        let embedded = embedded_font_names(&bytes);
+        let face = squash(hangul_face);
+        assert!(
+            !face.is_empty() && embedded.iter().any(|name| squash(name).contains(&face)),
+            "the Hangul run resolved to {hangul_face:?}, which the PDF does not embed: \
+             {embedded:?}"
+        );
+
+        // And the 25.18 round trip, where this host can read the text layer.
+        let Some(pdftotext) = pdftotext() else {
+            println!("SKIPPED [TDD 25.18]: no `pdftotext` on this host to read the text layer");
+            return;
+        };
+        let out = std::process::Command::new(pdftotext)
+            .args(["-enc", "UTF-8", "-raw"])
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.lines().any(|l| l.trim_end_matches('\u{c}') == KOREAN),
+            "the Korean line must extract byte-exact as {KOREAN:?}; got:\n{text:?}"
+        );
+    }
+
+    /// The `/BaseFont` names a PDF's font dictionaries declare. cairo writes those
+    /// dictionaries uncompressed, so a byte scan finds them without a PDF parser.
+    fn embedded_font_names(pdf: &[u8]) -> Vec<String> {
+        const KEY: &[u8] = b"/BaseFont /";
+        let mut names = Vec::new();
+        let mut rest = pdf;
+        while let Some(at) = rest.windows(KEY.len()).position(|w| w == KEY) {
+            rest = &rest[at + KEY.len()..];
+            let end = rest
+                .iter()
+                .position(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>' | b'['))
+                .unwrap_or(rest.len());
+            names.push(String::from_utf8_lossy(&rest[..end]).into_owned());
+        }
+        names
+    }
+
     /// Whether the theme's body face, shaped by Pango as the export shapes it, turns
     /// `word` into fewer glyphs than it has characters — i.e. forms a ligature.
     fn body_face_ligates(theme: &crate::theme::Theme, word: &str) -> bool {
@@ -447,6 +551,13 @@ mod export_destination_tests {
     /// `begin-print`, `Paged::draw` per page, the System theme on paper — and return how
     /// many pages were drawn.
     fn export_markdown(md: &str, path: &std::path::Path) -> usize {
+        export_markdown_paged(md, path).page_count()
+    }
+
+    /// [`export_markdown`], returning the laid-out document the pages were drawn from —
+    /// the one the print context's own Pango context measured, so a test can ask which
+    /// face each run of the artefact resolved to.
+    fn export_markdown_paged(md: &str, path: &std::path::Path) -> crate::export::pdf::Paged {
         const MARGIN_PT: f64 = super::MARGIN_PT;
         let theme = Rc::new(crate::theme::Themes::builtin().resolve(crate::theme::SYSTEM_ID));
         let palette = crate::palette::Palette::for_paper(&theme);
@@ -491,7 +602,16 @@ mod export_destination_tests {
             Outcome::Promote,
             "the export must complete"
         );
-        drawn.count()
+        let paged = paged
+            .borrow_mut()
+            .take()
+            .expect("begin-print laid the document out");
+        assert_eq!(
+            paged.page_count(),
+            drawn.count(),
+            "every page must be drawn"
+        );
+        paged
     }
 
     /// Render `pages` pages of trivial content to `path`, cancelling after

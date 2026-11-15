@@ -631,8 +631,13 @@ mod gtk_integration_tests {
                 markup.contains(&format!("background=\"{want}\"")),
                 "the {word} cell must wear its surface's chip ({want}): {markup}"
             );
+            // The code face as `pangospan::code` spells it — `monospace`, followed by
+            // the platform's script fallback where it has one (Windows).
+            let face = gtk::glib::markup_escape_text(&crate::pangospan::with_script_fallback(
+                crate::pangospan::MONOSPACE,
+            ));
             assert!(
-                markup.contains("font_family=\"monospace\""),
+                markup.contains(&format!("font_family=\"{face}\"")),
                 "and keep the code face: {markup}"
             );
         }

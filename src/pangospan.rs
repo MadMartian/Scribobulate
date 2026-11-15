@@ -36,6 +36,9 @@
 use crate::theme::Theme;
 use std::fmt::Write;
 
+/// The generic family code is set in where nothing names another.
+pub(crate) const MONOSPACE: &str = "monospace";
+
 /// One themed span: the opening tag, and the closing tag that pairs with it.
 ///
 /// Deliberately not two functions. See the module header — the two halves are not
@@ -103,7 +106,12 @@ pub(crate) fn mark(t: &Theme) -> Span {
 /// `None` ⇒ face only, for a surface whose colour is unknown (a tile). Absent, not
 /// guessed.
 pub(crate) fn code(fill: Option<gtk::gdk::RGBA>) -> Span {
-    let mut attrs = " font_family=\"monospace\"".to_string();
+    // The face with the script fallback after it ([`with_script_fallback`]); escaped,
+    // because the fallback is the desktop's font name and lands inside an attribute.
+    let mut attrs = format!(
+        " font_family=\"{}\"",
+        gtk::glib::markup_escape_text(&with_script_fallback(MONOSPACE))
+    );
     if let Some(c) = fill {
         let _ = write!(attrs, " background=\"{}\"", crate::palette::to_hex_rgba(c));
     }
@@ -173,6 +181,97 @@ pub(crate) fn link(t: &Theme) -> Span {
         let _ = write!(attrs, " foreground=\"{colour}\"");
     }
     Span::attrs(&attrs)
+}
+
+/// The family code is set in, with the platform's script fallback after it: `family`
+/// itself wherever the platform supplies none.
+///
+/// Every surface that sets code in a face goes through this — the inline-code span
+/// above (prose in the PDF, table cells in the preview) and the preview's code tags,
+/// while the PDF's code block composes the same through [`family_with_fallback`] —
+/// because a code family REPLACES the paragraph's, so the
+/// fallback the paragraph carries does not reach it. On Windows `monospace` falls back
+/// to no Korean face a stock install has, and Hangul in code drew as hex boxes on both
+/// surfaces while the prose around it drew (`platform::win32::script_fallback`).
+pub(crate) fn with_script_fallback(family: &str) -> String {
+    family_with_fallback(
+        Some(family.to_string()),
+        None,
+        crate::platform::script_fallback_family().as_deref(),
+    )
+    .unwrap_or_else(|| family.to_string())
+}
+
+/// The family list a run is laid out in, with the platform's script fallback after it.
+///
+/// `requested` is the stack the run names (already in Pango's spelling), `default` the
+/// family the Pango context lays an unnamed run out in, and `fallback` the face
+/// [`crate::platform::script_fallback_family`] supplies. Where the platform supplies
+/// none — every platform whose font map already falls back over all installed faces —
+/// the request comes back untouched, so the run is described exactly as it was before
+/// there was a fallback to add. Where it does, the fallback goes LAST: it only ever
+/// answers for a character no face before it can draw, so the run's lead face, and with
+/// it the page's look, is unchanged.
+///
+/// A request naming no face still needs spelling out once there is a fallback, because
+/// a family that names only the fallback would replace the context's default face
+/// rather than extend it.
+pub(crate) fn family_with_fallback(
+    requested: Option<String>,
+    default: Option<&str>,
+    fallback: Option<&str>,
+) -> Option<String> {
+    let Some(fallback) = fallback else {
+        return requested;
+    };
+    match requested.as_deref().or(default) {
+        Some(stack) => Some(format!("{stack},{fallback}")),
+        None => Some(fallback.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::family_with_fallback;
+
+    /// Where the platform supplies no fallback, nothing changes — including a run with
+    /// no face of its own, which must stay unnamed so the context's default still lays
+    /// it out exactly as before.
+    #[test]
+    fn no_fallback_leaves_the_request_untouched() {
+        assert_eq!(
+            family_with_fallback(Some("Georgia,serif".into()), Some("serif"), None),
+            Some("Georgia,serif".into())
+        );
+        assert_eq!(family_with_fallback(None, Some("serif"), None), None);
+    }
+
+    /// The fallback goes after the stack, never before: the lead face is the theme's.
+    #[test]
+    fn the_fallback_follows_the_named_stack() {
+        assert_eq!(
+            family_with_fallback(
+                Some("Georgia,serif".into()),
+                Some("serif"),
+                Some("Segoe UI")
+            ),
+            Some("Georgia,serif,Segoe UI".into())
+        );
+    }
+
+    /// A run naming no face extends the context's default rather than being replaced
+    /// by the fallback, which would change every unthemed run's face.
+    #[test]
+    fn an_unnamed_run_extends_the_context_default() {
+        assert_eq!(
+            family_with_fallback(None, Some("serif"), Some("Segoe UI")),
+            Some("serif,Segoe UI".into())
+        );
+        assert_eq!(
+            family_with_fallback(None, None, Some("Segoe UI")),
+            Some("Segoe UI".into())
+        );
+    }
 }
 
 #[cfg(test)]
@@ -270,4 +369,28 @@ mod tests {
         let (open, close) = crate::renderer::strike_tags(&t);
         assert_eq!((open, close), (strike(&t).open, strike(&t).close));
     }
+}
+
+/// Whether any face installed on this host covers `c`: a host with none can only draw
+/// tofu, so a script test skips rather than asks it. One copy for every such test.
+///
+/// Every probe carries a size. Without one, some face on the GitHub Linux runner took
+/// Pango to `pango_font_description_set_size` with a negative size — a Pango-CRITICAL the
+/// suite's fatal-criticals turns into an abort, twice, once from each of two copies of
+/// this probe.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn host_has_a_face_for(c: char) -> bool {
+    use gtk::pango;
+    use gtk::pango::prelude::{FontExt, FontFamilyExt, FontMapExt};
+    let map = pangocairo::FontMap::default();
+    let ctx = map.create_context();
+    let language = pango::Language::default();
+    map.list_families().iter().any(|family| {
+        let mut desc = pango::FontDescription::new();
+        desc.set_family(&family.name());
+        desc.set_size(12 * pango::SCALE);
+        ctx.load_font(&desc).is_some_and(|font| {
+            font.coverage(&language).get(c as i32) != pango::CoverageLevel::None
+        })
+    })
 }

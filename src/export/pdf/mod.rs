@@ -367,6 +367,45 @@ impl Line {
         }
     }
 
+    /// Every run of this line as `(its text, the face Pango resolved for it, how many of
+    /// its glyphs are Pango's unknown-glyph box)` — test-only. The box is the tofu a
+    /// reader sees: a run that resolved to a face lacking its script still extracts
+    /// correctly from the text layer, so only this count says it was drawn as boxes
+    /// (TDD 25.18a: an extraction result is never evidence about appearance).
+    #[cfg(test)]
+    pub(crate) fn runs_for_test(&self) -> Vec<(String, String, usize)> {
+        use gtk::pango::prelude::FontExt;
+        let LineKind::Text { layout, index } = &self.kind else {
+            return Vec::new();
+        };
+        let Some(line) = layout.line_readonly(*index) else {
+            return Vec::new();
+        };
+        let text = layout.text();
+        line.runs()
+            .iter()
+            .map(|run| {
+                let item = run.item();
+                let start = usize::try_from(item.offset()).unwrap_or(0);
+                let end = start + usize::try_from(item.length()).unwrap_or(0);
+                let face = item
+                    .analysis()
+                    .font()
+                    .describe()
+                    .family()
+                    .map(|f| f.to_string())
+                    .unwrap_or_default();
+                let boxes = run
+                    .glyph_string()
+                    .glyph_info()
+                    .iter()
+                    .filter(|g| g.glyph() & pango::GLYPH_UNKNOWN_FLAG != 0)
+                    .count();
+                (text.get(start..end).unwrap_or("").to_string(), face, boxes)
+            })
+            .collect()
+    }
+
     /// The indent of the quote this line belongs to — test-only.
     #[cfg(test)]
     fn quote_indent_for_test(&self) -> Option<f64> {

@@ -119,6 +119,14 @@ Platform-specific notes that shape the architecture:
   the folder it opened, not the path, so a folder deleted or moved away and recreated
   leaves it watching nothing; `window/rewatch.rs` polls the folder's identity and
   attaches a new monitor when it changes (`platform/win32/folder_identity.rs`).
+- **Pango's Win32 font map falls back only through its own alias table**, never over
+  the installed faces as fontconfig and Core Text do, and its tables for the generic
+  families name no Korean face a stock Windows installs. The preview's prose escapes
+  this by drawing in the desktop face (Segoe UI, whose table does name one); its code,
+  and the PDF sink, which lays unthemed text out in Pango's default `serif`, do not.
+  So the desktop face is appended after every family the PDF sink requests and after
+  the code face on both surfaces (`platform/win32/script_fallback.rs`, composed by
+  `pangospan::family_with_fallback`). Elsewhere nothing is appended.
 
 ### Integration boundaries
 

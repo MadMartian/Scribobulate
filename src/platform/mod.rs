@@ -55,6 +55,31 @@ fn platform_surface_to_screen(surface: &gtk::gdk::Surface, x: i32, y: i32) -> Op
     None
 }
 
+// ── a face for the scripts a requested stack cannot draw ────────────────────────────
+
+/// The family to lay a run out in after the faces it asked for, so a character none of
+/// them can draw still finds a face rather than Pango's hex box — or `None` where this
+/// platform's font map already falls back over every installed face.
+///
+/// Only Windows answers: Pango's Win32 font map falls back only through its own alias
+/// table, and the tables for the generic families name no Korean face a stock Windows
+/// installs (see `win32::script_fallback`). fontconfig and Core Text supply fallback of
+/// their own, so `None` there leaves every run described exactly as before.
+/// `pangospan::family_with_fallback` is the one place this becomes a family.
+pub(crate) fn script_fallback_family() -> Option<String> {
+    platform_script_fallback_family()
+}
+
+#[cfg(windows)]
+fn platform_script_fallback_family() -> Option<String> {
+    win32::script_fallback_family()
+}
+
+#[cfg(not(windows))]
+fn platform_script_fallback_family() -> Option<String> {
+    None
+}
+
 // ── which process holds the front (tests only) ────────────────────────────────────
 
 /// The pid of the frontmost application, for a GTK test that needs an active window and

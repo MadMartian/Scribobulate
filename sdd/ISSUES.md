@@ -68,11 +68,11 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
-| AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
+| BJ | Windows | Production | n + U+0303 draws a detached tilde wherever the lead font is Georgia (PDF export; Sepia-like themes in the preview) | Low |
 
 ## Closed issues
 
@@ -502,17 +502,6 @@ devices; the 1.4a screen should name-check them. Evidence: 1.0.0 dry run, Window
 the build of "Merge bug/nul-byte-document: …" (2026-11-13) and its predecessors. No
 Known-issues line.
 
-## AG. PDF export on Windows draws Hangul as tofu
-
-**Severity**: Medium (Korean text is unreadable in the PDF).
-
-TDD 25.18: Hangul draws as hex-box tofu and extracts with its spaces dropped
-(Japanese-then-Korean lines split); n + U+0303 draws a detached tilde. The preview falls
-back to Malgun Gothic; the PDF path's font map does not. Linux is byte-exact. Start at the
-cairo-win32/DirectWrite font map in `src/export/pdf/`. Evidence: 1.0.0 dry run, filed in
-"File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues: *"PDF export on Windows
-does not embed a fallback font for Hangul — Korean text shows as boxes."*
-
 ## AL. On Windows, `disclosure_marker_size = 24` draws a 3×4 px speck
 
 **Severity**: Low (cosmetic).
@@ -542,6 +531,22 @@ Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 
 the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
 Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
 Known-issues line.
+
+## BJ. On Windows, a combining tilde detaches from its base under Georgia
+
+**Severity**: Low (cosmetic; the text and extraction are correct).
+
+In a Windows PDF export, and in the preview under any theme whose font list lands on
+Georgia (Sepia), `n` + U+0303 COMBINING TILDE draws with the tilde apart from the `n`.
+Extraction keeps `n` + U+0303 correct (TDD 25.18). Cause, measured with Pango Win32 on the
+1.0.0 stack: Georgia has no U+0303, so Pango itemizes the mark into its own run in the first
+alias font that has it (MS Gothic for `serif`), and HarfBuzz cannot position a mark against
+a base in another run; appending a fallback family does not help. Options: (a) lead with a
+face carrying the combining marks (Times New Roman and Segoe UI both measured composed),
+which changes the Latin face of every Windows PDF and those themes' preview; (b) keep
+Georgia and NFC-compose before shaping, which fixes only bases with a precomposed form and
+changes the extracted text to `ñ`, against TDD 25.18's byte-exact extraction. Evidence:
+Windows seat, found while fixing Hangul in PDF export (2026-11-14). No Known-issues line.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
