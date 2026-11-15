@@ -5,15 +5,20 @@
 //! real `window::new_window` and the real close path, so a retention in any window-owned
 //! object counts, wherever it lives.
 
-use crate::memgate::footprint::{assert_bounded, current, WARMUP};
+use crate::memgate::footprint::{assert_bounded, current};
 use crate::testpump::{self, Clock};
 use crate::window::testkit::test_app_suffixed;
 use gtk::prelude::*;
 use std::time::Duration;
 
+/// Cycles discarded before judging. More than the renders' shared warm-up: on Windows the
+/// first window cycles keep growing for three or four more after that (about 7 MB in all,
+/// then flat), and a second warm-up step lands in the residual, failing two runs in three.
+const WINDOW_WARMUP: usize = 8;
+
 /// Cycles sampled: enough that the ~0.4 MB a leaking window kept climbs well past the
 /// residual bound, few enough to stay in the step's seconds.
-const WINDOW_SAMPLES: usize = WARMUP + 10;
+const WINDOW_SAMPLES: usize = WINDOW_WARMUP + 10;
 
 /// Sections in the document each cycle's window shows: sized so that a window which keeps its
 /// document alive (the editor's buffer, the rendered preview) keeps tens of kilobytes more
@@ -62,7 +67,7 @@ fn window_open_close_cycles_do_not_grow_footprint_ttd_6_13() {
             cycle(&app, &source, &text);
             samples.push(current().expect("footprint"));
         }
-        assert_bounded("6.13 window open/close", WARMUP, &samples);
+        assert_bounded("6.13 window open/close", WINDOW_WARMUP, &samples);
     });
 }
 
