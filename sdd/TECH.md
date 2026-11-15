@@ -122,7 +122,10 @@ Platform-specific notes that shape the architecture:
   also spells a share's folder `\\?\\\server\share\…`, which `CreateFileW` refuses, and
   returns a monitor that never fires, so for a document opened through a UNC path the
   same poll stamps the file itself and re-reads it when the stamp moves
-  (`platform/win32/unc_monitor.rs`).
+  (`platform/win32/unc_monitor.rs`). The backend also reports nothing when a file is
+  renamed onto the watched name, unless the old name begins with it. So while a document
+  is recorded deleted, the same poll stamps its file, and a return by rename is re-read
+  rather than left reading "deleted" (`window/rewatch.rs`).
 - **Pango's Win32 font map falls back only through its own alias table**, never over
   the installed faces as fontconfig and Core Text do, and its tables for the generic
   families name no Korean face a stock Windows installs. The preview's prose escapes

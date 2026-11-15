@@ -40,6 +40,14 @@
 //! a second monitor beside GIO's, with its own thread or overlapped-I/O plumbing, for a
 //! case where a change seen within [`REWATCH_INTERVAL`] is what live reload already
 //! promises a folder replaced under it.
+//!
+//! **A monitor that fires still misses a file renamed back onto its name** (measured at
+//! [`file_to_stamp`]). So while a document is recorded deleted, the same poll
+//! stamps its file too, and a return is re-read. A file back with the content last loaded
+//! or saved clears the loss; back with other content, it raises the conflict prompt (TDD
+//! 3.6). Reacting to the monitor's own events cannot cover this, because the rename back
+//! delivers none. The `Created` that does arrive names the OTHER file and comes with the
+//! rename away, so its re-read finds the document still gone.
 
 use super::*;
 use crate::winstate::FolderWatchAction;
@@ -86,12 +94,12 @@ pub(crate) fn follow(tab: &Rc<TabState>, path: &std::path::Path) {
 }
 
 /// Ask, off the main thread, which folder stands where `tab`'s monitor was attached — and,
-/// where that monitor never fires, what the file itself looks like now.
+/// where that monitor never fires or is recorded deleted, what the file itself looks like now.
 fn probe(tab: &Rc<TabState>) {
     let Some(dir) = tab.folder_watch.dir.borrow().clone() else {
         return;
     };
-    let file = tab.folder_watch.file.borrow().clone();
+    let file = file_to_stamp(tab);
     if tab.folder_watch.probing.replace(true) {
         return;
     }
@@ -131,6 +139,35 @@ fn probe(tab: &Rc<TabState>) {
     });
 }
 
+/// The file this tick stamps, if any: always where the monitor never fires, and where it
+/// does, only while the document is recorded deleted (`winstate::lost_file_baseline`).
+///
+/// The Win32 monitor reports nothing when a file is renamed ONTO the watched name. The
+/// likely mechanism, from GLib's source as recalled and NOT traced here: the backend
+/// filters a folder's change records to the watched name, the rename's old-name record
+/// fails that filter but is still kept as the previous record, and so the new-name record
+/// reads as the second half of a rename already reported, and is dropped. MEASURED with a
+/// raw monitor on `plan.md` (this seat's GTK stack): `plan.md` → `renamed.md` reports `Deleted`
+/// (`plan.md`), then `Created` and `ChangesDoneHint` naming `renamed.md`. Renaming it back
+/// reports nothing at all. A sibling whose name BEGINS with the watched one
+/// (`plan.md.away`) passes the filter, which is a prefix compare, and its return reports
+/// `Created`. Through the app, every rename back after more than [`winstate::BACKING_SETTLE`]
+/// left "File deleted on disk" standing over the restored file: 40 of 40 runs across four
+/// gaps, and 0 of 50 at gaps inside the settle. Nothing else re-reads a
+/// document whose loss is recorded, so this is what notices the return.
+fn file_to_stamp(tab: &TabState) -> Option<std::path::PathBuf> {
+    if let Some(file) = tab.folder_watch.file.borrow().clone() {
+        return Some(file);
+    }
+    let deleted = tab.backing_loss.get() == Some(winstate::BackingLoss::Deleted);
+    let watch = &tab.folder_watch;
+    watch.file_recorded.set(winstate::lost_file_baseline(
+        deleted,
+        watch.file_recorded.get(),
+    ));
+    deleted.then(|| tab.path.borrow().clone()).flatten()
+}
+
 /// A probe's result as an answer: present, `None` for nothing at the path, or no answer at
 /// all when the question could not be asked.
 fn answer<T>(tab: &TabState, what: &str, result: std::io::Result<T>) -> Option<Option<T>> {
@@ -144,9 +181,10 @@ fn answer<T>(tab: &TabState, what: &str, result: std::io::Result<T>) -> Option<O
     }
 }
 
-/// The poll's stand-in for the monitor event a blind monitor never delivers: a stamp that
-/// moved is re-read exactly as `app::attach_file_backing`'s handler re-reads an event, under
-/// the same Auto-Reload preference.
+/// The poll's stand-in for the monitor event a blind monitor never delivers, or that a
+/// deleted document's return by rename never produces: a stamp that moved is re-read
+/// exactly as `app::attach_file_backing`'s handler re-reads an event, under the same
+/// Auto-Reload preference.
 fn file_changed(tab: &Rc<TabState>, seen: Option<winstate::FileStamp>) {
     let (next, action) = winstate::file_watch_action(tab.folder_watch.file_recorded.get(), seen);
     if action == FolderWatchAction::Nothing {
@@ -368,6 +406,78 @@ mod gtk_integration_tests {
             assert!(
                 !tab.chrome().conflict_toast.is_visible(),
                 "nothing to ask about"
+            );
+            window.destroy();
+        });
+    }
+
+    /// TDD 3.4 and 3.6: the document renamed away for longer than the settle, so
+    /// its deletion is shown, and then renamed back. The file is back with the same bytes,
+    /// so the notice, the prompt, the badge and the close guard must all go. The second leg
+    /// brings back OTHER content the same way, which must be offered, not adopted.
+    ///
+    /// Deterministic: each rename waits for the state it needs, not for a guessed delay.
+    /// On Windows the rename back reports nothing to the monitor, so before the fix the
+    /// first leg failed at its first wait, every run. It runs everywhere: where the monitor
+    /// reports a file renamed onto its name (inotify's `MOVED_TO`), that event restores it.
+    #[gtktest::test]
+    fn a_document_renamed_away_and_back_is_restored() {
+        const OTHER: &str = "# Plan\n\nSomebody else's.\n";
+        let state_home = tempfile::tempdir().expect("state home");
+        let root = tempfile::tempdir().expect("root");
+        crate::session::with_state_home_for_test(state_home.path(), || {
+            let (window, tab, path) = watched_window(
+                "com.extollit.scribobulate.it.rewatch.roundtrip",
+                root.path(),
+            );
+            // Not a name beginning with `plan.md`: Win32 reports the return of one of those.
+            let away = path.with_file_name("renamed.md");
+            let loss_toast = tab.chrome().backing_loss_toast.clone();
+            let notice = winstate::BackingLoss::Deleted.notice();
+
+            std::fs::rename(&path, &away).expect("rename away");
+            settle("the rename away is concluded a deletion (TDD 3.4)", || {
+                tab.backing_loss.get() == Some(winstate::BackingLoss::Deleted)
+            });
+            assert!(loss_toast.is_visible(), "precondition: the prompt is up");
+            assert_eq!(tab.chrome().status.borrow().label_text(), notice);
+
+            std::fs::rename(&away, &path).expect("rename back");
+            settle("the same bytes back retire the loss (TDD 3.6)", || {
+                tab.backing_loss.get().is_none()
+            });
+            assert!(!loss_toast.is_visible(), "the prompt goes with it");
+            assert_ne!(
+                tab.chrome().status.borrow().label_text(),
+                notice,
+                "and so does the notice"
+            );
+            assert!(!tab.needs_close_prompt(), "and the close guard");
+            assert!(
+                window
+                    .lookup_action("save")
+                    .is_some_and(|a| !a.is_enabled()),
+                "a clean document over its own file has nothing to save"
+            );
+            assert!(
+                !tab.chrome().conflict_toast.is_visible(),
+                "nothing to ask about"
+            );
+
+            std::fs::rename(&path, &away).expect("rename away again");
+            settle("the second deletion is shown", || {
+                tab.backing_loss.get() == Some(winstate::BackingLoss::Deleted)
+            });
+            std::fs::write(&away, OTHER).expect("rewrite the renamed file");
+            std::fs::rename(&away, &path).expect("rename it back");
+            settle("other content back is offered (TDD 3.6)", || {
+                tab.chrome().conflict_toast.is_visible()
+            });
+            assert_eq!(tab.editor_text(), ORIGINAL, "never silently adopted");
+            assert_eq!(
+                tab.backing_loss.get(),
+                Some(winstate::BackingLoss::Deleted),
+                "and still guarded"
             );
             window.destroy();
         });

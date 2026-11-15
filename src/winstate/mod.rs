@@ -134,8 +134,8 @@ pub(crate) use fmtinsert::FmtInsertKind;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) use folderwatch::WatchedFile;
 pub(crate) use folderwatch::{
-    file_watch_action, folder_watch_action, FileStamp, FolderWatch, FolderWatchAction,
-    WatchedFolder,
+    file_watch_action, folder_watch_action, lost_file_baseline, FileStamp, FolderWatch,
+    FolderWatchAction, WatchedFolder,
 };
 pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;

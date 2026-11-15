@@ -11,6 +11,8 @@
 //! Where the monitor never fires at all (`platform::doc_monitor_is_blind_at`: a document
 //! opened through a Windows share), the same poll also stamps the file itself, and a
 //! stamp that moves is the change the monitor would have reported ([`file_watch_action`]).
+//! Where the monitor does fire, the poll stamps the file only while the document is recorded
+//! deleted, because the monitor misses the file's return by rename ([`lost_file_baseline`]).
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -121,6 +123,27 @@ pub(crate) fn file_watch_action<S: PartialEq + Copy>(
         (Present(was), Some(now)) if was == now => (recorded, Nothing),
         (Gone, None) => (Gone, Nothing),
         (Present(_) | Gone, _) => (next, Recheck),
+    }
+}
+
+/// What the poll compares the file's stamp against where the monitor DOES fire, given
+/// whether the document is recorded `deleted` (TDD 3.4, 3.6).
+///
+/// That monitor misses exactly one thing a deleted document needs: on Win32 a file renamed
+/// ONTO the watched name reports nothing at all, unless the old name begins with the watched
+/// one (the measurement is `window::rewatch`'s). So the poll stamps a deleted
+/// document until its file is back, and stops when the loss ends.
+///
+/// The baseline is [`WatchedFile::Gone`], not [`WatchedFile::Unknown`]: a recorded
+/// deletion IS an observation of the file gone, since the settle re-read found nothing. A
+/// file back before the first stamp is therefore a change and re-read, where an unknown
+/// baseline would take it as the starting point and leave the loss up for good. Without
+/// a loss the record is forgotten, so the next loss starts from its own observation.
+pub(crate) fn lost_file_baseline<S>(deleted: bool, recorded: WatchedFile<S>) -> WatchedFile<S> {
+    match (deleted, recorded) {
+        (false, _) => WatchedFile::Unknown,
+        (true, WatchedFile::Unknown) => WatchedFile::Gone,
+        (true, kept) => kept,
     }
 }
 
@@ -287,6 +310,43 @@ mod tests {
             file_watch_action(F::Gone, Some(8)),
             (F::Present(8), Recheck)
         );
+    }
+
+    /// A deleted document's file renamed back before the poll's first stamp is a
+    /// change, and so re-read. With an unknown baseline it would be the baseline instead,
+    /// and the false "deleted" state would stand.
+    #[test]
+    fn a_deleted_documents_return_is_a_change_from_its_first_stamp() {
+        use WatchedFile as F;
+        let baseline = lost_file_baseline::<u8>(true, F::Unknown);
+        assert_eq!(
+            baseline,
+            F::Gone,
+            "the recorded deletion is the observation"
+        );
+        assert_eq!(
+            file_watch_action(baseline, Some(7)),
+            (F::Present(7), Recheck),
+            "back already at the first stamp"
+        );
+        assert_eq!(file_watch_action(baseline, None), (F::Gone, Nothing));
+    }
+
+    /// While the loss stands, what the poll last saw is kept, so a return is re-read once
+    /// and not on every tick; once the loss ends it is forgotten, so a later loss starts
+    /// from its own observation rather than from a stamp of the file before it.
+    #[test]
+    fn a_lost_files_record_is_kept_while_lost_and_forgotten_after() {
+        use WatchedFile as F;
+        assert_eq!(lost_file_baseline(true, F::Present(7)), F::Present(7));
+        assert_eq!(
+            file_watch_action(lost_file_baseline(true, F::Present(7)), Some(7)),
+            (F::Present(7), Nothing),
+            "back with a conflict pending: not re-read every tick"
+        );
+        assert_eq!(lost_file_baseline::<u8>(true, F::Gone), F::Gone);
+        assert_eq!(lost_file_baseline(false, F::Present(7)), F::Unknown);
+        assert_eq!(lost_file_baseline::<u8>(false, F::Gone), F::Unknown);
     }
 
     /// The real stamp moves for a write that changes nothing but the content's length, and
