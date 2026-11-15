@@ -49,6 +49,41 @@ fn cycle(app: &gtk::Application, source: &gtk::ApplicationWindow, text: &str) {
     window.close();
     drop(window);
     testpump::drain_for(Clock::Frame, Duration::from_millis(50));
+    settle_footprint();
+}
+
+/// Longest this waits for one cycle's footprint to go quiet.
+const SETTLE_CAP: Duration = Duration::from_secs(5);
+/// How long the footprint must hold still (within [`SETTLE_STEP`]) to count as settled.
+const SETTLE_QUIET: Duration = Duration::from_millis(1200);
+/// A change smaller than this is noise, not the window server's late release.
+const SETTLE_STEP: u64 = 512 * 1024;
+
+/// Wait until the process footprint has held still, so the sample that follows is a
+/// reading of what the cycle RETAINED and not of what the OS has not yet given back.
+///
+/// MEASURED, macOS seat, unlocked, release build: a closed window's backing surface (~10.3 MB
+/// for the 900x720 default at 2x) is released by the window server up to about a second
+/// AFTER the close, at a different cycle each run. The series is then flat apart from ±10.3 MB
+/// steps (a rise at one cycle, its fall a few later), and the per-stretch rule judges any
+/// stretch that holds two rises and no fall as a ~10 MB climb: 4 of 8 runs failed on a build
+/// that retains nothing (the CI runner's 4.8 MB steps are the same shape at its own surface
+/// size). With 400 ms between cycles the noise stayed; with 800 ms and 1000 ms, 10 runs in 10
+/// were flat. The finalization half passes throughout: the application released everything.
+///
+/// A leak is untouched by this: a cycle that keeps 0.55 MB keeps it however long one waits.
+fn settle_footprint() {
+    let start = std::time::Instant::now();
+    let mut reference = current().expect("footprint");
+    let mut quiet_since = start;
+    while start.elapsed() < SETTLE_CAP && quiet_since.elapsed() < SETTLE_QUIET {
+        testpump::drain_for(Clock::Frame, Duration::from_millis(100));
+        let now = current().expect("footprint");
+        if now.abs_diff(reference) > SETTLE_STEP {
+            reference = now;
+            quiet_since = std::time::Instant::now();
+        }
+    }
 }
 
 #[gtktest::test]

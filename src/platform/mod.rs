@@ -369,6 +369,19 @@ fn platform_process_footprint_bytes() -> Option<u64> {
     None
 }
 
+/// What the login session says about the screen being locked, for the memory gates (see
+/// `mac::process::session_screen_lock` for the three-way shape). Only macOS has the idea:
+/// elsewhere there is nothing to read and the screen counts as unlocked.
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn session_screen_lock() -> Option<Option<bool>> {
+    mac::process::session_screen_lock()
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+pub(crate) fn session_screen_lock() -> Option<Option<bool>> {
+    Some(None)
+}
+
 /// Opt this process in or out of the kernel collapsing its memory into huge pages,
 /// which moves a footprint reading with no allocation at all. Only Linux has the
 /// collapse; elsewhere this does nothing.

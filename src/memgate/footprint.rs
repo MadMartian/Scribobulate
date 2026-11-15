@@ -167,9 +167,122 @@ pub(crate) fn measuring(rubric: &str) -> Option<MeasurementGuard> {
         );
         return None;
     }
+    if !proceed_given_screen(rubric, "at the start") {
+        return None;
+    }
     crate::platform::set_huge_page_collapse_disabled(true);
     Some(MeasurementGuard { _private: () })
 }
+
+/// What the login session says about the screen, three ways because "no lock key" and "the
+/// read failed" mean opposite things (see `platform::mac::process::session_screen_lock`).
+#[cfg(all(test, feature = "memory-gates"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScreenState {
+    Unlocked,
+    Locked,
+    /// The session dictionary could not be read. Not evidence of a lock, so not a reason to
+    /// skip; the series is measured and the gate's own bounds judge it.
+    Unreadable,
+}
+
+/// Fold the platform's three-way read into a [`ScreenState`]: the key is ABSENT on an
+/// unlocked screen (it is not `false`), and a read that failed is neither.
+#[cfg(all(test, feature = "memory-gates"))]
+pub(crate) fn screen_state_from(session: Option<Option<bool>>) -> ScreenState {
+    match session {
+        None => ScreenState::Unreadable,
+        Some(Some(true)) => ScreenState::Locked,
+        Some(Some(false) | None) => ScreenState::Unlocked,
+    }
+}
+
+/// What a gate does about the screen's state.
+#[cfg(all(test, feature = "memory-gates"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockVerdict {
+    Measure,
+    /// Not a verdict on the application: say so and return.
+    Skip,
+    /// Under CI a locked screen is a broken runner, and skipping would hide the gate for
+    /// good if the runner were locked on every run.
+    Refuse,
+}
+
+#[cfg(all(test, feature = "memory-gates"))]
+pub(crate) fn lock_verdict(state: ScreenState, under_ci: bool) -> LockVerdict {
+    match (state, under_ci) {
+        (ScreenState::Locked, true) => LockVerdict::Refuse,
+        (ScreenState::Locked, false) => LockVerdict::Skip,
+        (ScreenState::Unlocked | ScreenState::Unreadable, _) => LockVerdict::Measure,
+    }
+}
+
+/// Why a footprint series cannot be trusted on a locked screen.
+///
+/// MEASURED, macOS seat, release build: with the screen locked every window open/close cycle
+/// leaves ~10-20 MB behind (the series climbs 21 MB a cycle with no plateau; `footprint`
+/// reports it as "Owned physical footprint (unmapped)" and IOSurface, malloc barely moves),
+/// and draining the loop six more seconds frees none of it. The widget-finalization half of
+/// the same gate passes in that state, so the application released everything and the
+/// window server did not. The same run on an unlocked screen leaves 0.1-0.5 MB.
+#[cfg(all(test, feature = "memory-gates"))]
+const LOCKED_CAUSE: &str =
+    "the screen is locked, and the window server then keeps a closed window's \
+    backing surfaces (MEASURED: ~10-20 MB per window cycle that nothing frees), so a footprint \
+    series reads as a leak the application does not have";
+
+#[cfg(all(test, feature = "memory-gates"))]
+fn under_ci() -> bool {
+    std::env::var_os("CI").is_some_and(|v| !v.is_empty())
+}
+
+/// Whether a gate may measure (or judge) now, given the screen. Prints the `SKIPPED` line
+/// naming the cause when it may not, and panics under CI. `when` says which of the two
+/// checks this is: a lock can arrive between them.
+#[cfg(all(test, feature = "memory-gates"))]
+fn proceed_given_screen(rubric: &str, when: &str) -> bool {
+    let state = screen_state_from(crate::platform::session_screen_lock());
+    match lock_verdict(state, under_ci()) {
+        LockVerdict::Measure => true,
+        LockVerdict::Skip => {
+            println!(
+                "SKIPPED [TDD {rubric}]: {LOCKED_CAUSE} (checked {when}); unlock the screen and \
+                 re-run"
+            );
+            false
+        }
+        LockVerdict::Refuse => panic!(
+            "TDD {rubric}: {LOCKED_CAUSE} (checked {when}). Under CI a skip would hide this gate \
+             for good, so it fails instead: the runner's session must stay unlocked"
+        ),
+    }
+}
+
+/// What to print when a series fails, on macOS: the screen state and the process's own
+/// memory categories, so a red names WHERE the growth sits (heap, or the window server's
+/// surfaces) rather than only how much. Best-effort: a missing `footprint` tool prints nothing.
+#[cfg(all(test, feature = "memory-gates", target_os = "macos"))]
+fn print_failure_context() {
+    println!(
+        "[memgate context] screen={:?} CI={}",
+        screen_state_from(crate::platform::session_screen_lock()),
+        under_ci()
+    );
+    if let Ok(out) = std::process::Command::new("footprint")
+        .arg(std::process::id().to_string())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        println!(
+            "[memgate context] footprint:\n{}",
+            text.lines().take(24).collect::<Vec<_>>().join("\n")
+        );
+    }
+}
+
+#[cfg(all(test, feature = "memory-gates", not(target_os = "macos")))]
+fn print_failure_context() {}
 
 /// Idempotent and process-wide; a refusal is fatal rather than ignored, because
 /// a series measured with the collapse still armed is the one that looks like a
@@ -200,12 +313,19 @@ impl Drop for MeasurementGuard {
 /// a render's figure from silently governing an animation's.
 #[cfg(all(test, feature = "memory-gates"))]
 pub(crate) fn assert_bounded(rubric: &str, warmup: usize, samples: &[u64]) {
+    // Checked again here, not only at the start: the screen can lock DURING a series, and a
+    // series sampled partly on a locked screen is as unreadable as one taken wholly on it.
+    if !proceed_given_screen(rubric, "before judging") {
+        return;
+    }
     println!(
         "[memgate {rubric}] {}",
         super::growth::describe(samples, warmup, GROWTH_BOUNDS)
     );
-    super::growth::assert_no_growth(samples, warmup, GROWTH_BOUNDS)
-        .unwrap_or_else(|err| panic!("TDD {rubric}: {err}"));
+    super::growth::assert_no_growth(samples, warmup, GROWTH_BOUNDS).unwrap_or_else(|err| {
+        print_failure_context();
+        panic!("TDD {rubric}: {err}")
+    });
 }
 
 /// Current process footprint in bytes, or `None` if this platform's sampler
@@ -225,6 +345,41 @@ mod tests {
         assert!(
             n > 0,
             "a zero footprint is a dark instrument, not a reading"
+        );
+    }
+
+    #[cfg(feature = "memory-gates")]
+    #[test]
+    fn the_session_read_tells_a_missing_lock_key_from_a_failed_read() {
+        use super::{screen_state_from, ScreenState};
+        // An unlocked screen has NO key: absence is "unlocked", never "unreadable".
+        assert_eq!(screen_state_from(Some(None)), ScreenState::Unlocked);
+        assert_eq!(screen_state_from(Some(Some(false))), ScreenState::Unlocked);
+        assert_eq!(screen_state_from(Some(Some(true))), ScreenState::Locked);
+        // A dictionary that could not be read is not evidence of a lock.
+        assert_eq!(screen_state_from(None), ScreenState::Unreadable);
+    }
+
+    #[cfg(feature = "memory-gates")]
+    #[test]
+    fn a_locked_screen_skips_locally_and_refuses_under_ci() {
+        use super::{lock_verdict, LockVerdict::*, ScreenState::*};
+        assert_eq!(lock_verdict(Locked, false), Skip);
+        assert_eq!(lock_verdict(Locked, true), Refuse);
+        for under_ci in [false, true] {
+            assert_eq!(lock_verdict(Unlocked, under_ci), Measure);
+            assert_eq!(lock_verdict(Unreadable, under_ci), Measure);
+        }
+    }
+
+    #[cfg(all(feature = "memory-gates", target_os = "macos"))]
+    #[test]
+    fn the_session_dictionary_is_readable_on_this_host() {
+        // Not asserting lock or unlock (the host decides that): asserting the READ works,
+        // since an unreadable dictionary would make every gate measure on a locked screen.
+        assert!(
+            crate::platform::session_screen_lock().is_some(),
+            "CGSessionCopyCurrentDictionary returned nothing: no login session to read"
         );
     }
 
