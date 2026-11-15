@@ -928,33 +928,45 @@ fn the_helpers_decode_what_they_claim() {
 
 /// Overlapping declarations made two checks quadratic outside any budget: `<!doctype `
 /// repeated before one `>`, and `<?xml` repeated with no `?>` (each rescanned to the
-/// end). At the image cap that hung the main thread for good. Each shape, at the cap,
-/// must finish in seconds; the old code needed on the order of 10^13 steps.
+/// end). At the image cap that hung the main thread for good; the old code needed on the
+/// order of 10^13 steps.
+///
+/// Judged by growth, not by a wall-clock bound alone: each shape is screened at a quarter
+/// of the cap and at the cap, and four times the input must cost well under the sixteen
+/// times a quadratic scan would. A fixed bound measured the runner instead — an
+/// instrumented build on a shared CI machine took 21 s on a shape a plain build screens in
+/// 2 s, linearly. The absolute bound stays, generous, as the guard against a hang.
 #[test]
 fn cap_sized_runs_of_declarations_are_screened_in_bounded_time() {
     let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
-    let shapes: [(&str, String); 4] = [
-        (
-            "doctypes before one `>`",
-            "<!doctype ".repeat(cap / 10) + ">",
-        ),
-        ("xml declarations with no `?>`", "<?xml ".repeat(cap / 6)),
-        (
-            "unclosed encoding values",
-            "<?xml encoding=\"".repeat(cap / 16),
-        ),
+    let shapes: [(&str, &str, &str); 4] = [
+        ("doctypes before one `>`", "<!doctype ", ">"),
+        ("xml declarations with no `?>`", "<?xml ", ""),
+        ("unclosed encoding values", "<?xml encoding=\"", ""),
         (
             "declarations sharing one `?>`",
-            "<?xml encoding=\"utf-8\" ".repeat(cap / 23) + "?>",
+            "<?xml encoding=\"utf-8\" ",
+            "?>",
         ),
     ];
-    for (what, text) in shapes {
+    let time = |unit: &str, tail: &str, bytes: usize| {
+        let text = unit.repeat(bytes / unit.len()) + tail;
         let started = std::time::Instant::now();
         let _ = refused(&text);
-        let took = started.elapsed();
+        started.elapsed()
+    };
+    for (what, unit, tail) in shapes {
+        let quarter = time(unit, tail, cap / 4);
+        let full = time(unit, tail, cap);
         assert!(
-            took < std::time::Duration::from_secs(20),
-            "{what}: {took:?}"
+            full < std::time::Duration::from_secs(120),
+            "{what}: {full:?} at the cap"
+        );
+        // Linear is about 4×; quadratic is 16×. The constant absorbs a fast quarter run.
+        assert!(
+            full < quarter * 9 + std::time::Duration::from_millis(500),
+            "{what}: {quarter:?} at a quarter of the cap, {full:?} at the cap — \
+             grows faster than linear"
         );
     }
 }

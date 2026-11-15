@@ -82,7 +82,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
-| BI | Linux | Test | The XInclude screen's bounded-time test took 21.1 s against its 20 s bound in the coverage step on the GitHub Linux runner | Low |
 
 ## Closed issues
 
@@ -651,20 +650,6 @@ Windows are gone in 2 s, the process lingers 20–30 s; Linux exits in ≤ 0.53 
 the next step is one run with `RUST_LOG=scribobulate=debug` at exit to see what it waits on.
 Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No
 Known-issues line.
-
-## BI. The XInclude screen's bounded-time test overran its bound once on CI
-
-**Severity**: Low (a red pipeline; no user effect).
-
-`imagedecode::xinclude::tests::cap_sized_runs_of_declarations_are_screened_in_bounded_time`
-failed in step 5c (coverage, instrumented build) on the GitHub Linux runner: "xml
-declarations with no `?>`: 21.113728538s" against a 20 s bound (run 43636725601,
-2026-11-14, branch `bug/1.0.0-deferrals`, which does not touch `src/imagedecode/`). The local
-Linux pipeline on the same tree passed, and the six preceding `master` runs were green.
-Before changing anything, measure the shape's time in the coverage build locally and on CI:
-either the bound is too tight for an instrumented build on a shared runner, or the screen's
-cost on that shape is closer to quadratic than the test assumes (a security question —
-read CVE.md's header and ScrSEC-1 first).
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
