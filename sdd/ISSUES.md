@@ -76,7 +76,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AN | Linux | Production | On a dark desktop, Show Unsafe Images and Annotations toolbar icons come from the host theme, not the bundled ones | Low |
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AQ | Mac | Production | View ▸ Side by Side from the menu on a short document shows only the preview's last line; ⌥2 does not | Medium |
-| AT | Any | Test | Setting `view-mode` over D-Bus (`org.gtk.Actions.SetState`) leaves the preview scrolled where the accelerator does not | Low |
 | AU | Mac | Production | Insert Emoji's chooser opens but a pick never inserts and Esc does not dismiss it | Medium |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
@@ -601,14 +600,6 @@ different path, which is why Linux cannot see it. File ▸ Reload un-sticks it. 
 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). Known issues:
 *"macOS: on a short document, View ▸ Side by Side may show only the end of the preview —
 press ⌥2 or File ▸ Reload."*
-
-## AT. Setting `view-mode` over D-Bus leaves the preview scrolled where the accelerator does not
-
-**Severity**: Low (harness only).
-
-`org.gtk.Actions.SetState` on `view-mode` leaves the preview scrolled where the
-accelerator does not; MANUAL-TEST §1.5 drives view mode by accelerator. Evidence: 1.0.0 dry
-run, filed in "File the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 ## AU. On macOS, Insert Emoji never inserts
 
