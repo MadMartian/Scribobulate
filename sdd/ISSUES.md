@@ -65,7 +65,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| W | Any | Production | Each window open/close cycle still retains ~0.14 MB, linearly (GTK submenu models, an unpinned remainder) | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
@@ -472,25 +471,6 @@ whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, unt
 critical fires and names the holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
-
-## W. Each window open/close cycle still retains ~0.14 MB
-
-**Severity**: Low (unbounded but slow: ~11 MB over 80 cycles).
-
-Release build, 80 × new-window-then-close: +10.4 MB, linear, no plateau, so MANUAL-TEST
-8.6 still fails. The app-side cycles (Annotate card, find bar, the line-numbered editor
-that GtkSourceView 5.4.1 never finalizes, GTK4Rs/AP-386) are fixed and guarded by the window-cycle memory
-gate (TDD 6.13); what remains is not a widget:
-- GTK 4.6.9 keeps every submenu `GMenu` bound to a `GtkPopoverMenuBar` or `GtkMenuButton`
-  alive after its window closes (a bare window with no app code reproduces it), ~50 KB per
-  window from `menubar::build_top_level_menus_with` (GTK4Rs/AP-387: `gtkpopovermenubar.c`
-  drops a transfer-full link ref). An app-side workaround (empty the
-  models at window destroy) runs into GTK4Rs/AP-76; not attempted.
-- ~17 KB of the disposed editor's instance structs, ~4 KB for the preview card's comment
-  `GtkSourceView` (`wire_annotation_overlay`), and ~70 KB not yet attributed (valgrind
-  still-reachable blocks whose count equals the cycle count is the method that found the
-  rest).
-Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
 
 ## Z. On Windows, a document opened through a UNC path never live-reloads
 

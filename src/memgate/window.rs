@@ -86,6 +86,29 @@ fn weak_tree(root: &gtk::Widget, out: &mut Vec<gtk::glib::WeakRef<gtk::Widget>>)
 /// so this list shrinks rather than grows.
 const TOOLKIT_SURVIVORS: [&str; 1] = ["GtkTooltipWindow"];
 
+/// TDD 6.13: two live windows' menu models link the SAME File, Edit and Help submenu
+/// (and the same styles-and-blocks section of Format). GTK 4.6.9's menu bar keeps every
+/// submenu model it was given after its window closes (GTK4Rs/AP-387), which no widget
+/// reference shows, so what keeps a closed window's models from piling up is that they
+/// were never the window's own. Mutation: build `menubar::SharedMenus` per window and
+/// this fails, while the finalization half below stays green.
+fn assert_menus_shared(a: &gtk::ApplicationWindow, b: &gtk::ApplicationWindow) {
+    let submenu = |window: &gtk::ApplicationWindow, index: i32| {
+        crate::winstate::chrome(window)
+            .expect("the window has chrome")
+            .menu_model
+            .item_link(index, "submenu")
+            .expect("a top-level submenu")
+    };
+    for (index, title) in [(0, "File"), (1, "Edit"), (4, "Help")] {
+        assert_eq!(
+            submenu(a, index),
+            submenu(b, index),
+            "TDD 6.13: the {title} menu is built per window, so a closed window's copy is kept for good"
+        );
+    }
+}
+
 /// TDD 6.13, the finalization half: a closed window's widgets are gone, so a retention shows
 /// by name rather than as bytes in a series. A footprint series cannot see a small
 /// retention in a short run and a weak reference cannot miss one.
@@ -108,6 +131,7 @@ fn window_widgets_are_finalized_after_close_ttd_6_13() {
         window.present();
         testpump::until(Clock::Idle, "the window to map", || window.is_mapped());
         testpump::drain_for(Clock::Frame, Duration::from_millis(50));
+        assert_menus_shared(&source, &window);
         let mut tree = Vec::new();
         weak_tree(window.upcast_ref(), &mut tree);
         let buffer = crate::winstate::state(&window)
