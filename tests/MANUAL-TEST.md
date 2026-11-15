@@ -1710,10 +1710,10 @@ and this file is just the run-sheet.
   opt-in
 - [ ] A Markdown file crafted with thousands of nested list items or a huge
   single table (stress/DoS-style) → app stays responsive or fails predictably,
-  doesn't hard-hang the main loop. Measured on 1.0.0: a 1.2 MB, 3000-item nested
-  list holds the main loop ~68 s before the window appears, then renders — a
-  bounded stall that ends in a rendered document is the predictable outcome; a
-  window that never appears is the FAIL
+  doesn't hard-hang the main loop. Nesting DEPTH is the axis to vary, not item
+  count: a deep list once cost 2^depth (68 s at 3000 items; no window at depth
+  30), and now maps in ~1.5 s at depth 150 and 3000 items. A window that never
+  appears is the FAIL
 
 ### 4.5 Accessibility & input diversity
 - [ ] Full keyboard-only pass: open, edit, format, save, switch tabs, navigate

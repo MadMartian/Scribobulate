@@ -75,7 +75,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
-| BG | Any | Production | A 3000-item nested list (1.2 MB) holds the main loop ~68 s before the window appears | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
 
 ## Closed issues
@@ -578,15 +577,6 @@ dry run's deferrals…" (2026-11-14). No Known-issues line.
 
 TDD 17.64 (Windows 2/2; Linux and macOS not read). Evidence: 1.0.0 dry run, filed in "File
 the 1.0.0 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## BG. A 3000-item nested list stalls first render for about a minute
-
-**Severity**: Low.
-
-A 1.2 MB file holds the main loop ~68 s before the window appears (Linux; 2000 items ~35–39
-s at 100 % CPU on macOS), then renders. A candidate for incremental first render (a PLAN),
-not a point fix. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). No Known-issues line.
 
 ## BH. On Windows, the process outlives its windows by 20–30 s after Quit
 

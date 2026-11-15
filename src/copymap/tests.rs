@@ -1337,3 +1337,45 @@ fn an_inverted_or_negative_span_slices_nothing() {
     assert_eq!(BufSpan::new(-1, 4).as_usize(), None, "negative start");
     assert_eq!(BufSpan::new(1, -4).as_usize(), None, "negative end");
 }
+
+/// A list nested `depth` levels deep, every item holding the next, each carrying a body.
+fn nested_list(depth: usize) -> String {
+    (0..depth)
+        .map(|level| format!("{}- item {level} body\n", "  ".repeat(level)))
+        .collect()
+}
+
+/// A node's source range used to be asked of each child as a WHOLE range, one end kept,
+/// so every level of a delimiter-free chain (list, item, list, item …) did the work
+/// twice. The cost doubled per level of nesting, and the copy map is built once per
+/// render: a document nested thirty deep held the main loop for minutes at 300 items,
+/// where depth 20 took a fraction of a second.
+///
+/// Judged by growth, not by a wall-clock bound: a chain eight levels deep and one three
+/// times deeper are each built and copied whole, and three times the depth must cost well
+/// under the nine times a quadratic walk would — never the thousands an exponential one
+/// does. The pre-fix code needed ~2^24 node visits for the deep chain.
+#[test]
+fn building_the_copy_map_of_deeply_nested_lists_grows_with_depth_not_exponentially() {
+    let time = |depth: usize| {
+        let source = nested_list(depth);
+        // The best of several runs: noise only ever adds time.
+        (0..5)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let (t, md, _slice) = render(&source);
+                let copied = resolve(&t, &md, 0, t.char_count);
+                let elapsed = started.elapsed();
+                assert_eq!(copied, md, "whole-buffer copy reproduces the source");
+                elapsed
+            })
+            .min()
+            .expect("five runs")
+    };
+    let shallow = time(8);
+    let deep = time(24);
+    assert!(
+        deep < shallow * 40 + std::time::Duration::from_millis(50),
+        "{shallow:?} at depth 8, {deep:?} at depth 24 — grows faster than the depth"
+    );
+}
