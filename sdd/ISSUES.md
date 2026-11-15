@@ -71,7 +71,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | AB | Windows | Production | `nul.md` opens as the NUL device (0 bytes) instead of being refused as a reserved device name | Low |
 | AG | Windows | Production | PDF export draws Hangul as tofu and drops its spaces on extraction; the PDF font map has no Malgun Gothic fallback | Medium |
 | AL | Windows | Production | `disclosure_marker_size = 24` draws a 3×4 px speck (Linux 10×11 px) | Low |
-| AP | Windows | Production | A click during Ctrl+End's travel lands the caret where clicked while the viewport snaps away, leaving the caret off screen | Medium |
 | AX | Windows | Production | Typing above the selected annotation clears the annotation list's selection | Low |
 | BA | Windows | Production | On resize, an annotation card whose anchor word moves up vanishes instead of flipping | Low |
 | BH | Windows | Production | After Quit, the windows go in 2 s but the process lingers 20–30 s | Low |
@@ -540,16 +539,6 @@ does not embed a fallback font for Hangul — Korean text shows as boxes."*
 
 Linux draws 10×11 px; macOS not yet read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0
 dry run's deferrals…" (2026-11-14). No Known-issues line.
-
-## AP. On Windows, a click during Ctrl+End's travel leaves the caret off screen
-
-**Severity**: Medium (a visible jump; nothing is lost).
-
-TDD 9.33a (3/3 and 2/2): the caret lands where clicked, the viewport snaps to the top or
-runs on to the end, the caret off screen. Linux 0/4 (Ctrl+End completes in < 0.1 s there);
-macOS not read. Evidence: 1.0.0 dry run, filed in "File the 1.0.0 dry run's deferrals…"
-(2026-11-14). Known issues: *"On Windows, clicking while Ctrl+End is still scrolling can
-leave the caret off screen — press Ctrl+End again or click once more."*
 
 ## AX. On Windows, typing above the selected annotation clears the list's selection
 
