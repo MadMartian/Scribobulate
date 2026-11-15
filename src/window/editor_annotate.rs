@@ -62,7 +62,7 @@ pub(crate) fn wire_editor_annotate_card(
     // controller, the Escape controller, the × button), so it must not own `bar`: a strong
     // capture closes `bar` → controller → closure → `hide` → `bar` into a cycle that strands
     // the card, the editor it points at and everything they own on every window close
-    // (GTK4Rs/AP-63, AP-140).
+    // (GTK4Rs/AP-63, GTK4Rs/AP-140).
     let hide: Rc<dyn Fn()> = Rc::new({
         let bar = bar.downgrade();
         let entry_open = entry_open.clone();

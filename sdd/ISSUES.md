@@ -500,11 +500,12 @@ the document's folder is deleted and recreated — reopen the file."*
 
 Release build, 80 × new-window-then-close: +10.4 MB, linear, no plateau, so MANUAL-TEST
 8.6 still fails. The app-side cycles (Annotate card, find bar, the line-numbered editor
-that GtkSourceView 5.4.1 never finalizes) are fixed and guarded by the window-cycle memory
+that GtkSourceView 5.4.1 never finalizes, GTK4Rs/AP-386) are fixed and guarded by the window-cycle memory
 gate (TDD 6.13); what remains is not a widget:
 - GTK 4.6.9 keeps every submenu `GMenu` bound to a `GtkPopoverMenuBar` or `GtkMenuButton`
   alive after its window closes (a bare window with no app code reproduces it), ~50 KB per
-  window from `menubar::build_top_level_menus_with`. An app-side workaround (empty the
+  window from `menubar::build_top_level_menus_with` (GTK4Rs/AP-387: `gtkpopovermenubar.c`
+  drops a transfer-full link ref). An app-side workaround (empty the
   models at window destroy) runs into GTK4Rs/AP-76; not attempted.
 - ~17 KB of the disposed editor's instance structs, ~4 KB for the preview card's comment
   `GtkSourceView` (`wire_annotation_overlay`), and ~70 KB not yet attributed (valgrind

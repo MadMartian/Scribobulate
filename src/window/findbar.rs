@@ -42,7 +42,7 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
         // Captures the window weakly and nothing else: the bar's widgets are read off the
         // window's chrome at call time. This closure is shared by actions whose owner is the
         // window, so a strong capture of any widget in the bar would keep that widget alive
-        // for as long as anything kept the closure (GTK4Rs/AP-63, AP-140).
+        // for as long as anything kept the closure (GTK4Rs/AP-63, GTK4Rs/AP-140).
         let open_find_bar: Rc<dyn Fn(bool)> = Rc::new({
             let win = window.downgrade();
             move |replace_mode: bool| {
@@ -140,7 +140,7 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
     // close button, the bar's Escape controller, the entry's `stop-search`), so a strong
     // capture would close `revealer` → child → controller/handler → closure → `revealer`
     // into a cycle that strands the whole find bar on every window close (GTK4Rs/AP-63,
-    // AP-140).
+    // GTK4Rs/AP-140).
     let close_find_bar: Rc<dyn Fn()> = Rc::new({
         let win = window.downgrade();
         let fr = find_bar_revealer.downgrade();
