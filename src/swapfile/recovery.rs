@@ -34,6 +34,40 @@ pub(crate) fn sync_action(at_risk: bool) -> SwapSync {
     }
 }
 
+/// What a tab does about its document id before it first writes a snapshot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DocIdClaim {
+    /// The id is ours to write under.
+    Keep,
+    /// A different live process already files its snapshot under this id; take a fresh
+    /// one rather than overwrite it.
+    Remint,
+}
+
+/// Decide whether a tab may write under its document id: **never over the snapshot of a
+/// different live process.**
+///
+/// Two processes that restore one saved session adopt the same persisted ids (reachable
+/// through two `--new-instance` launches against one state home), and so name one swap
+/// file. The last writer then wins and the other's edit is lost at a crash. `existing` is
+/// the header already at this tab's destination, if any; the id is surrendered only when
+/// that header carries this very id, was written by another process, and that process is
+/// still running. A snapshot this process wrote, or one whose owner is gone, is ours to
+/// replace: the latter is a crashed predecessor's, which recovery has already offered.
+pub(crate) fn claim_doc_id(
+    existing: Option<&SwapHeader>,
+    doc_id: &DocId,
+    our_pid: u32,
+    owner_is_live: impl FnOnce(u32) -> bool,
+) -> DocIdClaim {
+    match existing {
+        Some(h) if h.doc_id == *doc_id && h.owner_pid != our_pid && owner_is_live(h.owner_pid) => {
+            DocIdClaim::Remint
+        }
+        _ => DocIdClaim::Keep,
+    }
+}
+
 /// What the recovery pass should do with one swap file it found.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum SwapDisposition {
@@ -165,8 +199,8 @@ pub(crate) fn holds_nothing_new(header: &SwapHeader, body: &str, on_disk: Option
 #[cfg(test)]
 mod tests {
     use super::{
-        baseline_is_current, disposition, holds_nothing_new, identity_matches_first, sync_action,
-        SwapDisposition, SwapSync,
+        baseline_is_current, claim_doc_id, disposition, holds_nothing_new, identity_matches_first,
+        sync_action, DocIdClaim, SwapDisposition, SwapSync,
     };
     use crate::swapfile::{content_digest, DocId, SwapHeader};
 
@@ -305,6 +339,42 @@ mod tests {
             SwapDisposition::ReopenUntitled
         );
         assert!(!h.untitled, "the header still records that it had a file");
+    }
+
+    #[test]
+    fn a_live_foreign_snapshot_under_our_id_forces_a_fresh_id() {
+        let mut h = header(id('a'));
+        h.owner_pid = 7;
+        assert_eq!(
+            claim_doc_id(Some(&h), &id('a'), 1, |pid| pid == 7),
+            DocIdClaim::Remint
+        );
+    }
+
+    #[test]
+    fn every_other_snapshot_under_our_id_is_ours_to_replace() {
+        let mut foreign = header(id('a'));
+        foreign.owner_pid = 7;
+        let mut own = header(id('a'));
+        own.owner_pid = 1;
+        let mut other_doc = header(id('b'));
+        other_doc.owner_pid = 7;
+        assert_eq!(
+            claim_doc_id(Some(&foreign), &id('a'), 1, |_| false),
+            DocIdClaim::Keep,
+            "a dead owner's snapshot was already offered by recovery"
+        );
+        assert_eq!(
+            claim_doc_id(Some(&own), &id('a'), 1, |_| true),
+            DocIdClaim::Keep,
+            "our own earlier snapshot"
+        );
+        assert_eq!(
+            claim_doc_id(Some(&other_doc), &id('a'), 1, |_| true),
+            DocIdClaim::Keep,
+            "a different document's header is not a claim on this id"
+        );
+        assert_eq!(claim_doc_id(None, &id('a'), 1, |_| true), DocIdClaim::Keep);
     }
 
     #[test]

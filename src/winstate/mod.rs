@@ -120,10 +120,10 @@ mod writegate;
 pub(crate) use busynotice::{BusyNotice, BUSY_NOTICE_DELAY};
 pub(crate) use chrome::WindowChrome;
 pub(crate) use decisions::{
-    edit_actions_enabled, external_change_action, is_blank_welcome, line_col_indicator,
-    rename_enabled, save_enabled, save_is_safe, tab_label_markup, window_title_for_tabs,
-    BackingLoss, DiskObservation, DiskRead, ExternalChange, TabBadgeState, APP_NAME,
-    BACKING_SETTLE,
+    dismissal_covers, edit_actions_enabled, external_change_action, is_blank_welcome,
+    line_col_indicator, rename_enabled, save_enabled, save_is_safe, tab_label_markup,
+    window_title_for_tabs, BackingLoss, DiskObservation, DiskRead, ExternalChange, TabBadgeState,
+    APP_NAME, BACKING_SETTLE,
 };
 pub(crate) use docepoch::{DocEpoch, WriteEpoch};
 pub(crate) use fmtinsert::FmtInsertKind;
@@ -131,10 +131,10 @@ pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;
 pub(crate) use navhistory::{departure_stamp, traversal_to, NavDir, NavHistory, NavPlace, NavSpot};
 pub(crate) use registry::{
-    add_tab, alloc_tab_id, chrome, nav_can, nav_current, nav_degrade_stale_headings, nav_record,
-    nav_record_jump, nav_step, nav_suppress, register, rehome_tab, remove_tab, set_active_tab,
-    state, tab_by_content_box, tab_by_id, tab_count, tab_for_descendant, tab_placement,
-    tabs_for_window, unregister,
+    add_tab, alloc_tab_id, chrome, nav_can, nav_current, nav_degrade_stale_headings, nav_hold,
+    nav_record, nav_record_jump, nav_step, nav_suppress, register, rehome_tab, remove_tab,
+    set_active_tab, state, tab_by_content_box, tab_by_id, tab_count, tab_for_descendant,
+    tab_placement, tabs_for_window, unregister,
 };
 pub(crate) use scrollsync::{ScrollDriver, ScrollSync};
 pub(crate) use selfdelete::SelfDeleteGuard;
@@ -145,5 +145,7 @@ pub(crate) use selfdelete::SwallowReason;
 pub(crate) use status::{StatusCtx, StatusStack, ERROR_NOTICE_TIME};
 pub(crate) use swap::{next_delay_ms, SwapState, MAX_LATENCY_MS};
 pub(crate) use tab::{TabInit, TabState};
-pub(crate) use viewmode::{copy_target, find_pane, FocusedPane, ViewMode};
+pub(crate) use viewmode::{
+    copy_target, editor_gate_after_switch, find_pane, FocusedPane, ViewMode,
+};
 pub(crate) use writegate::WriteGate;

@@ -7,6 +7,11 @@ use super::CodePreviewView;
 use gtk::glib;
 use gtk::prelude::*;
 
+/// The name of the one persistent mark every preview navigation scrolls to. GTK parks a
+/// scroll it cannot yet honour ON the mark, so anything that moves the mark owns the
+/// parked request too (see `preview::restore_refilled_preview_to_line`).
+pub(crate) const OUTLINE_TARGET_MARK: &str = "scrib-outline-target";
+
 /// Move a persistent, left-gravity `GtkTextMark` named `name` to `iter`, creating
 /// it (left-gravity) on first use. Reusing ONE persistent mark — never a
 /// create-then-delete each call — is a documented correctness rule: a
@@ -328,7 +333,7 @@ impl CodePreviewView {
         // scroll's own animation cannot overwrite the anchor mid-burst (GTK4Rs/AP-14).
         self.imp().user_scrolling.set(false);
         self.imp().restore_target_line.set(Some(it.line()));
-        let mark = move_or_create_mark(&buffer, "scrib-outline-target", &it);
+        let mark = move_or_create_mark(&buffer, OUTLINE_TARGET_MARK, &it);
         // Pair the persisted mark with its owning buffer so the deferred idle can
         // gate resolution on membership (GTK4Rs/AP-89) via the one safe path.
         let bmark = crate::saferizer::buffer_mark::BufferMark::new(mark, &buffer);
@@ -375,6 +380,17 @@ impl CodePreviewView {
     /// back toward the top (GTK4Rs/AP-13/65). A no-op at/above the top (the clamp already
     /// lands there) and if the line cannot be resolved.
     pub(crate) fn reanchor_to_reading_line(&self) {
+        // A progressive restore still travelling to its line (a toggle's refill, a
+        // reload's rebuilt view) is the one writer of the adjustment: this resize JOINS
+        // it, re-issuing it so it re-reads the re-wrapped heights, instead of starting
+        // a second one-shot that lands wherever the transiently clamped viewport reads
+        // (TDD 7.15; GTK4Rs/AP-172).
+        if let Some(target) = crate::preview::far_restore_in_flight(self) {
+            if let Some(sw) = self.parent().and_downcast::<gtk::ScrolledWindow>() {
+                crate::preview::rejoin_far_restore(&sw, target);
+                return;
+            }
+        }
         let line = self.reading_line();
         if line <= 0 {
             return;
@@ -383,6 +399,16 @@ impl CodePreviewView {
             return;
         };
         self.coalesced_scroll_to_offset(it.offset());
+    }
+
+    /// Record `line` as where the reader is programmatically going, exactly as
+    /// [`scroll_to_buffer_offset`](Self::scroll_to_buffer_offset) does synchronously
+    /// before its deferred scroll: the cached reading line becomes the target and the
+    /// view's own value-changed bookkeeping stops overwriting it mid-travel.
+    pub(crate) fn adopt_programmatic_target(&self, line: i32) {
+        use gtk::subclass::prelude::*;
+        self.imp().user_scrolling.set(false);
+        self.imp().restore_target_line.set(Some(line));
     }
 
     /// Scroll a table-**cell** match to its own row, not merely the table's top.
@@ -419,7 +445,7 @@ impl CodePreviewView {
         // scroll_to_mark (GTK4Rs/AP-22/GTK4Rs/AP-14/GTK4Rs/AP-89), then refine to the exact cell row.
         self.imp().user_scrolling.set(false);
         self.imp().restore_target_line.set(Some(it.line()));
-        let mark = move_or_create_mark(&buffer, "scrib-outline-target", &it);
+        let mark = move_or_create_mark(&buffer, OUTLINE_TARGET_MARK, &it);
         // Pair with the owning buffer for the membership-gated resolve (GTK4Rs/AP-89).
         let bmark = crate::saferizer::buffer_mark::BufferMark::new(mark, &buffer);
         // Both the outer idle and the nested inner one below carry the ANTI-PATTERNS

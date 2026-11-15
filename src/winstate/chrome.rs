@@ -167,6 +167,13 @@ pub(crate) struct WindowChrome {
     /// is a window property); reset to `Editor` on every mode/tab switch and updated
     /// by the editor-focus gate as the user moves between panes.
     pub(crate) focused_pane: Cell<FocusedPane>,
+    /// The editor-focus gate's last REAL decision — open when focus last entered an editor,
+    /// closed when it last entered some other real area; a sticky surface (the menu bar, the
+    /// find bar) never writes it. A tab switch forces the gate shut for a tab that shows no
+    /// editor, so the open state would otherwise be lost across a round trip through one
+    /// while the focus sits on a sticky surface; this is what that round trip reads back
+    /// (`editbar::restore_remembered_gate`). Window-scoped like the gate itself.
+    pub(crate) editor_gate_remembered: Cell<bool>,
     /// The link the user right-clicked ON, for the lifetime of one context-menu
     /// popover — set before the menu is built, cleared when it closes
     /// (`window::copylink`).
@@ -320,6 +327,12 @@ pub(crate) struct WindowChrome {
     /// left open but insensitive until the drag lets go (TDD 7.7). A tab arriving in the
     /// meantime clears it and gives the window back.
     pub(crate) retiring: Cell<bool>,
+    /// The status entries of the *acknowledgement* notices ("File saved", "File
+    /// reloaded") still outstanding, so a condition that is true NOW — a conflict
+    /// prompt, a backing loss — can retract them: they report something already
+    /// done, and left standing they sit over the persistent line that reports what is
+    /// wrong with the file.
+    pub(crate) info_notices: RefCell<Vec<super::StatusCtx>>,
 }
 
 impl WindowChrome {
@@ -349,13 +362,40 @@ impl WindowChrome {
     /// A condition that can end before its notice's time is up is not a timed notice: it
     /// belongs in the persistent base line, as a lost file does (TDD 16.16).
     pub(crate) fn push_timed_notice(self: &Rc<Self>, msg: &str, duration: Duration) {
+        self.push_timed_notice_ctx(msg, duration);
+    }
+
+    fn push_timed_notice_ctx(self: &Rc<Self>, msg: &str, duration: Duration) -> super::StatusCtx {
         let ctx = self.status.borrow_mut().push(msg);
         let chrome = Rc::downgrade(self);
         gtk::glib::timeout_add_local_once(duration, move || {
             if let Some(chrome) = chrome.upgrade() {
                 chrome.status.borrow_mut().pop(ctx);
+                chrome.info_notices.borrow_mut().retain(|c| *c != ctx);
             }
         });
+        ctx
+    }
+
+    /// [`push_timed_notice`](Self::push_timed_notice) for an acknowledgement that a
+    /// condition raised afterwards supersedes: its entry is remembered so
+    /// [`retract_info_notices`](Self::retract_info_notices) can take it down early.
+    pub(crate) fn push_info_notice(self: &Rc<Self>, msg: &str, duration: Duration) {
+        let ctx = self.push_timed_notice_ctx(msg, duration);
+        self.info_notices.borrow_mut().push(ctx);
+    }
+
+    /// Take down every outstanding acknowledgement (its status entry and the info
+    /// toast) because something more important is now true of the document: a
+    /// conflict prompt or a backing loss. The timed pop that follows finds nothing and
+    /// does nothing, which `StatusStack::pop` treats as the expected race.
+    pub(crate) fn retract_info_notices(&self) {
+        self.info_toast.hide();
+        let ctxs: Vec<_> = self.info_notices.borrow_mut().drain(..).collect();
+        let mut status = self.status.borrow_mut();
+        for ctx in ctxs {
+            status.pop(ctx);
+        }
     }
 }
 

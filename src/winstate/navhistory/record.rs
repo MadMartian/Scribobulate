@@ -27,6 +27,9 @@ impl NavHistory {
     /// the document the reader is already reading must not discard the spot a
     /// within-document jump recorded for it.
     pub(crate) fn record(&mut self, tab: TabId) {
+        if self.hold > 0 {
+            return;
+        }
         if self.current_tab() == Some(tab) {
             return;
         }
@@ -54,7 +57,7 @@ impl NavHistory {
     /// the link for the section you are already in): the viewport still moves, but
     /// nothing is appended, so Back does not gain an inert stop.
     pub(crate) fn record_jump(&mut self, tab: TabId, from: Option<NavSpot>, to: NavSpot) {
-        if self.suppress > 0 {
+        if self.suppress > 0 || self.hold > 0 {
             return;
         }
         let arrival = NavPlace {
@@ -109,6 +112,33 @@ mod tests {
             !h.can(NavDir::Forward),
             "the declined future must not remain reachable"
         );
+    }
+
+    /// TDD 23.9, Save All: a tour that visits a tab already adjacent in the history and
+    /// returns home must leave the history as it found it. Under `suppress` the cursor
+    /// follows each stop, collapsing `[2, 1]` to `[2]` on the visit to 2 — the stop is
+    /// gone for good when the tour comes back to 1.
+    #[test]
+    fn a_held_tour_returning_home_leaves_the_history_as_it_was() {
+        let mut h = history_of(&[2, 1]);
+        h.suppress();
+        h.record(tab(2));
+        h.record(tab(1));
+        h.unsuppress();
+        assert_eq!(docs(&h), (vec![1], Some(0)), "the follow lost a stop");
+
+        let mut h = history_of(&[2, 1]);
+        h.hold();
+        h.record(tab(2));
+        h.record(tab(3));
+        h.record(tab(1));
+        h.unhold();
+        assert_eq!(
+            docs(&h),
+            (vec![2, 1], Some(1)),
+            "a held tour changes nothing"
+        );
+        assert!(h.can(NavDir::Back));
     }
 
     /// A switch to the tab already current is not a navigation — an idempotent

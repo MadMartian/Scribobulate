@@ -276,6 +276,19 @@ pub(crate) fn wire_editor_clipboards(view: &sourceview::View) {
 /// Denying button 2 costs nothing else: `GtkTextView` has exactly three button sites, and
 /// the only other button-2 behaviour is `released` raising the on-screen keyboard. The drag
 /// gesture is `GDK_BUTTON_PRIMARY` and cannot see button 2.
+/// Where a middle click at buffer point (`bx`, `by`) pastes: the glyph under the pointer, or
+/// — where `iter_at_location`'s glyph hit-test misses (a blank line, past a line's end, the
+/// empty last line; GTK4Rs/AP-15) — the end of the line the pointer is on.
+fn paste_iter(view: &sourceview::View, bx: i32, by: i32) -> gtk::TextIter {
+    view.iter_at_location(bx, by).unwrap_or_else(|| {
+        let (mut line, _top) = view.line_at_y(by);
+        if !line.ends_line() {
+            line.forward_to_line_end();
+        }
+        line
+    })
+}
+
 fn wire_middle_click_paste(view: &sourceview::View) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gtk::gdk::BUTTON_MIDDLE);
@@ -299,9 +312,7 @@ fn wire_middle_click_paste(view: &sourceview::View) {
             // an iterator would not survive the buffer changing underneath it (GEP-43).
             let (bx, by) =
                 view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
-            let Some(iter) = view.iter_at_location(bx, by) else {
-                return;
-            };
+            let iter = paste_iter(&view, bx, by);
             let buf = view.buffer();
             let mark = buf.create_mark(None, &iter, true);
 
@@ -628,6 +639,59 @@ mod gtk_integration_tests {
 
         src_win.destroy();
         dest_win.destroy();
+    }
+
+    /// **A middle click off a glyph still pastes — at the end of the line under the pointer.**
+    ///
+    /// `iter_at_location` is a glyph hit-test and answers `None` on a blank line, past a
+    /// line's end and on the empty last line (GTK4Rs/AP-15); the handler used to bail
+    /// there and drop the paste. Each case clicks at x = 300 in a 400-wide view, far right
+    /// of any text, on one such line, and expects the text at that line's end.
+    #[gtktest::test]
+    fn a_middle_click_off_a_glyph_pastes_at_the_end_of_the_line_under_the_pointer() {
+        use crate::codeview::CodePreviewView;
+
+        // (document, line clicked, expected result)
+        let cases = [
+            ("hello\nworld\n", 0, "helloX\nworld\n"),
+            ("hello\n\nworld\n", 1, "hello\nX\nworld\n"),
+            ("hello\nworld\n", 2, "hello\nworld\nX"),
+        ];
+        for (doc, line, expected) in cases {
+            let source = CodePreviewView::new();
+            source.buffer().set_text("X");
+            let (src_win, ctx) = present(&source);
+            source
+                .buffer()
+                .select_range(&source.buffer().start_iter(), &source.buffer().end_iter());
+            pump(&ctx, SETTLE);
+
+            let (dest_buf, dest_view) = editor(doc);
+            let (dest_win, _) = present(&dest_view);
+            pump(&ctx, SETTLE);
+            let rect = dest_view.iter_location(&dest_buf.iter_at_line(line).expect("line"));
+            let (wx, wy) = dest_view.buffer_to_window_coords(
+                gtk::TextWindowType::Widget,
+                300,
+                rect.y() + rect.height() / 2,
+            );
+            let gesture = find_middle_click_gesture(&dest_view).expect("gesture");
+            gesture.emit_by_name::<()>("pressed", &[&1i32, &(wx as f64), &(wy as f64)]);
+            for _ in 0..600 {
+                if dest_buf.char_count() as usize > doc.chars().count() {
+                    break;
+                }
+                pump(&ctx, BRIEF);
+            }
+            assert_eq!(
+                text_of(&dest_buf),
+                expected,
+                "a middle click past the glyphs of line {line} of {doc:?} must paste at that \
+                 line's end"
+            );
+            src_win.destroy();
+            dest_win.destroy();
+        }
     }
 
     #[gtktest::test]

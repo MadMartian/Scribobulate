@@ -77,6 +77,64 @@ extern "system" {
     ) -> i32;
 }
 
+/// `RECT`, for the two reads [`set_client_size`] makes.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+#[repr(C)]
+#[derive(Default)]
+struct Rect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+#[link(name = "user32")]
+extern "system" {
+    fn GetWindowRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
+    fn GetClientRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
+}
+
+/// Resize a mapped `window`'s native window so its client area, which is the GTK
+/// window under the native frame, is `width`×`height`. This is what a frame-edge drag
+/// does, and GDK follows it as it follows a drag. The GTK suite uses it because
+/// `set_default_size` does not resize a mapped toplevel on GDK-Win32; see
+/// `window::testkit::resize_mapped_window`.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn set_client_size(window: &gtk::Window, width: i32, height: i32) {
+    let surface = window
+        .surface()
+        .expect("only a mapped window can be resized like a drag");
+    // SAFETY: `surface` is a live, realized GdkSurface owned by `window`, so the pointer
+    // is valid for the call.
+    let hwnd = unsafe { gdk_win32_surface_get_handle(surface.to_glib_none().0) };
+    assert!(
+        !hwnd.is_null(),
+        "a realized Win32 surface must yield an HWND"
+    );
+    let (mut outer, mut client) = (Rect::default(), Rect::default());
+    // SAFETY: `hwnd` is valid per the check above, and both rects outlive the calls.
+    let read =
+        unsafe { GetWindowRect(hwnd, &mut outer) != 0 && GetClientRect(hwnd, &mut client) != 0 };
+    assert!(read, "GetWindowRect/GetClientRect failed");
+    let frame_width = (outer.right - outer.left) - (client.right - client.left);
+    let frame_height = (outer.bottom - outer.top) - (client.bottom - client.top);
+    let scale = surface.scale_factor();
+    // SAFETY: as above; a null `insert_after` is ignored because SWP_NOZORDER is set.
+    let moved = unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            width * scale + frame_width,
+            height * scale + frame_height,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    assert!(moved != 0, "SetWindowPos failed");
+}
+
 /// Take the real Win32 window frame instead of GTK's client-side decorations, for every
 /// window this process makes. Must precede GTK init.
 ///

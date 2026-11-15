@@ -1,5 +1,5 @@
 //! The annotations sidebar *widget* — a flat, navigable list of the document's
-//! comment-bearing annotations.
+//! annotations (highlights, commented or bare, and point comments).
 //!
 //! Builds a virtualized `GtkListView` over a flat `GtkListStore` of `AnnotationObject`
 //! GObjects (one per `annotations::AnnotationEntry`). Deliberately **flat**, not a

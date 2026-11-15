@@ -66,11 +66,16 @@ pub(crate) fn render(doc: &ExportDoc, palette: &Palette, theme: &Theme) -> Strin
     if !doc.annotations.is_empty() {
         out.push_str("<section class=\"annotations\">\n<h2>Annotations</h2>\n<ol>\n");
         for ann in &doc.annotations {
+            // A bare highlight has no comment: its row is the claim alone (TDD 17.67).
+            let comment = if ann.comment.is_empty() {
+                String::new()
+            } else {
+                format!("<p>{}</p>", escape(&ann.comment))
+            };
             let _ = writeln!(
                 out,
-                "<li><blockquote class=\"claim\">{}</blockquote><p>{}</p></li>",
+                "<li><blockquote class=\"claim\">{}</blockquote>{comment}</li>",
                 escape(&ann.claim),
-                escape(&ann.comment)
             );
         }
         out.push_str("</ol>\n</section>\n");
@@ -299,10 +304,11 @@ fn table_html(
 
 fn align_attr(a: Option<&Align>) -> &'static str {
     match a {
-        Some(Align::Left) => " class=\"a-l\"",
+        // An unaligned column is flush left (TDD 2.2d) and must SAY so: a browser's
+        // default sheet centres `<th>`, so no class means a centred header.
+        Some(Align::Left) | Some(Align::None) | None => " class=\"a-l\"",
         Some(Align::Center) => " class=\"a-c\"",
         Some(Align::Right) => " class=\"a-r\"",
-        _ => "",
     }
 }
 
@@ -358,7 +364,13 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
                 if !*tail {
                     continue;
                 }
-                if let Some(ann) = page.doc.annotations.get(*idx) {
+                // A bare highlight has no comment, so no aside (TDD 17.67).
+                if let Some(ann) = page
+                    .doc
+                    .annotations
+                    .get(*idx)
+                    .filter(|ann| !ann.comment.is_empty())
+                {
                     let _ = write!(
                         out,
                         "<aside class=\"comment\"><a href=\"#claim-{}\">{}</a> {}</aside>",
@@ -378,7 +390,23 @@ fn wrap(out: &mut String, tag: &str, attrs: &str, v: &[Inline], page: &Page<'_>)
     let _ = write!(out, "</{tag}>");
 }
 
+/// The inline `style` an `<img>`'s declared size becomes (TDD 2.21b), empty when it
+/// declared none. Inline so it outranks the sheet's `height: auto`; the sheet's
+/// `max-width: 100%` still clamps it, and `height: auto` / `aspect-ratio` keep the aspect
+/// through that clamp.
+fn declared_style(img: &ImageRef) -> String {
+    match img.declared.map(|d| (d.width, d.height)) {
+        Some((Some(w), Some(h))) => {
+            format!(" style=\"width:{w}px;height:auto;aspect-ratio:{w}/{h}\"")
+        }
+        Some((Some(w), None)) => format!(" style=\"width:{w}px;height:auto\""),
+        Some((None, Some(h))) => format!(" style=\"height:{h}px;width:auto\""),
+        _ => String::new(),
+    }
+}
+
 fn image_html(img: &ImageRef, out: &mut String) {
+    let style = declared_style(img);
     let alt = escape_attr(&img.alt);
     let title = img
         .title
@@ -392,14 +420,14 @@ fn image_html(img: &ImageRef, out: &mut String) {
             // the only reason anyone exported it (TDD 25.12).
             let _ = write!(
                 out,
-                "<img alt=\"{alt}\"{title} src=\"data:{mime};base64,{}\">",
+                "<img alt=\"{alt}\"{title}{style} src=\"data:{mime};base64,{}\">",
                 base64(bytes)
             );
         }
         ImageSource::Remote(url) => {
             let _ = write!(
                 out,
-                "<img alt=\"{alt}\"{title} src=\"{}\">",
+                "<img alt=\"{alt}\"{title}{style} src=\"{}\">",
                 escape_attr(url)
             );
         }
@@ -2045,6 +2073,23 @@ mod html_sink_tests {
     }
 
     #[test]
+    fn an_unaligned_column_header_is_classed_flush_left() {
+        let out = html_of("| a | b |\n|---|:-:|\n| 1 | 2 |\n");
+        assert!(out.contains("<th class=\"a-l\">a</th>"), "{out}");
+        assert!(out.contains("<td class=\"a-l\">1</td>"), "{out}");
+        assert!(out.contains("<th class=\"a-c\">b</th>"), "{out}");
+    }
+
+    #[test]
+    fn a_task_item_with_a_nested_list_exports_its_checkbox() {
+        let out = html_of("- [x] outer\n  - inner\n");
+        assert!(
+            out.contains("<li class=\"task-list-item\"><input type=\"checkbox\" checked disabled>"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn a_heading_anchor_is_emitted_so_an_in_document_link_still_works() {
         let out = html_of("# My Section\n\n[go](#my-section)\n");
         assert!(out.contains("id=\"my-section\""), "{out}");
@@ -2146,6 +2191,20 @@ mod html_sink_tests {
         assert!(out.contains("class=\"claim\""), "{out}");
         assert!(out.contains("my comment"), "{out}");
         assert!(out.contains("<section class=\"annotations\">"), "{out}");
+    }
+
+    #[test]
+    fn a_bare_highlight_exports_as_a_claim_with_no_aside_and_no_empty_paragraph() {
+        // TDD 17.67: highlighted in the page, listed in the summary by its claim alone.
+        let out = html_of("The {==claim==} here.\n");
+        assert!(out.contains("class=\"claim\""), "{out}");
+        assert!(!out.contains("<aside"), "no comment, no aside: {out}");
+        assert!(out.contains("<section class=\"annotations\">"), "{out}");
+        assert!(
+            out.contains("<blockquote class=\"claim\">claim</blockquote></li>"),
+            "{out}"
+        );
+        assert!(!out.contains("<p></p>"), "{out}");
     }
 
     /// TDD 18.21 / 25.3 — the artefact shows the per-level heading colour and face the

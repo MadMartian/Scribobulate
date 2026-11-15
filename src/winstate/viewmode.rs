@@ -87,6 +87,20 @@ pub(crate) fn copy_target(mode: ViewMode, focused: FocusedPane) -> Option<Focuse
     }
 }
 
+/// Whether the editor-focus gate (`win.format`, `win.go-to-line`) is open for a tab that has
+/// just become the active one, when the focus is in neither of its panes — a sticky surface
+/// such as the menu bar holds it, as it does after any menu-bar command.
+///
+/// The gate is sticky over those surfaces, so its last REAL decision (focus in the editor, or
+/// in some other real area) still describes the reader, but the per-tab mode reset a tab
+/// switch applies has since forced it shut for a tab that shows no editor. Reading the
+/// remembered decision back, for a tab whose editor is visible, is what lets the round trip
+/// through such a tab end where it began. A hidden editor is never the edit target, whatever
+/// the memory says.
+pub(crate) fn editor_gate_after_switch(mode: ViewMode, remembered_open: bool) -> bool {
+    remembered_open && mode.is_editor_visible()
+}
+
 /// Which pane Find searches, steps through and scrolls (TDD 11.19): the only visible
 /// pane outside split mode, and in split mode the pane that last genuinely held focus —
 /// the same sticky record `copy_target` reads, so the find bar taking focus to be
@@ -115,6 +129,26 @@ mod tests {
             assert_eq!(m.as_str().parse::<ViewMode>(), Ok(m));
         }
         assert!("bogus".parse::<ViewMode>().is_err());
+    }
+
+    /// TDD 10.6a: a remembered open gate comes back for a tab that shows its editor, and
+    /// only for one.
+    #[test]
+    fn a_remembered_open_editor_gate_returns_only_where_the_editor_is_visible() {
+        for (mode, remembered, expected) in [
+            (ViewMode::Split, true, true),
+            (ViewMode::Edit, true, true),
+            (ViewMode::Preview, true, false),
+            (ViewMode::Split, false, false),
+            (ViewMode::Edit, false, false),
+            (ViewMode::Preview, false, false),
+        ] {
+            assert_eq!(
+                editor_gate_after_switch(mode, remembered),
+                expected,
+                "{mode} remembered={remembered}"
+            );
+        }
     }
 
     /// TDD 11.19.

@@ -34,7 +34,7 @@ pub(super) struct Builder<'a> {
     /// Items collected for each open list, innermost last.
     list_items: Vec<Vec<ListItem>>,
     /// A task-list marker seen inside the item currently open, if any.
-    pending_task: Option<bool>,
+    pending_task: Vec<Option<bool>>,
     /// Fenced code text accumulates here between the block's start and end events.
     code: Option<(Option<String>, String)>,
     /// `<picture>` grouping carried ACROSS events, because a single-line
@@ -42,6 +42,8 @@ pub(super) struct Builder<'a> {
     /// inline events — grouping inside one parse call loses it (ScrAP-147).
     picture_open: bool,
     picture_taken: bool,
+    /// The size an `<img>` declared, held for the candidate that follows it.
+    pending_declared: Option<crate::renderer::DeclaredSize>,
     /// Every `<details>` the document declares, paired with its `</details>` — the
     /// same pre-scan the preview renderer consults, so the two sinks agree about
     /// which blocks are real disclosures and which are unclosed markup (rubric
@@ -180,10 +182,11 @@ impl<'a> Builder<'a> {
             table: None,
             in_table_head: false,
             list_items: Vec::new(),
-            pending_task: None,
+            pending_task: Vec::new(),
             code: None,
             picture_open: false,
             picture_taken: false,
+            pending_declared: None,
             disclosures,
             disclosure_cursor: crate::renderer::disclosure::SpanCursor::default(),
             event_src: 0..0,
@@ -286,7 +289,11 @@ impl<'a> Builder<'a> {
             // The marker belongs to the item already open around it; it is held
             // until that item closes rather than emitted, because a task marker is
             // a property of the item and not content inside it.
-            Event::TaskListMarker(checked) => self.pending_task = Some(checked),
+            Event::TaskListMarker(checked) => {
+                if let Some(top) = self.pending_task.last_mut() {
+                    *top = Some(checked);
+                }
+            }
             // Raw HTML is DROPPED, exactly as the preview drops it — except the image
             // elements the one allowlist names. Not escaped (that would put text on
             // the page the preview never showed) and never passed through (that would
@@ -379,7 +386,9 @@ impl<'a> Builder<'a> {
             Tag::Item => {
                 self.block_stack.push(Vec::new());
                 self.open.push(Open::Item);
-                self.pending_task = None;
+                // One slot per open item: a nested item opening must not clear the
+                // marker its parent already read.
+                self.pending_task.push(None);
             }
             Tag::CodeBlock(kind) => {
                 let lang = match kind {
@@ -541,7 +550,7 @@ impl<'a> Builder<'a> {
             }
             Open::Item => {
                 let blocks = self.block_stack.pop().unwrap_or_default();
-                let task = self.pending_task.take();
+                let task = self.pending_task.pop().flatten();
                 if let Some(items) = self.list_items.last_mut() {
                     items.push(ListItem { task, blocks });
                 }
@@ -748,6 +757,23 @@ impl<'a> Builder<'a> {
         }
         for tag in crate::renderer::scan_image_tags(html) {
             match tag {
+                // The declared size belongs to the SLOT, as in the preview: inside a
+                // `<picture>` whose winner was already pushed from a `<source>`, it is
+                // applied to that image; otherwise the next candidate takes it.
+                crate::renderer::ImgTag::Declared(size) => {
+                    let winner = if self.picture_open && self.picture_taken {
+                        match self.inline_stack.last_mut().and_then(|v| v.last_mut()) {
+                            Some(Inline::Image(img)) => Some(img),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    match winner {
+                        Some(img) => img.declared = Some(size),
+                        None => self.pending_declared = Some(size),
+                    }
+                }
                 crate::renderer::ImgTag::PictureOpen => {
                     self.picture_open = true;
                     self.picture_taken = false;
@@ -763,7 +789,8 @@ impl<'a> Builder<'a> {
                     if self.picture_open && self.picture_taken {
                         continue;
                     }
-                    let image = self.resolve(&src, String::new(), None);
+                    let mut image = self.resolve(&src, String::new(), None);
+                    image.declared = self.pending_declared.take();
                     let usable = !matches!(image.source, ImageSource::Missing(_));
                     if self.picture_open {
                         if !usable {
@@ -808,7 +835,12 @@ impl<'a> Builder<'a> {
                 placeholder(&resolution)
             }
         };
-        ImageRef { alt, title, source }
+        ImageRef {
+            alt,
+            title,
+            source,
+            declared: None,
+        }
     }
 }
 

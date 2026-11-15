@@ -98,7 +98,7 @@ pub(super) fn add_open_action(app: &Application) {
                             // File ▸ Open, not a CLI/D-Bus batch launch — see
                             // its own comment for why that changes reuse
                             // behavior (TDD 1.2).
-                            a.open(&files, "interactive");
+                            a.open(&files, super::openbatch::INTERACTIVE_HINT);
                         }
                     }
                 }

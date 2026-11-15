@@ -34,3 +34,19 @@ pub(crate) fn test_app_suffixed(suffix: &str) -> gtk::Application {
         "com.extollit.scribobulate.integrationtest.{suffix}"
     ))
 }
+
+/// Resize a MAPPED window to `width`×`height`, as one step of a frame-edge drag does.
+///
+/// On X11 `set_default_size` is enough, because a mapped toplevel follows it. On
+/// GDK-Win32 it is not: the window stayed 900 px wide through ten calls asking for 940
+/// down to 400. Measured on Windows, GTK 4.24.1, the native frame. So on Windows the
+/// native window is resized as well, which is what a real drag does, and GDK follows it.
+/// The remembered size is set on every platform. Otherwise a later GDK-Win32 layout pass
+/// that falls back to it (GTK4Rs/AP-158, see `platform::win32::frame`) would snap the
+/// window back.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn resize_mapped_window(window: &impl IsA<gtk::Window>, width: i32, height: i32) {
+    window.set_default_size(width, height);
+    #[cfg(windows)]
+    crate::platform::win32::frame::set_client_size(window.as_ref(), width, height);
+}

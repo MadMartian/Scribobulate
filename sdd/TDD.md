@@ -18,7 +18,7 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.65 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.69 |
 | 18 | Preview reading themes | 18.1 – 18.58 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
@@ -326,6 +326,16 @@
 - **And** an image narrower than the pane keeps its natural size, left-aligned — it is **not** stretched to fill the column
 - **And** this fit is decided **at 100% zoom**, and is then scaled by the zoom level (13.11) — so above 100% an image that had been fitted to the pane grows past it and the preview offers a horizontal scrollbar for it. Everything above describes the default view, which is where the no-scrollbar guarantee holds; a reader who has deliberately zoomed in has asked for the larger image and gets the scrollbar with it
 
+### 2.21b An `<img>`'s declared width and height size it in the preview
+- **Given** a raw-HTML `<img>` with a `width` and/or `height` attribute, as a bare tag or as a `<picture>`'s fallback
+- **When** it is rendered
+- **Then** the image is drawn that many CSS pixels wide and/or tall, scaled by the zoom level like every pixel metric (13.11); when only one is given the other follows the image's own aspect ratio, and when both are given both are taken as written
+- **And** the declared size is still clamped to the pane's width under 2.21 (aspect preserved), so `width="5000"` fits the pane rather than forcing a scrollbar at 100% zoom
+- **And** a value that is not a positive whole number of pixels (`100` or `100px`) — a percentage, `auto`, `0`, a negative, another unit — is ignored, and the image keeps its natural size on that axis
+- **And** a Markdown `![alt](src)` image, which carries no such attribute, is unchanged
+- **And** an HTML or PDF export carries the same declared size (at zoom 1.0), read by the same parse: the HTML `<img>` is written at that width or height with the other following its aspect, and the PDF draws it at that many CSS pixels converted to points, each still clamped to the column (HTML `max-width: 100%`, PDF page width)
+- **Rationale** an author who writes `width="100"` is almost always shrinking a large logo or badge to a sensible size, and a viewer that draws it at the pane's width reads as ignoring the author. The attribute only scales an image that was already admitted and decoded, so it adds no decode or memory cost
+
 ### 2.23 Rich image embeds — raw-HTML `<picture>` and `<img>`
 - **Given** a document with a raw-HTML `<picture>` element (ordered `<source srcset=…>` candidates followed by an `<img src=…>` fallback), or a bare `<img src=…>` element
 - **When** it is rendered
@@ -540,7 +550,7 @@
 - **Given** a document that opens with a front-matter block — YAML between `---` fences, or TOML between `+++` fences
 - **When** it is displayed in the preview
 - **Then** the block renders as a **collapsed disclosure** labelled *Frontmatter*, whose body is the metadata shown as a code block in its own dialect — the same summary line, the same fold, the same copy button and the same highlighting any disclosure and any fenced code block get, because they *are* those two renders rather than a third one written for this
-- **And** no fence line reaches the page as text under either fold state
+- **And** no fence line reaches the page as text under either fold state — the collapsed summary's dimmed snippet of the metadata included, which shows it as the author wrote it: no `+++` or `---` fence, and straight quotes left straight
 - **And** copying across the block yields the front matter the author wrote, fences included, with no `<details>` or summary label introduced
 - **And** the outline sidebar lists no heading for it, the word count does not count it, and an HTML or PDF export omits it entirely — these surfaces carry what the document *says*, and front matter is what it says about **itself**
 - **And** a document that merely opens with a horizontal rule is not front matter: the block must be closed, and its first line must carry a key rather than be blank
@@ -870,6 +880,8 @@
 - **Given** the editor has unsaved local edits
 - **When** the file is changed on disk by another process
 - **Then** the user is notified of the conflict and offered to reload (discarding local edits) or keep local edits — the local edits are never silently overwritten
+- **And** Dismiss answers the prompt about the on-disk text it was raised for and nothing more: the file changing again to different content raises a fresh prompt, while a repeat of the dismissed text stays quiet. The Save overwrite guard (5.2) is unaffected either way
+- **And** raising the prompt retracts any "File saved" / "File reloaded" toast and status entry still showing — the toast shares the prompt's corner and the acknowledgement is stale — and a truncation or deletion does the same (3.4, 3.5), so neither the toast nor the status text outlives the condition that supersedes it
 
 ### 5.2 Saving over an externally changed file
 - **Given** the file on disk has changed since it was loaded, and the user has unsaved edits
@@ -1007,6 +1019,14 @@
 - **Given** a planted series with exactly one increase, larger than the absolute ceiling on total growth
 - **When** the growth assertion is applied to it
 - **Then** it fails, so that "only one allocation" alone can never pass an arbitrarily large one
+
+### 6.13 Opening and closing a window leaves nothing of it behind
+- **Given** a window held open throughout, as the reader's own is
+- **When** a second window is opened from it (View ▸ New Window) and closed again, many times, after a few warm-up cycles are discarded
+- **Then** process memory does not grow repeatedly across the remaining cycles, by the same measure as 6.6
+- **And** every widget of a closed window, and its editor's buffer with the document's text, is gone once the application has dropped its references and the main loop has drained — the only survivors allowed are the toolkit's own (GTK's shared tooltip window), named in the test so the list can only shrink. A survivor is reported by type, which names the root a leaked subtree hangs from
+- **And** the cycle is the application's own: the window is built by the production path and ended by the production close
+- **Evidence, recorded here for the same reason as 6.9's**: a window kept about 0.6 MB per cycle with no plateau over 80 cycles, which 6.6–6.10 could not see because no render repeats a retention owned by a window. Three independent retentions were found by weak reference and each, reintroduced on its own, reddens the finalization half: the editor Annotate card and the find bar each had a closure, reached from widgets inside them, that owned the widget it hid, stranding the card and the bar with the editor they point at; and a tab's editor never finalized because GtkSourceView 5.4.1 keeps `view → gutter → renderer → view` alive once line numbers are shown, broken by removing the line-number renderer (disposing the view instead aborts on newer GtkSourceView). A residue of about 0.1 MB per cycle remains and is not the application's: GTK 4.6.9 keeps every submenu model bound to a menu bar alive after its window closes (measured on a bare window), which the footprint half's bound absorbs
 
 ---
 
@@ -1264,6 +1284,8 @@
 - **When** a second launch arrives (bare, or carrying file arguments) and is handed to the running instance
 - **Then** it is treated as a re-activation, not as a cold start: the session is restored once and crash recovery offers once, however many launches land inside that interval
 - **And** the second launch does what a re-activation always does — a blank document, or its named files as tabs
+- **And given** a bare launch and a launch carrying files made in the same instant, and the file launch became the primary process, so the bare one arrives as a re-activation
+- **Then** the bare launch still gets what it asked for: the saved session is restored once (a document the file launch already opened is not given a second tab), alongside the file launch's own files, within a few seconds of the file launch's start; a bare launch arriving after that is an ordinary re-activation, a blank document
 - **And** "is this the cold start?" is claimed **synchronously**, by one claim every entry point takes, rather than derived from observable state; a predicate over state the authorised work will itself change is true for as long as the work is pending, which is precisely the interval in question
 - **Rationale, so it is not re-derived as an optimisation:** a duplicate restore gives every document two tabs, each with its own baseline, file monitor and swapfile, so saving in one raises an external-change decision in the other. It is reachable exactly when restore is slow — large session, slow storage — and a slow start looks like nothing happening, which is what prompts the second launch
 
@@ -1805,6 +1827,8 @@
 - **Then** the Format commands — and the caret overlay that appears over the match — stay **enabled**: the find bar is a sticky transient surface, like the Format toolbar, so it does not disable the focus-gated commands
 - **And when** the user switches to preview via the **View menu** (keyboard focus stays in the menubar the whole time)
 - **Then** the Format commands still disable — disabling in preview is gated on the view mode, not only on focus, so the menu-driven switch greys every Format surface together (menu, toolbar, overlay, heading control), consistent with the toolbar
+- **And when** a menu-bar command (View ▸ Swap Panes, say) has left the keyboard focus on the menu bar, and the user then switches to another tab and back to one in Split or Edit mode
+- **Then** the Format commands are enabled again without a click into the editor: the menu bar is a sticky surface, so the editor's last focus still stands, and a round trip through a tab that shows no editor must not lose it
 
 ### 10.7 Accelerators apply the markup
 - **Given** edit or split mode with editor focus
@@ -3175,6 +3199,27 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** turning back scrolls that text again before the list; a touchpad gesture that has started moving the list keeps moving it until the gesture ends, even as another row's text slides under the pointer
 - **And** where the toolkit already hands the wheel from inner text to the list itself (GTK 4.20.1 and later, so the macOS and Windows builds), its own behaviour is what the reader gets
 
+### 17.67 A highlight with no comment is an annotation with an empty comment
+- **Given** a document containing a bare `{==the sky is green==}` — CriticMarkup's highlight on its own, with no `{>>…<<}` after it — beside a highlight that carries a comment
+- **When** it is shown in the preview
+- **Then** the words appear with the same coloured highlight as 17.1 and the `{==…==}` delimiters do not, exactly as for a commented claim
+- **And** the bare highlight has a margin marker like a commented one, and its card shows the claim and no comment text
+- **And** the annotations viewer lists it as a row with the claim and an empty comment, beside the commented annotations (20.2), and activating the row opens that card (20.4)
+- **And** Edit on that card, typing a comment and saving, writes `{>>comment<<}` straight after the `==}` and nothing else — the highlight is then an ordinary commented one; Remove strips the delimiters and keeps the words (17.8)
+- **And** the export (25.13) draws the claim highlighted and lists it in the annotations summary by its claim alone, with no comment aside, no margin note and no empty paragraph
+
+### 17.68 A comment above a paragraph has its marker beside that paragraph
+- **Given** a comment written on a line of its own, after a blank line and directly above the paragraph it introduces (`First.` blank line `{>>about the next<<}` newline `Second.`)
+- **When** the document is shown in the preview
+- **Then** the comment's margin marker sits beside the first line of `Second.`, not beside `First.`
+- **And** a comment the app wrote after a block (17.59) keeps its marker beside that block, as does one followed by a blank line, one in the middle of a paragraph, and one with text on its own line (`{>>c<<}Second.`), whose marker was already beside that text
+
+### 17.69 A card and a row quote a claim as the page shows it
+- **Given** a highlighted claim containing Markdown — `{==**bold** and [a link](https://example.com) and `code`==}{>>note<<}`, or `==marked==`, `^sup^`, `~sub~` or `~~struck~~` text
+- **When** its margin card is opened, its row is read in the annotations viewer, or it is exported
+- **Then** each quotes `bold and a link and code` — the words the reader sees, with no asterisks, brackets, URL, backticks or tight-construct delimiters — and all three quote it identically
+- **And** the viewer's filter (20.24) matches and highlights within that same text
+
 ## 18. Preview reading themes
 
 The preview pane's purpose is reading. A *reading theme* restyles everything the
@@ -3245,6 +3290,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme file with invalid syntax, out-of-range spacing, or values containing stylesheet punctuation
 - **When** the app starts
 - **Then** it starts normally and renders legibly on a fallback theme — no crash, no broken layout, and no styling escaping the surface it was meant for
+- **And** a key a user file states with a value its key refuses (a `background` that is no colour, say) costs that key alone: a theme the app ships keeps its own value for it, never the desktop's — Sepia's dark ink must not land on a dark desktop's page
 
 ### 18.12 The chosen theme persists
 - **Given** Sepia is selected
@@ -3704,18 +3750,18 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 > A collapsible sidebar section, beneath the outline, lists the document's
 > annotations (CriticMarkup comments) and navigates to them.
 
-### 20.1 The viewer lists every comment-bearing annotation, in document order
-- **Given** a document containing point comments and comment-bearing highlights scattered through it
+### 20.1 The viewer lists every annotation, in document order
+- **Given** a document containing point comments and highlights, commented or bare, scattered through it
 - **When** the annotations viewer is shown
-- **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only)
+- **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only; a bare highlight shows the claim under an empty comment, 17.67)
 
-### 20.2 Comment-less highlights and inert kinds are not listed
+### 20.2 Inert kinds are not listed, and a bare highlight is
 - **Given** a document containing a bare `{==highlight==}` (no comment) and inert kinds (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`) alongside real annotations
 - **When** the viewer is shown
-- **Then** only comment-bearing annotations appear — a bare highlight is a rendering feature, not an annotation — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **Then** only highlights (commented or bare, 17.67) and point comments appear — the suggested-edit kinds have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
 
 ### 20.3 An empty or annotation-less document shows a placeholder, not an error
-- **Given** a document with no comment-bearing annotations
+- **Given** a document with no annotations
 - **When** the viewer is shown
 - **Then** it shows a muted "No annotations" placeholder and the application does not error
 
@@ -3733,7 +3779,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** the keyboard focus **stays in the list** across the navigation, so the next arrow press moves to the next row: browsing the list is a sequence of presses, not one press per trip through the Tab order. (The comment card the navigation opens therefore does *not* take focus — unlike a card opened by clicking its margin chip or by the Next/Previous Annotation commands, where the reader has asked to act on that one annotation and the card's own Escape/Edit/Remove must be reachable.)
 
 ### 20.6 Navigation resolves the correct annotation even when membership isn't 1:1
-- **Given** a document where a bare highlight or inert kind sits *before* a comment-bearing annotation (so the annotation's list position differs from its chip's position)
+- **Given** a document where an inert kind sits *before* an annotation (so the annotation's list position differs from its chip's position)
 - **When** the user activates that annotation's row
 - **Then** the document navigates to *that* annotation — never a neighbor — because navigation keys on the annotation's source span identity, not a positional row index
 
@@ -4066,6 +4112,13 @@ buffer holds the only copy.
 - **Then** nothing is recovered for it: no tab is opened for it, no notice or recovered count mentions it, and its recovery data is removed
 - **And** recovery data that leaves its tab with no unsaved changes once applied is removed and goes unannounced the same way, so no later launch can restore that content over a file that has since changed
 
+### 22.20 Two running instances never share one document's recovery data
+- **Given** two instances running against one state directory that each restored the same saved session, so both hold a tab with the same document id
+- **When** both have unsaved edits in that tab and write their recovery data
+- **Then** each has a recovery file of its own, and after both are force-killed a relaunch recovers both edits
+- **And** the instance that writes second finds the first's file at the name it would use, owned by a running instance, and takes a fresh document id for that tab rather than replace it; a file whose owner is not running, or is this instance's own, is replaced as ever
+- **And** where liveness cannot be confirmed (22.14) the file is replaced, as there — the duplicated-tab outcome is the lesser loss
+
 ## 23. Back / Forward navigation history
 
 The browser gesture, applied to documents: a per-window history of *which
@@ -4363,6 +4416,7 @@ up doing.
 - **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
 - **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
+- **And** a bare highlight (17.67) is exported highlighted and listed by its claim alone: it has no comment, so it gets no aside or margin note and no empty paragraph in the summary
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export

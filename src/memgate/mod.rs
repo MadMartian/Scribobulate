@@ -26,3 +26,6 @@ pub(crate) mod growth;
 mod gtk;
 #[cfg(all(test, feature = "memory-gates"))]
 mod playback;
+
+#[cfg(all(test, feature = "memory-gates"))]
+mod window;

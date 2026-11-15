@@ -44,6 +44,28 @@ pub(crate) enum ImgTag {
     /// candidate. Inside a `<picture>` these are the group's fallback candidates;
     /// outside one, each is its own independent image.
     Candidate(String),
+    /// An `<img>`'s declared `width`/`height`, emitted immediately BEFORE the
+    /// [`ImgTag::Candidate`] it belongs to (so an ungrouped image can take it as it
+    /// renders). Only for an `<img>` stating at least one usable dimension.
+    Declared(DeclaredSize),
+}
+
+/// An `<img>`'s `width` and `height` attributes read as CSS pixels. A value that is not
+/// a positive whole number of pixels (`100`, `100px`) — a percentage, `auto`, a unit,
+/// zero, nonsense — is absent, so the image keeps its natural size on that axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeclaredSize {
+    pub(crate) width: Option<i32>,
+    pub(crate) height: Option<i32>,
+}
+
+/// One dimension attribute as CSS pixels, or `None`. Capped at the largest image the
+/// app admits on one side so that an absurd value cannot overflow the extent arithmetic.
+fn css_pixels(value: &str) -> Option<i32> {
+    let v = value.trim();
+    let v = v.strip_suffix("px").unwrap_or(v).trim_end();
+    let n: i32 = v.parse().ok()?;
+    (n > 0).then_some(n.min(crate::limits::MAX_DECLARED_IMAGE_SIDE))
 }
 
 /// Scan a raw-HTML fragment for the ordered image tag stream (see the module docs).
@@ -79,6 +101,13 @@ pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
             }
             RawHtmlElement::Img => {
                 if let Some(src) = attr(tag.text, "src") {
+                    let declared = DeclaredSize {
+                        width: attr(tag.text, "width").as_deref().and_then(css_pixels),
+                        height: attr(tag.text, "height").as_deref().and_then(css_pixels),
+                    };
+                    if declared.width.is_some() || declared.height.is_some() {
+                        tags.push(ImgTag::Declared(declared));
+                    }
                     tags.push(ImgTag::Candidate(src));
                 }
             }
@@ -116,6 +145,30 @@ mod picture_tests {
 
     fn cand(s: &str) -> ImgTag {
         ImgTag::Candidate(s.to_string())
+    }
+
+    #[test]
+    fn an_img_states_its_pixel_size_before_its_candidate() {
+        use super::DeclaredSize as D;
+        let d = |width, height| ImgTag::Declared(D { width, height });
+        assert_eq!(
+            scan_image_tags(r#"<img src="a.png" width="100">"#),
+            vec![d(Some(100), None), cand("a.png")]
+        );
+        assert_eq!(
+            scan_image_tags(r#"<img height='40px' src="a.png" width=80>"#),
+            vec![d(Some(80), Some(40)), cand("a.png")]
+        );
+        // Not a positive pixel count: absent, so no Declared tag at all.
+        for bad in ["50%", "auto", "0", "-3", "2em", "", "1e3"] {
+            assert_eq!(
+                scan_image_tags(&format!(r#"<img src="a.png" width="{bad}">"#)),
+                vec![cand("a.png")],
+                "{bad:?}"
+            );
+        }
+        // A dimension with no src draws nothing and so declares nothing.
+        assert_eq!(scan_image_tags(r#"<img width="100">"#), vec![]);
     }
 
     #[test]
@@ -161,10 +214,17 @@ mod picture_tests {
             scan_image_tags("<img src=\"logo.png\">"),
             vec![cand("logo.png")]
         );
-        // Unquoted value terminated by whitespace before further attributes.
+        // Unquoted value terminated by whitespace before further attributes; the
+        // `width` it ends at is now read as the declared size (TDD 2.21b).
         assert_eq!(
             scan_image_tags("<img src=logo.png width=100>"),
-            vec![cand("logo.png")]
+            vec![
+                ImgTag::Declared(super::DeclaredSize {
+                    width: Some(100),
+                    height: None
+                }),
+                cand("logo.png")
+            ]
         );
     }
 

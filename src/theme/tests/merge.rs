@@ -417,3 +417,23 @@ fn the_table_header_takes_the_bare_heading_ink_never_a_levels() {
         "#00ff00"
     );
 }
+
+/// TDD 18.11 — a user theme's rejected key costs that key alone: the theme keeps the
+/// built-in's own value rather than falling to the desktop's (`[themes.system]`).
+#[test]
+fn a_rejected_user_colour_keeps_the_built_in_themes_own() {
+    let own = Themes::builtin().resolve("sepia").background;
+    assert!(own.is_some(), "Sepia states its own page");
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled("[themes.sepia]\nbackground = \"not-a-colour\"\n").unwrap(),
+    );
+    assert_eq!(themes.resolve("sepia").background, own);
+    // A VALID user value still wins.
+    themes
+        .merge_over(Themes::parse_compiled("[themes.sepia]\nbackground = \"#102030\"\n").unwrap());
+    assert_eq!(
+        crate::palette::to_hex_opaque(themes.resolve("sepia").background.unwrap()),
+        "#102030"
+    );
+}

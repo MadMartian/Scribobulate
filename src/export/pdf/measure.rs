@@ -660,11 +660,8 @@ impl Layouter<'_> {
         // Natural size in points, then contained: never wider than the column, never
         // taller than a page, and never upscaled — the preview's `max-width: 100%` rule
         // in the units a page counts in.
-        let (mut w, mut h) = (nat_w * PT_PER_PX, nat_h * PT_PER_PX);
         let limit_h = self.max_height_pt.max(1.0);
-        let scale = (available / w).min(limit_h / h).min(1.0);
-        w *= scale;
-        h *= scale;
+        let (w, h) = drawn_size_pt(nat_w, nat_h, img.declared, available, limit_h);
         self.push_line(
             LineKind::Image {
                 surface,
@@ -905,7 +902,66 @@ impl Layouter<'_> {
     }
 }
 
+/// The size, in points, an image is laid out at: the intrinsic pixels, or an `<img>`'s
+/// declared size by the preview's own rule at zoom 1 ([`declared_extent`], TDD 2.21b),
+/// then contained — never wider than the column, never taller than a page.
+fn drawn_size_pt(
+    nat_w: f64,
+    nat_h: f64,
+    declared: Option<crate::renderer::DeclaredSize>,
+    available: f64,
+    limit_h: f64,
+) -> (f64, f64) {
+    let (mut w, mut h) = match declared {
+        Some(_) => {
+            let e = crate::renderer::image::declared_extent(
+                nat_w.round() as i32,
+                nat_h.round() as i32,
+                declared,
+                1.0,
+            );
+            (f64::from(e.w) * PT_PER_PX, f64::from(e.h) * PT_PER_PX)
+        }
+        None => (nat_w * PT_PER_PX, nat_h * PT_PER_PX),
+    };
+    let scale = (available / w).min(limit_h / h).min(1.0);
+    w *= scale;
+    h *= scale;
+    (w, h)
+}
+
 mod table;
+
+#[cfg(test)]
+mod drawn_size_tests {
+    use super::drawn_size_pt;
+    use crate::renderer::DeclaredSize as D;
+
+    /// TDD 2.21b — a declared width sizes the PDF image (aspect kept), the page clamp
+    /// still applies, and an undeclared image is unchanged.
+    #[test]
+    fn a_declared_width_sizes_the_image_and_the_page_still_clamps_it() {
+        let d = |width, height| Some(D { width, height });
+        // 400x200 px natural: 100 px wide -> 75 pt x 37.5 pt.
+        assert_eq!(
+            drawn_size_pt(400.0, 200.0, d(Some(100), None), 500.0, 700.0),
+            (75.0, 37.5)
+        );
+        assert_eq!(
+            drawn_size_pt(400.0, 200.0, d(None, Some(100)), 500.0, 700.0),
+            (150.0, 75.0)
+        );
+        // Wider than the column: clamped, aspect kept.
+        assert_eq!(
+            drawn_size_pt(400.0, 200.0, d(Some(5000), None), 300.0, 700.0),
+            (300.0, 150.0)
+        );
+        assert_eq!(
+            drawn_size_pt(400.0, 200.0, None, 500.0, 700.0),
+            (300.0, 150.0)
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests;
