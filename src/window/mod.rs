@@ -106,6 +106,7 @@ pub(crate) use reload::check_and_reload;
 pub(crate) use reload::check_and_reload_tab;
 pub(crate) use reload::write_loaded_text;
 pub(crate) use restore::{apply_tab_layout, restore_session};
+pub(crate) use rewatch::follow as follow_document_folder;
 pub(crate) use save::refresh_dirty_status;
 pub(crate) use scrollsync::content_reading_position;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -153,6 +154,7 @@ mod livepreview;
 mod navhistory;
 mod pointergrab;
 mod restore;
+mod rewatch;
 mod sidebar;
 mod sidebarfilter;
 mod statusbar;

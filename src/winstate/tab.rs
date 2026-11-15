@@ -348,6 +348,11 @@ pub(crate) struct TabState {
     /// cancelled monitor released after a main-loop dispatch aborts the process on
     /// Windows (GTK4Rs/AP-340).
     pub(crate) file_monitor: RefCell<Option<crate::saferizer::DocMonitor>>,
+    /// Whether [`file_monitor`](Self::file_monitor) still watches the folder that stands
+    /// at this document's path — where the monitor is bound to the folder it was
+    /// attached in (Windows), a folder replaced under it leaves it watching nothing
+    /// (`window::rewatch`). Re-pointed with the monitor, by `app::attach_file_backing`.
+    pub(crate) folder_watch: super::FolderWatch,
     /// Whether "Show Unsafe Images" is on for this window. When true, remote
     /// (http/https) image URLs and local images outside the document folder are
     /// loaded. Initialised from the session, written back on window close.
@@ -697,6 +702,7 @@ impl TabState {
             find_cursor: Cell::new(crate::window::FindCursor::None),
             preview_find: crate::window::PreviewFindCache::default(),
             file_monitor: RefCell::new(None),
+            folder_watch: super::FolderWatch::default(),
             allow_unsafe_images: Cell::new(allow_unsafe_images),
             // Always false at construction — never threaded through `TabInit`;
             // see the field's own doc comment for why (not persisted, not

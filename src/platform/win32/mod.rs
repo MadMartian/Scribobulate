@@ -23,6 +23,7 @@
 //! | [`privacy`] | `std::fs` cannot express an owner-only directory on Windows, so the state directory would carry whatever ACL it inherited. |
 //! | [`crash`] | Windows has **no POSIX signals**: a native crash is an unhandled SEH exception or a CRT `abort()`, and without this only Windows Error Reporting sees it. |
 //! | [`process`] | Windows has no `/proc` and no `proc_pidpath`, so crash recovery cannot otherwise tell whether a snapshot's owner is still running. |
+//! | [`folder_identity`] | GIO's Win32 file monitor is bound to the folder it opened, not to its path, so a folder deleted or moved away and recreated leaves live reload watching nothing. |
 //!
 //! Note that `frame` and `appearance` are two causes and not one, though they meet at
 //! the caption. The caption request is a consequence of the native frame; the *source*
@@ -47,6 +48,7 @@
 
 pub(crate) mod appearance;
 pub(crate) mod crash;
+pub(crate) mod folder_identity;
 pub(crate) mod frame;
 pub(crate) mod privacy;
 pub(crate) mod process;
@@ -57,6 +59,7 @@ pub(crate) mod reduced_motion;
 // children is therefore a local edit, not a tree-wide rename — which is what keeps the
 // cause-based boundaries above cheap enough to honour.
 pub(crate) use appearance::track_system_dark_mode;
+pub(crate) use folder_identity::folder_identity;
 pub(crate) use frame::{
     sync_caption_theme, take_native_frame, track_caption_theme, track_maximized_size,
 };

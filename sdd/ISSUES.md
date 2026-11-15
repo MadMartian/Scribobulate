@@ -65,7 +65,6 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| M | Windows | Production | After the document's folder is deleted and recreated, "File deleted on disk" stays and live reload stops: GIO's Win32 directory monitor loses its handle with the directory | Medium |
 | W | Any | Production | Each window open/close cycle still retains ~0.14 MB, linearly (GTK submenu models, an unpinned remainder) | Low |
 | Z | Windows | Production | A document opened through a UNC path gets no monitor events, so it never live-reloads | Low |
 | AA | Windows | Production | A rename away and back in one folder once left the "deleted" notice, badge and prompt over a file back with identical bytes; not reproduced since | Low |
@@ -474,18 +473,6 @@ whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, unt
 critical fires and names the holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
-
-## M. On Windows, live reload stops after the document's folder is deleted and recreated
-
-**Severity**: Medium (live reload stops silently; Save still warns before overwriting, so
-nothing is lost).
-
-Open `dir\doc.md`, delete `dir`, recreate it with `doc.md` → "File deleted on disk" stays
-and the recreated content is never offered; one File ▸ Reload works, later appends are
-never seen. GIO's Win32 directory monitor loses its handle with the directory; Linux keeps
-firing. Evidence: 1.0.0 dry run, Windows seat, on the build of "Merge bug/nul-byte-document:
-…" (2026-11-13) and its predecessors. Known issues: *"On Windows, live reload stops after
-the document's folder is deleted and recreated — reopen the file."*
 
 ## W. Each window open/close cycle still retains ~0.14 MB
 

@@ -57,6 +57,8 @@
 //! * [`scrollsync`] — [`ScrollDriver`] + the [`ScrollSync`] coalescing state (GTK4Rs/AP-16).
 //! * [`ids`] — the [`TabId`] and [`WindowId`] identity newtypes.
 //! * [`fmtinsert`] — [`FmtInsertKind`] (the Insert↔Edit Link/Image kind).
+//! * [`folderwatch`] — [`FolderWatch`], whether the live-reload monitor still watches the
+//!   folder at its document's path (Windows; `window::rewatch`).
 //! * [`selfdelete`] — [`SelfDeleteGuard`], the atomic-save round-trip guard (GTK4Rs/AP-62).
 //! * [`status`] — the footer [`StatusStack`].
 //! * [`swap`] — [`SwapState`] plus the crash-recovery snapshot debounce/cap arithmetic.
@@ -104,6 +106,7 @@ mod chrome;
 mod decisions;
 mod docepoch;
 mod fmtinsert;
+mod folderwatch;
 mod ids;
 mod infotoast;
 mod navhistory;
@@ -127,6 +130,7 @@ pub(crate) use decisions::{
 };
 pub(crate) use docepoch::{DocEpoch, WriteEpoch};
 pub(crate) use fmtinsert::FmtInsertKind;
+pub(crate) use folderwatch::{folder_watch_action, FolderWatch, FolderWatchAction, WatchedFolder};
 pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;
 pub(crate) use navhistory::{departure_stamp, traversal_to, NavDir, NavHistory, NavPlace, NavSpot};

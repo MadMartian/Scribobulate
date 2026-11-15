@@ -487,6 +487,16 @@ pub(crate) async fn read_document_bytes(path: PathBuf) -> std::io::Result<Vec<u8
     .await
 }
 
+/// Which directory stands at `dir` — an open document's folder — asked off the main
+/// thread (`window::rewatch`). Through the same admission gate as every document read,
+/// so a folder on a hung share holds one of this application's slots rather than a
+/// thread it never gave back.
+pub(crate) async fn folder_identity(
+    dir: PathBuf,
+) -> std::io::Result<crate::platform::FolderIdentity> {
+    off_main(move || crate::platform::folder_identity(&dir)).await
+}
+
 /// Write a document to `path` atomically, off the main thread.
 ///
 /// The atomicity is [`crate::atomic_io::write_atomic`]'s and is unchanged by

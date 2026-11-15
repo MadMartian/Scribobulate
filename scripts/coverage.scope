@@ -245,6 +245,7 @@ src/winstate/chrome.rs
 src/winstate/decisions.rs
 src/winstate/docepoch.rs
 src/winstate/fmtinsert.rs
+src/winstate/folderwatch.rs
 src/winstate/ids.rs
 src/winstate/infotoast.rs
 src/winstate/navhistory/decide.rs
