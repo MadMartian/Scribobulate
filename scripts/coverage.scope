@@ -139,7 +139,6 @@ src/macwordnav.rs
 src/mdtable.rs
 src/memgate/footprint.rs
 src/memgate/growth.rs
-src/memgate/window.rs
 src/notices.rs
 src/outline/expansion.rs
 src/outline/filter.rs

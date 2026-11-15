@@ -77,11 +77,9 @@ fn weak_tree(root: &gtk::Widget, out: &mut Vec<gtk::glib::WeakRef<gtk::Widget>>)
 }
 
 /// Widget types a closed window leaves behind that are the toolkit's, not the application's:
-/// GTK's one shared tooltip window, and GtkSourceView 5.4.1's line-number renderer, which its
-/// gutter leaves unparented when the view is disposed (the gutter warns that it "still has
-/// children left" and finalizes without them). Named so that anything else surviving is a
-/// failure, and so this list shrinks rather than grows.
-const TOOLKIT_SURVIVORS: [&str; 2] = ["GtkTooltipWindow", "GtkSourceGutterRendererLines"];
+/// GTK's one shared tooltip window. Named so that anything else surviving is a failure, and
+/// so this list shrinks rather than grows.
+const TOOLKIT_SURVIVORS: [&str; 1] = ["GtkTooltipWindow"];
 
 /// TDD 6.13, the finalization half: a closed window's widgets are gone, so a retention shows
 /// by name rather than as bytes in a series. A footprint series cannot see a small

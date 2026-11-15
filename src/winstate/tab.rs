@@ -483,28 +483,42 @@ pub(crate) fn cleaned_of(raw: &str) -> String {
     crate::annotate::extract(normalised.as_str()).cleaned
 }
 
-/// A tab's editor never finalizes on its own: GtkSourceView 5.4.1 keeps a strong reference
-/// to its own view once its gutter has a line-number renderer, so `view → gutter → view`
-/// is a cycle no reference-counting owner can break — the view, its buffer and the
-/// document's text stay for the life of the process, on every tab close and every window
-/// close (measured on a bare `sourceview::View` with line numbers shown, inside a window,
-/// with nothing of this application's involved). The cycle ends when the view is disposed,
-/// so the tab disposes its editor once the tab is gone.
+/// A tab's editor never finalizes on its own: once its gutter has a line-number renderer,
+/// GtkSourceView holds the view from that renderer (GTK4Rs/AP-386), and the gutter is the
+/// view's child, so `view → gutter → renderer → view` is a cycle no reference-counting
+/// owner can break — the view, its buffer and the document's text stay for the life of the
+/// process, on every tab and window close. Removing the renderer from the gutter drops
+/// that reference, so the tab removes it once the tab is gone and the editor is out of
+/// any tree.
+///
+/// Not `run_dispose` on the view: newer GtkSourceView (the Windows and macOS builds)
+/// asserts in its snippets shutdown when a disposed view is disposed again at finalize,
+/// aborting the process.
 ///
 /// Deferred to an idle rather than run here: this drop runs inside the registry's
-/// `RefCell` borrow (`unregister`, `remove_tab`), and disposing a view emits signals whose
+/// `RefCell` borrow (`unregister`, `remove_tab`), and the removal can emit signals whose
 /// handlers resolve their window through that same registry (GTK4Rs/AP-61). The idle
-/// holds the one strong reference the tab leaves behind, so the editor survives until it
-/// has been disposed and is finalized when the idle ends.
+/// holds the one strong reference the tab leaves behind, so the editor is finalized when
+/// the idle ends.
 impl Drop for TabState {
     fn drop(&mut self) {
         let editor = self.editor.clone();
         gtk::glib::idle_add_local_once(move || {
-            // Only a view nothing holds in a tree: GTK warns on a parented dispose, and a
-            // parented editor is not the tab's to end (the tab was moved, not closed).
-            if gtk::prelude::WidgetExt::parent(&editor).is_none() {
-                // SAFETY: the editor is unparented and owned by nobody but this closure.
-                unsafe { gtk::glib::object::ObjectExt::run_dispose(&editor) };
+            use gtk::prelude::*;
+            // A parented editor is not the tab's to end (the tab was moved, not closed).
+            if editor.parent().is_some() {
+                return;
+            }
+            let gutter = sourceview::prelude::ViewExt::gutter(&editor, gtk::TextWindowType::Left);
+            let mut child = gutter.first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if let Some(lines) = c
+                    .downcast_ref::<sourceview::GutterRenderer>()
+                    .filter(|r| r.type_().name() == "GtkSourceGutterRendererLines")
+                {
+                    gutter.remove(lines);
+                }
             }
         });
     }

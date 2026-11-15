@@ -511,8 +511,7 @@ gate (TDD 6.13); what remains is not a widget:
   `GtkSourceView` (`wire_annotation_overlay`), and ~70 KB not yet attributed (valgrind
   still-reachable blocks whose count equals the cycle count is the method that found the
   rest).
-Disposing the editor logs one "Finalizing GtkSourceGutter … children left" `Gtk-WARNING`
-per closed tab. Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
+Evidence: 1.0.0 deferrals pass, 2026-11-14. No Known-issues line.
 
 ## Y. A tab-switch reveal test assumes a window size it never sets
 
