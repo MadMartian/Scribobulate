@@ -497,7 +497,8 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
                 t.set_foreground_rgba(Some(&c));
             }
             if let Some(f) = &h.family {
-                t.set_family(Some(&f.pango_family()));
+                // With the script fallback after it, as the page's own stack (TDD 25.18a).
+                t.set_family(Some(&f.with_script_fallback().pango_family()));
             }
         });
     }

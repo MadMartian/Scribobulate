@@ -90,6 +90,79 @@ fn hangul_in_preview_code_draws_in_a_face_that_has_its_glyphs() {
     assert!(boxed.is_empty(), "code drawn as hex boxes: {boxed:?}");
 }
 
+/// Prose, a heading and a table's header and body cells — each the only Korean in its
+/// construct, so a word names its surface.
+const THEMED_MD: &str = "# 제목입니다\n\n한국어 텍스트입니다\n\n| 머리글 |\n|---|\n| 셀텍스트 |\n";
+
+/// **Hangul in a theme's prose, headings and table text draws in a face that has its
+/// glyphs, under every built-in theme** (TDD 25.18a, the preview's themed surfaces).
+///
+/// A theme that names a stack replaces the desktop's face, and on Windows that face was
+/// the only thing reaching Korean: under Sepia, Candy, Pixel Quest, Synthwave and
+/// Terminal the 1.0.0 manual pass saw the prose line as hex boxes while System and Bedtime
+/// drew it, and code under the same themes drew it (it carried the fallback already).
+/// Each surface is laid out in the family the view sets it in — the view's own CSS face
+/// for prose, the highest-priority tag naming one for the heading — and a table cell is a
+/// label, which hands out the layout it draws.
+///
+/// Mutation: `CssSafeFontStack::with_script_fallback` returning the stack unchanged
+/// fails this on Windows for every theme that names a stack.
+#[gtktest::test]
+fn hangul_in_themed_prose_headings_and_tables_draws_in_a_face_that_has_its_glyphs() {
+    if !crate::pangospan::host_has_a_face_for('한') {
+        println!("SKIPPED [TDD 25.18a]: no installed face on this host draws Hangul");
+        return;
+    }
+    let themes = crate::theme::Themes::builtin();
+    let mut boxed: Vec<String> = Vec::new();
+    for entry in themes.chooser_list() {
+        let theme = themes.resolve(&entry.id);
+        let _active = crate::theme::activate_for_test(theme.clone());
+        let _sheet = ThemeSheet::install(&theme);
+        let (window, view) = styled_preview(THEMED_MD);
+        let page = view_family(&view);
+        let buf = view.buffer();
+        let text = buf
+            .slice(&buf.start_iter(), &buf.end_iter(), true)
+            .to_string();
+        for word in ["제목입니다", "한국어 텍스트입니다"] {
+            let byte = text
+                .find(word)
+                .unwrap_or_else(|| panic!("{word} is not in the preview's buffer"));
+            let family = family_at(
+                &buf.iter_at_offset(text[..byte].chars().count() as i32),
+                &page,
+            );
+            let layout = pango::Layout::new(&view.pango_context());
+            let mut desc = view.pango_context().font_description().unwrap_or_default();
+            desc.set_family(&family);
+            if desc.size() <= 0 {
+                desc.set_size(12 * pango::SCALE);
+            }
+            layout.set_font_description(Some(&desc));
+            layout.set_text(word);
+            if unknown_glyphs(&layout) > 0 {
+                boxed.push(format!("{}: {word} in {family:?}", entry.id));
+            }
+        }
+        let labels = crate::preview::cell_search_targets(&view);
+        for word in ["머리글", "셀텍스트"] {
+            let (_, cell) = labels
+                .iter()
+                .find(|(_, l)| l.text().contains(word))
+                .unwrap_or_else(|| panic!("no table cell holds {word}"));
+            if unknown_glyphs(&cell.layout()) > 0 {
+                boxed.push(format!("{}: the table cell {}", entry.id, cell.label()));
+            }
+        }
+        window.destroy();
+    }
+    assert!(
+        boxed.is_empty(),
+        "Hangul drawn as hex boxes under a reading theme: {boxed:?}"
+    );
+}
+
 /// How many of `layout`'s glyphs are Pango's unknown-glyph box — the tofu a reader sees.
 fn unknown_glyphs(layout: &pango::Layout) -> usize {
     layout
