@@ -10,7 +10,8 @@
 //!   delivers to.
 //! * [`footprint`] — one sampler, three `cfg` bodies. The field is named
 //!   **footprint**, never RSS: `/proc` VmRSS, macOS `ri_phys_footprint` and
-//!   Windows `PrivateUsage` are not the same quantity.
+//!   Windows `PrivateUsage` (less the heaps' free committed bytes) are not the same
+//!   quantity. [`instrument`] holds the reading to a known leak and a known free.
 //!
 //! The GTK drivers that *produce* the samples live in [`gtk`] (6.6–6.9, and
 //! 6.7's still-image half) and [`playback`] (6.10, and 6.7 extended to the
@@ -24,6 +25,10 @@ pub(crate) mod growth;
 
 #[cfg(all(test, feature = "memory-gates"))]
 mod gtk;
+// Windows only: the free-heap correction it proves is the Windows reading's, and step 5b
+// refuses a run that prints a skip.
+#[cfg(all(test, feature = "memory-gates", windows))]
+mod instrument;
 #[cfg(all(test, feature = "memory-gates"))]
 mod playback;
 

@@ -78,8 +78,11 @@ impl Renderer {
     /// cell the page's.
     pub(super) fn cell_family(&self) -> Option<String> {
         let in_head = self.table.as_ref().is_some_and(|t| t.in_head);
-        match &self.theme.heading_font {
-            Some(stack) if in_head => Some(stack.pango_family()),
+        // A theme's stack carries the script fallback after it, as the page's does in the
+        // preview's CSS (TDD 25.18a); the desktop's own face needs none.
+        match (&self.theme.heading_font, &self.theme.font_family) {
+            (Some(stack), _) if in_head => Some(stack.with_script_fallback().pango_family()),
+            (_, Some(stack)) => Some(stack.with_script_fallback().pango_family()),
             _ => crate::pangospan::page_family(&self.theme),
         }
     }

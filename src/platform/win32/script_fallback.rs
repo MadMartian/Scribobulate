@@ -12,18 +12,22 @@
 //! (measured: Georgia for the Latin, SimSun for Japanese, six unknown glyphs for
 //! `한국어 텍스트`).
 //!
-//! **Why the preview's prose did not show it.** The preview lays unthemed text out in
-//! the desktop's own face, which GDK-Win32 reads from the system's message font into
-//! `GtkSettings:gtk-font-name` (Segoe UI on a stock install), and Pango's table for
+//! **Why the preview's unthemed prose did not show it.** The preview lays unthemed text
+//! out in the desktop's own face, which GDK-Win32 reads from the system's message font
+//! into `GtkSettings:gtk-font-name` (Segoe UI on a stock install), and Pango's table for
 //! Segoe UI names the faces Windows does ship for every script it covers — Malgun Gothic
-//! among them. The preview's CODE did show it: a code tag or span names `monospace`,
-//! which replaces the paragraph's family outright, so a fenced block, inline code and a
-//! table cell's code drew Hangul as hex boxes on screen too.
+//! among them. Everything that REPLACES that face did show it: a code tag or span names
+//! `monospace`, so a fenced block, inline code and a table cell's code drew Hangul as hex
+//! boxes on screen too; and so did prose, headings and table text under any reading
+//! theme that names a stack (Sepia's `Georgia, serif` among five of seven), which the
+//! first fix missed and the 1.0.0 manual pass found (TDD 25.18a).
 //!
 //! **The source.** So the face this supplies is the desktop's: the family of
 //! `gtk-font-name`, appended after a requested stack by
-//! `pangospan::family_with_fallback` — for every family the PDF sink requests, and for
-//! the code face on both surfaces (`pangospan::with_script_fallback`). Text then falls
+//! `pangospan::family_with_fallback` — for every family the PDF sink requests, for
+//! the code face on both surfaces (`pangospan::with_script_fallback`), and for a theme's
+//! stack wherever the preview sets text in it (`CssSafeFontStack::with_script_fallback`).
+//! Text then falls
 //! back exactly where the preview's prose does, through the same alias table, and to
 //! nothing the preview would not have reached. It is read rather than written down so
 //! that a desktop whose message font is not Segoe UI keeps the surfaces agreeing.

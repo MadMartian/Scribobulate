@@ -269,7 +269,12 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         // `font_family` is a `CssSafeFontStack`: the type proves it was sanitised and
         // generic-terminated (its sole constructor is `theme::sanitize_font_family`),
         // so this interpolation cannot escape the rule — a raw String cannot reach here.
-        page.push_str(&format!("font-family: {};", font.as_str()));
+        // With the platform's script fallback after it (TDD 25.18a): the theme's stack
+        // replaces the desktop's face, which was what reached Hangul on Windows.
+        page.push_str(&format!(
+            "font-family: {};",
+            font.with_script_fallback().as_str()
+        ));
     }
     if !page.is_empty() {
         out.push_str(&format!("textview.scrib-preview {{ {page} }}\n"));
@@ -396,7 +401,7 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     let head_font = theme
         .heading_font
         .as_ref()
-        .map(|f| format!(" font-family: {};", f.as_str()))
+        .map(|f| format!(" font-family: {};", f.with_script_fallback().as_str()))
         .unwrap_or_default();
     // …and the themed BOLD WEIGHT. `bold_weight` was honoured for `**bold**` on all
     // three surfaces and for the table header on none: this rule said `bold`, the HTML

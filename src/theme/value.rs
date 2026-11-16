@@ -170,6 +170,51 @@ impl CssSafeFontStack {
             .collect::<Vec<_>>()
             .join(",")
     }
+
+    /// This stack with the platform's script fallback after it — the face a run falls
+    /// back to for a script no face in the stack draws — on the surfaces that set text in
+    /// a theme's stack: the preview's prose and headings, and a table cell's text.
+    ///
+    /// A theme's stack REPLACES the desktop's face, and on Windows the desktop's face was
+    /// the only thing reaching Hangul: Pango's Win32 alias table for `serif` and
+    /// `sans-serif` names GulimChe, which a stock install lacks, so under a theme that
+    /// names a stack Korean prose drew as hex boxes while the same text under System drew
+    /// (TDD 25.18a; `platform::win32::script_fallback`). The code face already carries the
+    /// fallback (`pangospan::with_script_fallback`); this is the same for the theme's.
+    ///
+    /// The face goes LAST, after the generic, so it only ever answers for a character
+    /// nothing before it draws and the page's look is unchanged. It is admitted by the
+    /// same character test as a theme's own names, so the stack stays safe to interpolate
+    /// into CSS; where the platform names no face (every platform whose font map already
+    /// falls back over the installed faces), or the stack already names it, the stack
+    /// comes back as it was.
+    pub(crate) fn with_script_fallback(&self) -> CssSafeFontStack {
+        self.with_fallback_face(crate::platform::script_fallback_family().as_deref())
+    }
+
+    fn with_fallback_face(&self, face: Option<&str>) -> CssSafeFontStack {
+        match face.map(str::trim) {
+            Some(face)
+                if !face.is_empty()
+                    && is_safe_family_name(face)
+                    && !self
+                        .pango_family()
+                        .split(',')
+                        .any(|named| named.eq_ignore_ascii_case(face)) =>
+            {
+                CssSafeFontStack(format!("{}, \"{face}\"", self.0))
+            }
+            _ => self.clone(),
+        }
+    }
+}
+
+/// Whether `name` may stand in a CSS font stack: every character a Unicode letter or
+/// number, a space, `-`, `_` or `.`. Why that set is sound is set out where
+/// [`sanitize_font_family`] applies it.
+fn is_safe_family_name(name: &str) -> bool {
+    name.chars()
+        .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.')
 }
 
 impl std::fmt::Display for CssSafeFontStack {
@@ -219,10 +264,7 @@ pub(crate) fn sanitize_font_family(s: &str) -> Option<CssSafeFontStack> {
         // four explicit additions are each inert inside a quoted CSS string. So the
         // gate is a whitelist of two categories rather than of an alphabet, and it does
         // not narrow as new scripts are added to Unicode.
-        if !f
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.')
-        {
+        if !is_safe_family_name(f) {
             log::warn!("theme: dropping unsafe font family {f:?}");
             continue;
         }
@@ -644,6 +686,24 @@ mod tests {
         assert_eq!(crate::palette::to_hex_opaque(named), "#663399");
         assert_eq!(named.alpha(), 1.0);
         assert!(parse_color("not a colour").is_none());
+    }
+
+    /// TDD 25.18a: the script fallback goes after the whole stack, quoted, in both
+    /// spellings; a face the stack names already, an empty one, or one carrying a
+    /// character a theme's own names may not, leaves the stack as it was.
+    #[test]
+    fn the_script_fallback_follows_a_stack_and_cannot_inject_css() {
+        let stack = sanitize_font_family("Georgia, serif").unwrap();
+        let with = stack.with_fallback_face(Some("Segoe UI"));
+        assert_eq!(with.as_str(), "\"Georgia\", serif, \"Segoe UI\"");
+        assert_eq!(with.pango_family(), "Georgia,serif,Segoe UI");
+        assert_eq!(stack.with_fallback_face(None), stack);
+        assert_eq!(stack.with_fallback_face(Some("  ")), stack);
+        assert_eq!(stack.with_fallback_face(Some("georgia")), stack);
+        assert_eq!(
+            stack.with_fallback_face(Some("Segoe UI\"; } * { color: red; }")),
+            stack
+        );
     }
 
     #[test]

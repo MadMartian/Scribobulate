@@ -434,6 +434,28 @@ mod tests {
         );
     }
 
+    /// TDD 18.11: the step is paid once per nesting depth, so its ceiling must leave a
+    /// deeply nested list's text inside a narrow pane — `list_step = 10000` once clamped
+    /// to a ceiling that put a two-deep list past the pane's right edge.
+    #[test]
+    fn the_list_step_ceiling_keeps_a_six_deep_list_inside_a_narrow_pane() {
+        const NARROW_PANE: i32 = 640;
+        const DEPTH: i32 = 6;
+        let selected = spec("t", "list_step = 10000\n");
+        let system = ThemeSpec::default();
+        let step = Sources::new("t", &selected, &system).int(&keys::LIST_STEP);
+        assert_eq!(
+            step,
+            keys::LIST_STEP_R.max,
+            "a hostile step clamps to the ceiling"
+        );
+        assert!(
+            DEPTH * step <= NARROW_PANE * 3 / 4,
+            "a {DEPTH}-deep list at the ceiling ({step} px a level) leaves under a quarter \
+             of a {NARROW_PANE} px pane for its text"
+        );
+    }
+
     /// TDD 18.32, across BOTH levelled families rather than one key of one of them.
     ///
     /// Every levelled key must narrow at its own slot, and every levelled key must
