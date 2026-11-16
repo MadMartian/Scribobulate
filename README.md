@@ -24,12 +24,9 @@ models), and live-reloads files the instant an agent changes them on disk.
 > survive the application dying: they are snapshotted as you type and offered back
 > on the next launch.
 >
-> The first release is close. What I am still finding is minor — small glitches and
-> polish, not gaps in the fundamentals above — and I am still finding them most days,
-> which is the one reason I have not cut it yet. I will cut the release when that rate
-> drops off rather than on a date, and I expect that to be weeks away rather than
-> months. If you hit something in the meantime, [tell me](#feedback) — reports are what
-> make that rate fall.
+> What is still rough is listed under Known issues in the
+> [release notes](https://github.com/MadMartian/Scribobulate/releases/latest). If you
+> hit something that is not there, [tell me](#feedback).
 
 ## What it does
 
@@ -212,7 +209,12 @@ take the version from `Cargo.toml` and install the same payload, defined once in
 
 ### macOS
 
-Install the Homebrew GTK dependencies first — skipping this is the most common
+Download the `.dmg` from the [latest release](https://github.com/MadMartian/Scribobulate/releases/latest)
+(macOS 11 or later, Apple silicon), open it and drag Scribobulate to Applications.
+The app is not notarised, so the first launch is refused: choose **Done**, not Move to
+Trash, then **System Settings ▸ Privacy & Security ▸ Open Anyway**.
+
+Or build from source. Install the Homebrew GTK dependencies first — skipping this is the most common
 build failure (`pkg-config` can't find `gtk4`/`cairo`/`pango`/etc.):
 
 ```bash
@@ -265,7 +267,13 @@ More: [`packaging/macos/README.md`](packaging/macos/README.md).
 
 ### Windows
 
-Build from source. The GTK runtime comes from
+Download `Scribobulate-<version>-x64-setup.exe` from the
+[latest release](https://github.com/MadMartian/Scribobulate/releases/latest) (Windows 10
+or later, x64) and run it. It is not signed, so SmartScreen warns first: **More info ▸
+Run anyway**. It installs for your account only and needs no administrator rights,
+unless Windows lacks the current Visual C++ runtime, which it then installs.
+
+Or build from source. The GTK runtime comes from
 [gvsbuild](https://github.com/wingtk/gvsbuild), built once per machine; after
 that `build.bat` sets the whole toolchain environment for you:
 
