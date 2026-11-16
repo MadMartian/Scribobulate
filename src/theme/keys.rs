@@ -238,8 +238,11 @@ impl Reach {
 /// wide enough to push the text column off its own viewport.
 const METRIC: Clamp<i32> = Clamp { min: 0, max: 400 };
 /// A list step of 0 would stack every nesting depth in one column and bury the drawn
-/// markers under the text, so this one has a positive floor.
-const LIST_STEP_R: Clamp<i32> = Clamp { min: 4, max: 400 };
+/// markers under the text, so this one has a positive floor. Its ceiling is far lower
+/// than [`METRIC`]'s because the step is paid once per nesting depth: at 400 a two-deep
+/// list already started past a normal pane's right edge (TDD 18.11). 64 is over twice
+/// the shipped 28 and leaves a six-deep list a quarter of a 640 px pane for its text.
+pub(crate) const LIST_STEP_R: Clamp<i32> = Clamp { min: 4, max: 64 };
 const SCALE: Clamp<f64> = Clamp {
     min: 0.25,
     max: 8.0,

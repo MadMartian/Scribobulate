@@ -555,7 +555,7 @@ are on.
 | `list_ordered_sprite` | sprite path | — | A sprite drawn in place of the ordered numeral. |
 | `list_task_sprite` | sprite path | — | A sprite drawn in place of the unchecked task box. |
 | `list_task_checked_sprite` | sprite path | — | A sprite drawn in place of the checked task box. |
-| `list_step` | `i32` | `28` | Indent added per nesting depth. Clamped `4`–`400`. |
+| `list_step` | `i32` | `28` | Indent added per nesting depth. Clamped `4`–`64`. |
 | `list_item_gap` | `i32` | `8` | Space between items. Clamped `0`–`400`. |
 
 #### Blockquote
