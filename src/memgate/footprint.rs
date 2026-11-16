@@ -1,7 +1,8 @@
 //! Process footprint sampler — one function, three `cfg` bodies.
 //!
 //! The returned number is **not RSS**. Linux reads `VmRSS`, macOS reads
-//! `ri_phys_footprint`, Windows reads `PrivateUsage`. A shared name invites
+//! `ri_phys_footprint`, Windows reads `PrivateUsage` less what the process heaps hold
+//! committed but free. A shared name invites
 //! a shared threshold; the bounds a series is judged against live next to this
 //! module in [`GROWTH_BOUNDS`], and [`assert_bounded`] is the only thing that
 //! reads them.
@@ -13,6 +14,15 @@
 //! ~1.0–1.3 MB — so the control failed the residual bound in about one group run in five
 //! on growth no code made. Private commit is allocation-driven, like macOS's
 //! `ri_phys_footprint`.
+//!
+//! **And it subtracts the heaps' free committed bytes**, because the NT heap keeps freed
+//! memory committed and never gives it back. MEASURED, 6.13's window gate, release build:
+//! `PrivateUsage` stepped up 2–5 MB at a different cycle each run and never fell while the
+//! heaps' live blocks grew ~21 KB a cycle, failing 3 runs in 10 (residual up to 8.7 MB)
+//! on a build that retains nothing; with the subtraction, 10 runs in 10 left at most
+//! 0.16 MB of residual. `platform::win32::process::current_allocated_private_bytes` says
+//! how the free bytes are read, and `memgate::instrument` holds the reading to a known
+//! leak and a known free.
 
 /// Per-platform bounds for [`super::growth::assert_no_growth`], in bytes.
 ///
@@ -43,8 +53,11 @@
 /// | macOS seat, per-stretch rule, 11 runs | 1.2–2.3 MB | 0.5–1.6 MB | **0.02–1.25 MB** |
 /// | Windows seat, `PrivateUsage`, GTK 4.24.1, 10 runs | ≤1.93 MB | ≤1.15 MB | **≤1.11 MB** |
 /// | Windows seat, `PrivateUsage`, GTK 4.22.4, 5 runs | ≤1.58 MB | ≤1.32 MB | ≤0.47 MB |
+/// | Windows seat, `PrivateUsage` less free heap, 6.13 window gate alone, 10 runs | ≤0.24 MB | ≤0.08 MB | ≤0.16 MB |
 ///
-/// The two Windows-seat rows are worst-of-every-gate over every run, and the bounds did
+/// The two Windows-seat `PrivateUsage` rows are worst-of-every-gate over every run; the
+/// last row is the one gate whose failures the free-heap subtraction was made for. The
+/// bounds did
 /// not move for them. The gate still bites under `PrivateUsage`: retaining every decode
 /// in 6.9's loop left 8.9 MB (animated WebP) and 69.5 MB (PNG) of residual.
 ///

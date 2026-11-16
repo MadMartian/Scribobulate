@@ -133,6 +133,203 @@ pub(crate) fn current_private_bytes() -> Option<u64> {
     }
 }
 
+/// The Windows body of [`crate::memgate::footprint::current`]: [`current_private_bytes`]
+/// less what the process heaps hold committed but not allocated.
+///
+/// **Why not `PrivateUsage` alone.** The NT heap keeps freed memory committed and does not
+/// give it back. MEASURED, release build, 48 window open/close cycles (TDD 6.13): the
+/// heaps' allocated bytes went 23.2 -> 24.1 MB (about 21 KB a cycle), while their committed
+/// bytes climbed 37 -> 60 MB in 2-5 MB steps at a different cycle each run and never fell,
+/// and `PrivateUsage` with them. `HeapCompact` on every heap returned none of it. So the
+/// gate read the heap's free list as growth and failed 3 runs in 10 on a build that
+/// retains nothing. What is left after the subtraction is allocation-driven: live heap
+/// blocks plus everything committed outside the heaps (`VirtualAlloc`, cairo's large
+/// surfaces), so a leak of either kind still shows.
+#[cfg(test)]
+pub(crate) fn current_allocated_private_bytes() -> Option<u64> {
+    let private = current_private_bytes()?;
+    Some(private.saturating_sub(heap_free_committed_bytes()?))
+}
+
+/// `PROCESS_HEAP_ENTRY`; the union at its end is `Block` or `Region`, 24 bytes on x64.
+#[cfg(test)]
+#[repr(C)]
+struct ProcessHeapEntry {
+    data: *mut c_void,
+    cb_data: u32,
+    cb_overhead: u8,
+    region_index: u8,
+    flags: u16,
+    block_or_region: [usize; 3],
+}
+
+#[cfg(test)]
+const PROCESS_HEAP_REGION: u16 = 0x0001;
+#[cfg(test)]
+const PROCESS_HEAP_ENTRY_BUSY: u16 = 0x0004;
+
+#[cfg(test)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetProcessHeaps(count: u32, heaps: *mut *mut c_void) -> u32;
+    fn HeapLock(heap: *mut c_void) -> i32;
+    fn HeapUnlock(heap: *mut c_void) -> i32;
+    fn HeapWalk(heap: *mut c_void, entry: *mut ProcessHeapEntry) -> i32;
+}
+
+/// `MEMORY_BASIC_INFORMATION` on x64.
+#[cfg(test)]
+#[repr(C)]
+struct MemoryBasicInformation {
+    base_address: usize,
+    allocation_base: usize,
+    allocation_protect: u32,
+    partition_id: u16,
+    region_size: usize,
+    state: u32,
+    protect: u32,
+    kind: u32,
+}
+
+#[cfg(test)]
+const MEM_COMMIT: u32 = 0x1000;
+
+#[cfg(test)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn VirtualQuery(
+        address: *const c_void,
+        info: *mut MemoryBasicInformation,
+        length: usize,
+    ) -> usize;
+}
+
+/// The bytes the kernel holds committed in `[start, end)`, page range by page range.
+#[cfg(test)]
+fn committed_in(start: usize, end: usize) -> u64 {
+    let mut committed = 0u64;
+    let mut at = start;
+    while at < end {
+        let mut info = MemoryBasicInformation {
+            base_address: 0,
+            allocation_base: 0,
+            allocation_protect: 0,
+            partition_id: 0,
+            region_size: 0,
+            state: 0,
+            protect: 0,
+            kind: 0,
+        };
+        // SAFETY: `VirtualQuery` only reads the address space's bookkeeping and writes
+        // `info`, whose size is passed.
+        let got = unsafe {
+            VirtualQuery(
+                at as *const c_void,
+                &mut info,
+                std::mem::size_of::<MemoryBasicInformation>(),
+            )
+        };
+        if got == 0 || info.region_size == 0 {
+            break;
+        }
+        let range_end = info.base_address.saturating_add(info.region_size);
+        if info.state == MEM_COMMIT {
+            committed += (range_end.min(end) - at.max(info.base_address)) as u64;
+        }
+        at = range_end;
+    }
+    committed
+}
+
+/// Most regions one heap is read across; a heap with more is a broken instrument here.
+#[cfg(test)]
+const MAX_REGIONS: usize = 512;
+
+/// What the process heaps hold committed but not allocated: the kernel's committed bytes
+/// across each heap region, less the busy blocks `HeapWalk` lists inside the regions.
+///
+/// **The committed figure is the kernel's, not the heap's.** Every figure the heap gives
+/// about itself was measured against a known leak (7.81 MiB: 2 x 20,000 blocks of 100 B
+/// plus four of 1 MiB) and read it 4-6 MiB high: `HeapSummary`'s committed bytes, each
+/// region's `dwCommittedSize` (it did not move while `PrivateUsage` rose 5.5 MiB), and the
+/// free blocks `HeapWalk` lists, whose interior pages the heap had already decommitted, so
+/// reusing one recommitted them and counted twice. `VirtualQuery` over a region's address
+/// range is what the kernel actually charges.
+///
+/// **Busy bytes are `HeapWalk`'s, block by block, and only inside a region.** MEASURED:
+/// the leak's small blocks read as +7.82 MiB of busy bytes. A block past the heap's size
+/// limit (about 512 KB on x64) is its own `VirtualAlloc` outside every region, so it is
+/// neither a region's committed bytes nor its busy ones: it stays in `PrivateUsage` once,
+/// as any allocation does.
+///
+/// `None` when the heap list cannot be read or a heap has more regions than this reads,
+/// either of which is a broken instrument.
+#[cfg(test)]
+fn heap_free_committed_bytes() -> Option<u64> {
+    let mut heaps = vec![std::ptr::null_mut::<c_void>(); 64];
+    loop {
+        // SAFETY: `heaps` holds `heaps.len()` writable handle slots.
+        let count = unsafe { GetProcessHeaps(heaps.len() as u32, heaps.as_mut_ptr()) } as usize;
+        if count == 0 {
+            return None;
+        }
+        if count <= heaps.len() {
+            heaps.truncate(count);
+            break;
+        }
+        heaps.resize(count + 16, std::ptr::null_mut());
+    }
+    let mut free = 0u64;
+    let mut regions = [(0usize, 0usize); MAX_REGIONS];
+    for &heap in &heaps {
+        let mut found = 0usize;
+        let mut busy = 0u64;
+        let mut current = (0usize, 0usize);
+        let mut entry = ProcessHeapEntry {
+            data: std::ptr::null_mut(),
+            cb_data: 0,
+            cb_overhead: 0,
+            region_index: 0,
+            flags: 0,
+            block_or_region: [0; 3],
+        };
+        // SAFETY: the heap is locked for the whole walk, so no thread changes it under
+        // `HeapWalk`, and the walk starts from an entry whose `data` is null, as the API
+        // requires. Nothing here allocates while the lock is held (`regions` is on the
+        // stack). The walk ends when `HeapWalk` returns 0 (ERROR_NO_MORE_ITEMS).
+        unsafe {
+            HeapLock(heap);
+            while HeapWalk(heap, &mut entry) != 0 {
+                let start = entry.data as usize;
+                if entry.flags & PROCESS_HEAP_REGION != 0 {
+                    // `Region.lpLastBlock` (the union's third word) ends the region's
+                    // address range; `HeapWalk` lists a region, then the blocks in it.
+                    current = (start, entry.block_or_region[2]);
+                    if found < MAX_REGIONS {
+                        regions[found] = current;
+                    }
+                    found += 1;
+                } else if entry.flags & PROCESS_HEAP_ENTRY_BUSY != 0
+                    && start >= current.0
+                    && start < current.1
+                {
+                    busy += u64::from(entry.cb_data);
+                }
+            }
+            HeapUnlock(heap);
+        }
+        if found > MAX_REGIONS {
+            return None;
+        }
+        let committed: u64 = regions[..found]
+            .iter()
+            .map(|&(start, end)| committed_in(start, end))
+            .sum();
+        free += committed.saturating_sub(busy);
+    }
+    Some(free)
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn GetProcAddress(module: *mut c_void, name: *const std::ffi::c_char) -> *const c_void;

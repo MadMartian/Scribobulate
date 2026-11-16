@@ -554,7 +554,9 @@ fn two_overlapping_invocations_naming_one_file_open_it_once() {
 #[gtktest::test]
 fn opening_a_file_with_a_nul_leaves_no_dirty_tab_and_the_file_untouched() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("nul.md");
+    // Not `nul.md`: on Windows that name is the NUL device, which the app refuses by name
+    // before it reads a byte, so the NUL in the CONTENT would never be reached.
+    let file = dir.path().join("nulbyte.md");
     let bytes = b"# Title\n\nbefore\x00after\n\nlast line\n";
     std::fs::write(&file, bytes).unwrap();
 

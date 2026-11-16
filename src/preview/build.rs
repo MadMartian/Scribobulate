@@ -3146,9 +3146,26 @@ mod gtk_integration_tests {
         // which Pango's own family-list parser does not accept (it would silently drop
         // to the default sans instead of walking the stack) — and with no space after a
         // comma, which Pango's Win32 font map would match against no face either
-        // (`CssSafeFontStack::pango_family`).
-        assert_eq!(h1.family().as_deref(), Some("Courier,monospace"));
-        assert_eq!(h2.family().as_deref(), Some("Georgia,serif"));
+        // (`CssSafeFontStack::pango_family`). Then the platform's script fallback, where it
+        // names one (TDD 25.18a; `CssSafeFontStack::with_script_fallback`).
+        let with_fallback = |stack: &str| {
+            crate::theme::sanitize_font_family(stack)
+                .expect("a safe stack")
+                .with_script_fallback()
+                .pango_family()
+        };
+        let (h1_family, h2_family) = (h1.family(), h2.family());
+        assert!(h1_family
+            .as_deref()
+            .is_some_and(|f| f.starts_with("Courier,monospace")));
+        assert_eq!(
+            h1_family.as_deref(),
+            Some(with_fallback("Courier, monospace").as_str())
+        );
+        assert_eq!(
+            h2_family.as_deref(),
+            Some(with_fallback("Georgia, serif").as_str())
+        );
     }
 
     /// TDD 18.22 — the heading rule and the space above it reach the real heading tags,

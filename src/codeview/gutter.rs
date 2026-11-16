@@ -454,6 +454,28 @@ mod tests {
         assert!((cy - 116.0).abs() < 1e-4, "cy={cy}");
     }
 
+    /// TDD 18.11: a hostile `list_step = -5` clamps to the floor, and the floor must still
+    /// leave the task checkbox clear of its item's text. At the old floor of 4 the box
+    /// overlapped the first letter.
+    #[test]
+    fn at_the_list_step_floor_the_checkbox_clears_its_text() {
+        let mut m = sys();
+        m.list_step = crate::theme::keys::LIST_STEP_R.min;
+        for zoom in [1.0, 1.5, 2.0, 3.0] {
+            let margin = list_content_margin_px(0.0, 1, zoom, &m);
+            let r = checkbox_rect(margin, (0.0, 24.0 * zoom as f32), zoom, &m);
+            assert!(
+                r.x() + r.width() + 2.0 <= margin,
+                "zoom {zoom}: the checkbox ends at {} but the text starts at {margin}",
+                r.x() + r.width()
+            );
+            assert!(
+                r.x() >= 0.0,
+                "zoom {zoom}: the checkbox starts left of its column"
+            );
+        }
+    }
+
     #[test]
     fn checkbox_rect_scales_with_zoom() {
         // At zoom 2.0, depth-2 margin 56: size round(26)=26; center x = 56 - 28.
