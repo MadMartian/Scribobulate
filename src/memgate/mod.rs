@@ -25,7 +25,9 @@ pub(crate) mod growth;
 
 #[cfg(all(test, feature = "memory-gates"))]
 mod gtk;
-#[cfg(all(test, feature = "memory-gates"))]
+// Windows only: the free-heap correction it proves is the Windows reading's, and step 5b
+// refuses a run that prints a skip.
+#[cfg(all(test, feature = "memory-gates", windows))]
 mod instrument;
 #[cfg(all(test, feature = "memory-gates"))]
 mod playback;

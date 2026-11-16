@@ -2,7 +2,9 @@
 //! leak, which it must count, and memory the allocator keeps after a free, which it must
 //! not.
 //!
-//! Compiled only under `--features memory-gates`, beside the gates it serves: the reading
+//! Compiled only on Windows, whose reading the correction belongs to (VmRSS and the macOS
+//! physical footprint are read as the kernel reports them), and only under
+//! `--features memory-gates`, beside the gates it serves: the reading
 //! is process-wide, so it is taken in the suite child like theirs (see
 //! [`super::footprint::measuring`]).
 
@@ -72,13 +74,6 @@ fn the_footprint_counts_a_leak_and_not_a_freed_block_ttd_6_13() {
     let Some(_measuring) = measuring("6.13") else {
         return;
     };
-    if !cfg!(windows) {
-        println!(
-            "SKIPPED [TDD 6.13]: the free-heap correction this proves is the Windows reading's; \
-             VmRSS and the physical footprint are read as the kernel reports them"
-        );
-        return;
-    }
     let mib = |b: i64| b as f64 / (1024.0 * 1024.0);
 
     let before_churn = current().expect("footprint");
