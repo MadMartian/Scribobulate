@@ -2,7 +2,7 @@
 
 Scribobulate is built with AI, and I am not going to be coy about it: the
 overwhelming majority of the code, tests, and documentation in this repository was
-written by AI agents working under my direction, and 595 of its 668 commits carry a
+written by AI agents working under my direction, and 658 of its 731 commits carry a
 `Co-Authored-By: Claude` trailer to say so. If you are reading this, you probably
 work the same way. Here is the process I use, and the evidence that it holds up.
 
@@ -78,7 +78,7 @@ writing to somebody else's server would undo all three at once.
   no publication plans either way.
 - **Two registers, two jobs.** [`sdd/ISSUES.md`](sdd/ISSUES.md) is a working
   register: ephemeral, tightly scoped, and meant for tracking within and across
-  developer sessions. It is supposed to *shrink*, and it holds 20 open items as I
+  developer sessions. It is supposed to *shrink*, and it holds 22 open items as I
   write this. GitHub issues do the other job, the permanent public record, and
   each register serves its own purpose.
 - **Attribution is maintained.** Apache-2.0, with every dependency's licence
@@ -90,7 +90,7 @@ This is the part I care about most, because a green test run is where the work
 starts. The gates below are mandatory, and the ones an agent would most like to
 skip are the ones written down hardest.
 
-- **Behaviour is pinned before it is built.** [`sdd/TDD.md`](sdd/TDD.md) holds 647
+- **Behaviour is pinned before it is built.** [`sdd/TDD.md`](sdd/TDD.md) holds 653
   Given/When/Then rubrics, and a change that introduces behaviour with no rubric
   is incomplete by policy.
 - **Roughly 2,500 automated tests** run under `cargo test` plus a GTK integration

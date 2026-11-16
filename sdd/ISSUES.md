@@ -76,6 +76,9 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | BS | Any | Production | Ctrl+T's new document holds the welcome text as editable document text | Low |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
 | BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
+| BV | Mac | Production | Opening and closing a second window (Cmd+N, Cmd+W) grows RSS by about 1.5 MB per cycle with no plateau over 90 cycles, while the window-cycle memory gate reads about 45 KB per cycle | Medium |
+| BW | Any | Production | In the preview, Edit's "Change Case" submenu row draws enabled while all four of its items are greyed | Low |
+| BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 
 ## Closed issues
 
@@ -598,7 +601,11 @@ host.
 
 **Fix direction**: ask Windows whether the path is a device (for example,
 `GetFullPathNameW` returning a `\\.\` path) and refuse only then, keeping the name rule
-as the fallback. The test oracle is the filesystem: write `nul.md` in a temporary
+as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` maps
+`nul.md`, `NUL`, `nul .md`, `nul.tar.gz`, `con.md`, `COM1.md`, `com9.md.`, `lpt1.txt`,
+`aux`, `prn.md`, `conin$`, `CONOUT$.md` and `COM¹.md` to a `\\.\<device>` path, and
+`COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
+matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
 directory, and the app must open it if the directory lists it and refuse it otherwise.
 
 ## BU. The Annotate-card resize-flip test misses its precondition under load
@@ -614,6 +621,54 @@ boundary of the card's height plus its gap, so the fixture leaves no margin. Run
 
 **Fix direction**: give the fixture a resize that moves the word well past the boundary,
 rather than relaxing the precondition.
+
+## BV. Each window opened and closed keeps about 1.5 MB on macOS
+
+**Severity**: Medium (a reader needs hundreds of window cycles in one session to notice,
+but the growth does not level off).
+
+**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 8.6, local build tree-identical to the
+1.0.0 target): one window and one document kept open, 80 cycles of Cmd+N then Cmd+W. RSS
+165,792 KB at the start, 188,960 after cycle 1, 227,888 at 20, 258,480 at 40, 286,512 at
+60, 317,424 at 80, 316,528 idle, 330,752 after 10 more: about 1.5 MB per cycle, linear,
+the window count back to its baseline each time. The 2026-11-12 pass measured about 2 MB
+per cycle before the window-cycle retention fixes. Windows (+0.04 MiB per cycle over cycles
+30–80) and Linux pass the same item on the same tree.
+
+**Tension with the gate**: TDD 6.13's window-cycle gate passes on macOS CI and reads
+about 45 KB per cycle of `phys_footprint`. Two differences are untested: the gate closes
+with `window.close()`, where Cmd+W closes the window's last tab, and the gate reads
+`phys_footprint`, where this item reads RSS.
+
+**Footprint reading** (same session, same loop, Cmd+N and Cmd+W 0.7 s apart, `footprint`):
+`phys_footprint` 68 MB at cycle 0, 89 at 1, 98 at 5, 106 at 10, 121 at 20 and still 121
+after 5 s idle. The growth is all `MALLOC_SMALL` (35 → 88 MB); IOSurface stays flat at
+20 MB. So this is real heap retention on the Cmd+N/Cmd+W path, not pages that RSS counts
+and the footprint does not, and not a surface released late.
+
+**Next step**: drive TDD 6.13's gate through the path the reader takes (a new window, then
+closing its last tab), confirm it fails on macOS CI, then find what the close-tab path
+keeps that `window.close()` does not.
+
+## BW. The preview's Change Case submenu row draws enabled over greyed items
+
+**Severity**: Low (cosmetic; the items themselves are correctly unavailable).
+
+**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 9.14): with the preview focused, Edit ▸
+Change Case draws as an enabled row while its four items and Insert Emoji are greyed. A
+submenu row has no action of its own, so GTK draws it enabled whatever its items say. The
+menu model is shared, so every platform is affected.
+
+## BX. Export is enabled with two refused documents open
+
+**Severity**: Low (an export of a refusal page is harmless; the button's state is merely
+inconsistent).
+
+**Observed** (2026-11-16, `windows` seat, ungraded, on the 1.0.0 installer): with one
+refused document open (its refusal page shown, no backing file) the toolbar's Export
+button is greyed; with two such tabs open it is enabled. Not traced; a sensitivity that
+follows the tab count rather than the active tab's backing fits the symptom. `Any` because the toolbar
+sensitivity code is shared; found on Windows, not yet reproduced elsewhere.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
