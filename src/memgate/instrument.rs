@@ -2,11 +2,13 @@
 //! leak, which it must count, and memory the allocator keeps after a free, which it must
 //! not.
 //!
-//! Compiled only on Windows, whose reading the correction belongs to (VmRSS and the macOS
-//! physical footprint are read as the kernel reports them), and only under
-//! `--features memory-gates`, beside the gates it serves: the reading
+//! Compiled only under `--features memory-gates`, beside the gates it serves: the reading
 //! is process-wide, so it is taken in the suite child like theirs (see
-//! [`super::footprint::measuring`]).
+//! [`super::footprint::measuring`]). It runs on every platform (POLICY § Testing: never
+//! `#[cfg]` a test away): the leak half proves every platform's reading; the churn half is
+//! asserted on Windows only, because only the Windows reading corrects for freed memory
+//! the heap keeps, and VmRSS and the macOS physical footprint are read as the kernel
+//! reports them.
 
 use crate::memgate::footprint::{current, measuring};
 use std::hint::black_box;
@@ -76,6 +78,19 @@ fn the_footprint_counts_a_leak_and_not_a_freed_block_ttd_6_13() {
     };
     let mib = |b: i64| b as f64 / (1024.0 * 1024.0);
 
+    if cfg!(windows) {
+        churn_is_not_growth(mib);
+    } else {
+        println!(
+            "[memgate instrument] churn half: asserted on Windows only, whose reading \
+             corrects for freed memory the heap keeps"
+        );
+    }
+    leak_is_counted_once(mib);
+}
+
+/// The churn half: freeing what was allocated does not read as growth.
+fn churn_is_not_growth(mib: impl Fn(i64) -> f64) {
     let before_churn = current().expect("footprint");
     churn();
     let after_churn = current().expect("footprint");
@@ -89,7 +104,11 @@ fn the_footprint_counts_a_leak_and_not_a_freed_block_ttd_6_13() {
          {:+.2} MiB; a freed block the heap keeps committed is being counted as growth",
         mib(kept)
     );
+}
 
+/// The leak half: a leak through either allocator, in small blocks and large, is counted,
+/// and counted once.
+fn leak_is_counted_once(mib: impl Fn(i64) -> f64) {
     let before_leak = current().expect("footprint");
     let leaked = leak();
     let after_leak = current().expect("footprint");
@@ -99,10 +118,13 @@ fn the_footprint_counts_a_leak_and_not_a_freed_block_ttd_6_13() {
         mib(leaked as i64),
         mib(grew)
     );
+    // MEASURED on Windows: +7.84 to +7.86 MiB for 7.81 MiB, so ten percent each way leaves
+    // room for the reading's own noise and none for a leak counted twice. Elsewhere the
+    // reading counts whole pages and the allocator's per-block header, which the Windows
+    // correction does not, so only the floor is held to ten percent there.
+    let ceiling = if cfg!(windows) { 11 } else { 15 };
     assert!(
-        // MEASURED: +7.84 to +7.86 MiB for 7.81 MiB. Ten percent each way
-        // leaves room for the reading's own noise and none for a leak counted twice.
-        grew >= (leaked as i64) * 9 / 10 && grew <= (leaked as i64) * 11 / 10,
+        grew >= (leaked as i64) * 9 / 10 && grew <= (leaked as i64) * ceiling / 10,
         "TDD 6.13: a leak of {:.2} MiB moved the footprint by {:+.2} MiB; the gate's reading \
          must see a leak, and see it once",
         mib(leaked as i64),
