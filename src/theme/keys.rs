@@ -237,12 +237,14 @@ impl Reach {
 /// The metric clamp shared by every decoration metric: no negative sizes, and nothing
 /// wide enough to push the text column off its own viewport.
 const METRIC: Clamp<i32> = Clamp { min: 0, max: 400 };
-/// A list step of 0 would stack every nesting depth in one column and bury the drawn
-/// markers under the text, so this one has a positive floor. Its ceiling is far lower
+/// The drawn marker sits in the step's left half, so the floor is the 13 px task
+/// checkbox plus a clear margin each side: at the old floor of 4 a hostile
+/// `list_step = -5` left every checkbox over the first letter of its own text
+/// (TDD 18.11). Its ceiling is far lower
 /// than [`METRIC`]'s because the step is paid once per nesting depth: at 400 a two-deep
 /// list already started past a normal pane's right edge (TDD 18.11). 64 is over twice
 /// the shipped 28 and leaves a six-deep list a quarter of a 640 px pane for its text.
-pub(crate) const LIST_STEP_R: Clamp<i32> = Clamp { min: 4, max: 64 };
+pub(crate) const LIST_STEP_R: Clamp<i32> = Clamp { min: 20, max: 64 };
 const SCALE: Clamp<f64> = Clamp {
     min: 0.25,
     max: 8.0,

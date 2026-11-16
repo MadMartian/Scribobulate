@@ -313,15 +313,23 @@ fn read_error_doc(path: &Path, err: &std::io::Error) -> String {
 /// is edited.
 ///
 /// Two mechanisms, because one does not cover the other:
-/// - `escape_debug` renders newlines and control characters inert, and keeps the name
-///   legible while doing it.
+/// - Each control character (a newline among them) is rendered through `escape_debug`,
+///   which makes it inert and keeps the name legible. Only those: escaping the whole
+///   name doubled every backslash of a Windows path and put one before each quote.
 /// - The span's delimiter is then made **longer than the longest backtick run in the
 ///   name**, which is CommonMark's own rule for this and the only thing that works —
 ///   a backslash escape is NOT honoured inside a code span, so escaping cannot solve
 ///   the backtick half. A name that begins or ends with a backtick additionally gets
 ///   the padding space CommonMark strips back off on render.
 fn notice_path_span(path: &Path) -> String {
-    let name = path.display().to_string().escape_debug().to_string();
+    let mut name = String::new();
+    for c in path.display().to_string().chars() {
+        if c.is_control() {
+            name.extend(c.escape_debug());
+        } else {
+            name.push(c);
+        }
+    }
 
     let longest_run = name
         .split(|c| c != '`')
@@ -617,6 +625,21 @@ mod tests {
         assert_eq!(
             notice_path_span(Path::new("/home/reader/notes.md")),
             "`/home/reader/notes.md`"
+        );
+    }
+
+    /// A Windows path's backslashes and a name's quotes are shown as they are; only a
+    /// control character is escaped. Escaping the whole name once printed
+    /// `C:\\Users\\…` on the refusal page.
+    #[test]
+    fn a_path_keeps_its_backslashes_and_quotes_and_escapes_only_controls() {
+        assert_eq!(
+            notice_path_span(Path::new(r"C:\Users\reader\it's.md")),
+            r"`C:\Users\reader\it's.md`"
+        );
+        assert_eq!(
+            notice_path_span(Path::new("/tmp/a\nb.md")),
+            r"`/tmp/a\nb.md`"
         );
     }
 
