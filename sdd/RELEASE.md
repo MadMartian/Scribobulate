@@ -338,7 +338,14 @@ Every published artefact carries the notices its dependencies require (POLICY
 - VRAM ≤ 50 MiB on every platform, measured on the installed artefact from gate 5, by
   the procedure in TDD §6 (POLICY § Footprint verification). RAM at the README's
   advertised order of magnitude, or the README's number changes in the same release.
-- **Proof:** the three readings, with the document and window size used.
+- **When a platform cannot be measured.** A host may have no GPU counters to read, such
+  as a virtual machine whose adapter reports zero for every process. VRAM must still be
+  measured on at least two of the three platforms. With two, the third platform's
+  missing reading does not block the release. The record names the missing platform and
+  the reason, and the operator signs it off. The 50 MiB ceiling still applies to the
+  unmeasured platform; only its measurement is waived (POLICY § Footprint verification).
+- **Proof:** the three readings (VRAM on at least two platforms), with the document and
+  window size used.
 
 ### 8. Manual testing on all three platforms
 
