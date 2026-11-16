@@ -65,6 +65,17 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
+| BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
+| BL | Any | Production | Shrinking a window until a sidebar section reaches its minimum height overwrites the remembered divider ratio for good, so the next restart restores the squeezed split | Low |
+| BM | Any | Production | In HTML and PDF export, inline code inside a highlighted claim is not highlighted | Low |
+| BN | Any | Production | In HTML and PDF export, a claim that ends in inline code puts its comment before the code rather than after it | Low |
+| BO | Any | Production | In HTML and PDF export, a comment attached to no highlighted text is missing from the exported body, and the HTML summary lists it with an empty quote | Low–Medium |
+| BP | Any | Production | Typing over a selection takes two Ctrl+Z to undo | Low |
+| BQ | Any | Production | A recovered tab in the background shows no unsaved dot until it is opened | Low |
+| BR | Any | Production | An open comment card follows its marker when the preview is scrolled, rather than closing | Low |
+| BS | Any | Production | Ctrl+T's new document holds the welcome text as editable document text | Low |
+| BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
+| BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
 
 ## Closed issues
 
@@ -464,6 +475,145 @@ whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, unt
 critical fires and names the holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
+
+## BK. A click during Ctrl+End's travel snaps the view back to line 1 on Windows
+
+**Severity**: Low–Medium (the caret is where the reader clicked, but the view leaves it,
+and the reader has to find their place again).
+
+**Observed** (2026-11-15, `windows` seat, 1.0.0 release pass, MANUAL-TEST 9.33a, 2 of 2
+launches, and in two earlier rounds): `large-doc.md`, Ctrl+End, then a click mid-document
+while the jump is still travelling. The caret lands on the clicked line; 1.5–2.5 s later
+the view returns to line 1. The jump also logs two `Trying to snapshot GtkGizmo … without
+a current allocation` warnings. Linux 0 of 4: there the jump finishes in under 0.1 s, so
+there is nothing to click into. macOS not yet checked.
+
+**What is known**: the 1.0.0 fix that stops the travel where the reader clicks holds on
+Linux by construction and does not hold on Windows, so something else moves the view
+after the travel has stopped. The late return to the top fits a deferred scroll (an idle
+or a re-validation finishing the original Ctrl+End request) that the stop does not
+cancel. Not yet traced.
+
+**Next step**: trace on the Windows seat which source sets the scroll value after the
+click, before changing anything.
+
+## BL. Shrinking a window overwrites the remembered sidebar split
+
+**Severity**: Low (only a window shrunk to a section's minimum height; the divider can be
+dragged back).
+
+**Observed** (2026-11-15, `windows` seat, MANUAL-TEST 20.21b): each window's divider
+survives a restart and holds its ratio as the window grows taller. Shrinking a window
+until a section reaches its minimum height rewrites `sidebar_split` in `session.toml` for
+good (0.235 → 0.376, 0.82 → 0.71).
+
+**Cause**: `window::chrome::track_sidebar_split` records the fraction on every
+`notify::position`, and GTK clamps the position when the window gets too short for a
+section, so the clamp is stored as if the reader had dragged it. The code is shared, so
+every platform is affected.
+
+**Fix direction**: record only a position the reader set (a drag), or ignore a position
+change that arrives with a height change, and re-apply the remembered fraction when the
+window grows again.
+
+## BM. Export does not highlight inline code inside a claim
+
+**Severity**: Low (the claim's text is highlighted around the code; the code itself is
+plain).
+
+**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF):
+`{==see `code` here==}{>>c<<}` exports with `see` and `here` highlighted and `code` not.
+TDD 25.13 says the highlight covers exactly the annotated characters. The export builder is
+shared, so every platform is affected. Not yet reproduced in a unit test.
+
+## BN. Export puts a claim's comment before its closing inline code
+
+**Severity**: Low (the comment is present; only its position is wrong).
+
+**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF): a
+claim that ends in inline code, `{==ends in `code`==}{>>c<<}`, exports with the comment's
+aside or margin note placed before `code` rather than after the claim. Likely the same
+place in the export builder as BM: the code span is emitted outside the claim. Not yet
+reproduced in a unit test.
+
+## BO. Export drops a comment attached to no highlighted text
+
+**Severity**: Low–Medium (the reader's comment is missing from the exported document; the
+source file is untouched).
+
+**Observed** (2026-11-15, `windows` seat, two chunks independently): a comment with no
+claim (`{>>a note<<}` on its own, not after a `{==…==}`) does not appear in the exported
+body, HTML or PDF, and the HTML Annotations summary lists it with an empty quote. The
+preview shows its marker. The export builder is shared, so every platform is affected.
+Not yet reproduced in a unit test.
+
+## BP. Typing over a selection takes two undos
+
+**Severity**: Low (both steps undo correctly; it takes two presses).
+
+**Observed** (2026-11-15, `windows` seat, ungraded): select text in the editor, type a
+character, Ctrl+Z → the deletion and the insertion are undone as two steps. Not checked
+on Linux or macOS; GtkSourceView's undo grouping is shared, so it is likely `Any`.
+
+## BQ. A recovered background tab shows no unsaved dot until it is opened
+
+**Severity**: Low (the content is recovered and is saved or discarded as usual; only the
+tab's indicator is late).
+
+**Observed** (2026-11-15, `windows` seat, ungraded): after crash recovery restores
+unsaved changes into a tab that is not the active one, its tab shows no unsaved dot until
+it is selected. `Any` because the tab indicator code is shared; found on Windows, not yet reproduced elsewhere.
+
+## BR. An open comment card follows its marker on scroll
+
+**Severity**: Low (the card stays readable and re-pins to its marker; the question is only
+whether it should close).
+
+**Observed** (2026-11-15, `windows` seat, ungraded): with a comment card open, scrolling
+the preview carries the card along with its marker rather than closing it. No TDD rubric
+states what a scroll does to an open comment card, so this is a gap in the spec before it
+is a defect: decide the behaviour first, then fix or record it.
+
+## BS. Ctrl+T opens a document holding the welcome text as editable text
+
+**Severity**: Low (the text can be selected and deleted; nothing is saved unless the
+reader saves it).
+
+**Observed** (2026-11-15, `windows` seat, ungraded): Ctrl+T's new tab shows the welcome
+document as editable document text, rather than an empty document. `Any` because the code is shared; found on Windows, not yet reproduced
+elsewhere.
+
+## BT. Device names with an extension are refused on every Windows
+
+**Severity**: Low (a file named `nul.md` or `con.md` is rare, and the refusal names the
+reason).
+
+**Observed** (2026-11-16, `windows` seat): the app refuses a filename whose part before
+the first dot is a Windows device name (`docio::rename::windows_device_name`), because on
+Windows 10 `nul.md` opens the NUL device: a read returns nothing and a write disappears.
+Windows 11 and Windows Server 2025 reportedly stopped treating a device name with an
+extension as a device, so there such a name can be a real file, which the app then
+refuses to open, save, rename to or export to. Inferred, not yet checked on a Windows 11
+host.
+
+**Fix direction**: ask Windows whether the path is a device (for example,
+`GetFullPathNameW` returning a `\\.\` path) and refuse only then, keeping the name rule
+as the fallback. The test oracle is the filesystem: write `nul.md` in a temporary
+directory, and the app must open it if the directory lists it and refuse it otherwise.
+
+## BU. The Annotate-card resize-flip test misses its precondition under load
+
+**Severity**: Low (test-only; passes on re-run and 3 of 3 alone).
+
+**Observed** (2026-11-16, Linux, full GTK suite through `scripts/run-integration.sh`):
+`preview::annotate::overlay::resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it`
+panicked at its precondition "the resize must move the word up to where the card has no
+room above it": word top 105 → 45, card height 41. The word stopped right at the
+boundary of the card's height plus its gap, so the fixture leaves no margin. Run alone,
+3 of 3 pass.
+
+**Fix direction**: give the fixture a resize that moves the word well past the boundary,
+rather than relaxing the precondition.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
