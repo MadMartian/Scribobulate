@@ -742,15 +742,28 @@ jobs:
       # The vacuous pass this job's shape invites, and the same one the parity job guards
       # against: `download-artifact` succeeds having written nothing, `gh release upload`
       # with no arguments is not obviously an error, and the release quietly gains no
-      # files. Count them first, and name the number expected rather than "some".
+      # files. Count them first, one of each kind by name, not "some".
+      #
+      # The Linux artefact keeps its build tree (`deb/…`, `rpm/RPMS/x86_64/…`), so the
+      # search goes to any depth and the files are gathered into one flat directory. A
+      # top-level-only search found 2 of 4 when v1.0.0 was published, and the release went
+      # out with no assets until they were attached by hand: this job runs only on a
+      # release, so nothing before that had exercised it.
       - name: Every platform contributed an installer
         run: |
           set -euo pipefail
-          ls -l installers
-          n=$(find installers -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \
-                -o -name '*.dmg' -o -name '*.exe' \) | wc -l)
-          echo "found $n installer file(s)"
-          [ "$n" -ge 4 ] || { echo "::error::expected at least 4 (.deb .rpm .dmg .exe); found $n"; exit 1; }
+          mkdir upload
+          for ext in deb rpm dmg exe; do
+            mapfile -t found < <(find installers -type f -name "*.$ext")
+            [ "${#found[@]}" -eq 1 ] || {
+              echo "::error::expected exactly one .$ext; found ${#found[@]}: ${found[*]:-none}"
+              exit 1
+            }
+            cp -p "${found[0]}" upload/
+          done
+          (cd upload && sha256sum -- *.deb *.rpm *.dmg *.exe > SHA256SUMS.txt)
+          ls -l upload
+          cat upload/SHA256SUMS.txt
 
       # The tag name reaches the script through `env:`, never as `${{ }}` inside `run:`:
       # an expression there is pasted into the script text before bash parses it, so a tag
@@ -763,5 +776,5 @@ jobs:
         run: |
           set -euo pipefail
           gh release upload "$TAG" \
-             installers/*.deb installers/*.rpm installers/*.dmg installers/*.exe \
+             upload/*.deb upload/*.rpm upload/*.dmg upload/*.exe upload/SHA256SUMS.txt \
              --clobber --repo "$GITHUB_REPOSITORY"

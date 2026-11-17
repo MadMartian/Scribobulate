@@ -461,6 +461,11 @@ Gatekeeper click — the full run already proved what Gatekeeper shows.
 - Publishing triggers the packaging run. Wait for it; then verify the attached assets by
   hand — the right count, the right names, the right version in each name, sizes
   matching the gate-5 dry run — and that nothing was attached from any other run.
+- If the attach job fails after every build job passed, attach that run's own
+  installers by hand. Download them with `gh run download <run> -p 'installers-*'`,
+  check the embedded build identity names the tagged commit, add a `SHA256SUMS.txt` of
+  the four, and upload them with `gh release upload`. Never attach the gate-5 dry run's
+  files: they were built from an earlier commit and report that commit.
 - **Proof:** the release URL and the packaging run's URL.
 
 ### 13. After publishing
