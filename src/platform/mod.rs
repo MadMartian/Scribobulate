@@ -721,6 +721,29 @@ pub(crate) fn doc_monitor_is_blind_at(path: &std::path::Path) -> bool {
     platform_doc_monitor_is_blind_at(path)
 }
 
+/// Whether the host treats the filename `name` as a device, asked of the host itself:
+/// `Some(Some(device))` with the device as the host spells it, `Some(None)` for an
+/// ordinary filename, `None` where the host was not or could not be asked.
+///
+/// - **Windows**: asked of Windows, because the answer depends on the release — Windows 10
+///   reserves `nul.md`, newer releases reportedly do not (`platform::win32::device_name`).
+/// - **Linux and macOS**: `None`. A filename never names a device there; the caller's
+///   rules already say so without asking.
+pub(crate) fn host_device_behind_name(name: &str) -> Option<Option<String>> {
+    platform_host_device_behind_name(name)
+}
+
+#[cfg(windows)]
+fn platform_host_device_behind_name(name: &str) -> Option<Option<String>> {
+    win32::device_behind_name(name)
+}
+
+#[cfg(not(windows))]
+fn platform_host_device_behind_name(name: &str) -> Option<Option<String>> {
+    let _ = name;
+    None
+}
+
 #[cfg(windows)]
 fn platform_doc_monitor_is_bound_to_its_folder() -> bool {
     true
