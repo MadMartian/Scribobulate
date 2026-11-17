@@ -70,7 +70,6 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
-| BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
 ## Closed issues
@@ -515,31 +514,6 @@ as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` 
 `COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
 matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
 directory, and the app must open it if the directory lists it and refuse it otherwise.
-
-## BY. The preview breaks prose mid-word on GTK below 4.8
-
-**Severity**: Medium (every paragraph that wraps is affected, on the platform most readers
-run; reading is slower, and no text is lost).
-
-**Observed** (2026-11-17, operator, 1.0.0): paragraph lines in the preview break in the
-middle of a word rather than at a space. The operator reported it before and believed it
-was fixed.
-
-**Cause (from the code, not yet re-measured)**: `tags::preview_wrap_mode` deliberately
-answers `Char` below GTK 4.8 and `WordChar` from 4.8. `WordChar` aborts the app on GTK
-4.6 when a screen reader reads the preview's text attributes (GTK4Rs/AP-136, fixed
-upstream in 4.8), and `Word` alone lets a long token (a URL, an identifier) overflow the
-pane. The earlier fix gave macOS and Windows word wrapping, because their bundled GTK is
-4.8 or later. Linux uses the distribution's GTK (4.6.9 on the build host), so it kept
-character wrapping. So on Linux this is the recorded trade-off, not a regression. Seen
-on macOS or Windows, it would be a regression. Which platform the operator saw it on is
-not yet confirmed.
-
-**Fix direction**: not yet chosen. Candidates: choose the mode per paragraph, `Word`
-unless the paragraph holds a token too wide for the pane; offer a break opportunity
-inside long tokens without changing the copied text; or avoid the attribute path that
-aborts. Any route must keep the no-overflow invariant and must not reopen the
-screen-reader abort.
 
 ## BZ. The editor colours a task item's caption as link text when a link follows
 
