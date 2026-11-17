@@ -901,7 +901,7 @@ fn a_recovered_background_tab_shows_its_unsaved_dot_without_being_selected() {
     let dir = tempfile::tempdir().unwrap();
     crate::session::with_state_home_for_test(dir.path(), || {
         let app =
-            super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.rec8");
+            super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.rec24");
         let win = new_window(&app, "IT", "first", None);
         let recovered = winstate::state(&win).expect("a tab");
         let doc_id = DocId::generate();
