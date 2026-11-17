@@ -20,7 +20,9 @@
 /// asserted without standing up a view (`sdd/POLICY.md` § coverage gate — extract the
 /// decision core; F-TAGS-001).
 mod spec;
+mod wrap;
 pub(crate) use spec::{list_indent_px, quote_indent_px};
+pub(crate) use wrap::{longest_unbreakable_run, policy as wrap_policy, run_limit};
 
 use crate::config::config;
 use crate::palette::{to_hex_opaque, CodeRunSurface, Palette};
@@ -229,6 +231,11 @@ pub(crate) enum TagName {
     /// Bottom-inner-padding tag for a code block's last line.
     CodeBlockBottom,
     Link,
+    /// Switches ONE paragraph to character wrapping, below GTK 4.7 (see [`wrap`]).
+    /// Applied over the paragraph's first character only, because GTK reads a
+    /// paragraph's wrap mode from the style at its first visible segment. Registered
+    /// on every GTK so the vocabulary does not vary by version, applied on none from 4.7.
+    WrapChar,
     /// A blockquote's content-margin tag for one nesting `depth`
     /// (1..=[`MAX_QUOTE_DEPTH`]), carrying that depth's FULL indent on both sides.
     ///
@@ -297,6 +304,7 @@ impl TagName {
             TagName::CodeBlockTop => "code-block-top",
             TagName::CodeBlockBottom => "code-block-bottom",
             TagName::Link => "link",
+            TagName::WrapChar => "wrap-char",
             TagName::Blockquote { depth } => {
                 // Same clamp as ListItem's: an over-deep quote lands at the deepest
                 // REGISTERED margin rather than panicking, and callers clamp from the
@@ -338,6 +346,12 @@ impl TagName {
     /// invariant, without re-deriving the family membership out of band.
     pub(crate) fn is_list_item(name: &str) -> bool {
         LI_NAMES.contains(&name) || LI_CONT_NAMES.contains(&name)
+    }
+
+    /// Whether `name` is a fenced code block's body tag, at any quote depth. Code blocks
+    /// keep their own wrap behaviour, so the paragraph-level wrap decision skips them.
+    pub(crate) fn is_code_block(name: &str) -> bool {
+        name == "code-block" || CODE_BLOCK_BQ_NAMES.contains(&name)
     }
 }
 
@@ -599,13 +613,19 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             if let Some(hex) = &fill {
                 t.set_background(Some(hex));
             }
-            // Long inline code spans have no spaces, so WrapMode::Word pushes the
-            // entire span to the next line; the preview's wrap mode breaks within it.
-            t.set_wrap_mode(preview_wrap_mode());
+            // From GTK 4.7 a long span breaks within itself (WordChar). Below it the
+            // tag states no mode: `Word` is inherited, and a paragraph holding a span
+            // too wide to fit is switched by `WrapChar` (`wrap` module).
+            if wrap_policy().mode == gtk::WrapMode::WordChar {
+                t.set_wrap_mode(gtk::WrapMode::WordChar);
+            }
             // A wrap inside an identifier must not add a hyphen the code does not have.
             t.set_insert_hyphens(false);
         });
     }
+    add(TagName::WrapChar.name(), &|t| {
+        t.set_wrap_mode(gtk::WrapMode::Char)
+    });
     // The block background is NOT a paragraph_background — that fill is pinned to
     // the text's left/right margin and so can never show inner horizontal padding
     // (GTK4Rs/AP-21).  Instead `codeview::CodePreviewView` self-draws the block rect under
@@ -617,6 +637,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
         t.set_family(Some(&code_font));
         // Wrapped code shows its own characters only: no hyphen at a break.
         t.set_insert_hyphens(false);
+        code_block_wrap(t);
         t.set_left_margin(view_lm + code_pad);
         t.set_right_margin(view_rm + code_pad);
     });
@@ -702,6 +723,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             &move |t| {
                 t.set_family(Some(&code_font));
                 t.set_insert_hyphens(false);
+                code_block_wrap(t);
                 t.set_left_margin(view_lm + indent + code_pad);
                 t.set_right_margin(view_rm + indent + code_pad);
             },
@@ -786,6 +808,21 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     }
 }
 
+/// The wrap mode for the preview view: `WordChar` from GTK 4.7, `Word` below it, never
+/// `Char` (see [`wrap`] for the mechanism and the AT-SPI abort).
+pub(crate) fn preview_wrap_mode() -> gtk::WrapMode {
+    wrap_policy().mode
+}
+
+/// A code block keeps wrapping by character below GTK 4.7, as it always has: its lines
+/// have no spaces to break at and a mid-word break in code is not a reading cost. From
+/// 4.7 it inherits the view's `WordChar`.
+fn code_block_wrap(tag: &TextTag) {
+    if wrap_policy().char_for_wide_runs {
+        tag.set_wrap_mode(gtk::WrapMode::Char);
+    }
+}
+
 #[cfg(test)]
 mod list_depth_tests {
 
@@ -847,44 +884,5 @@ mod list_depth_tests {
             MAX_LIST_DEPTH as usize,
             "depths 1..={MAX_LIST_DEPTH} must map to distinct tags, got {names:?}"
         );
-    }
-}
-
-/// The wrap mode for the preview view and the inline-code tags: break at words, and
-/// within a word only when it cannot fit, so a long URL or identifier never makes a
-/// line wider than the pane (the no-overflow invariant GTK4Rs/AP-22/23 depend on).
-///
-/// That mode is `WordChar`, which GTK 4.6 cannot carry: its AT-SPI text-attribute path
-/// casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated, and `WordChar`(3) is
-/// out of range, so a screen reader reading the preview aborts the app (GTK4Rs/AP-136;
-/// fixed in 4.8). Below 4.8 the answer is `Char`, which keeps the invariant at the cost
-/// of breaking prose mid-word. `Word` is never the answer: it lets a long token
-/// overflow.
-pub(crate) fn preview_wrap_mode() -> gtk::WrapMode {
-    wrap_mode_for(gtk::major_version(), gtk::minor_version())
-}
-
-/// [`preview_wrap_mode`]'s decision over a runtime GTK version.
-fn wrap_mode_for(major: u32, minor: u32) -> gtk::WrapMode {
-    if (major, minor) >= (4, 8) {
-        gtk::WrapMode::WordChar
-    } else {
-        gtk::WrapMode::Char
-    }
-}
-
-#[cfg(test)]
-mod preview_wrap_tests {
-    use super::wrap_mode_for;
-    use gtk::WrapMode;
-
-    /// TDD 2.2·a11y: WordChar only where AT-SPI translates it (GTK 4.8+); Char below.
-    #[test]
-    fn the_preview_breaks_words_only_where_gtk_can_report_it() {
-        assert_eq!(wrap_mode_for(4, 6), WrapMode::Char);
-        assert_eq!(wrap_mode_for(4, 7), WrapMode::Char);
-        assert_eq!(wrap_mode_for(4, 8), WrapMode::WordChar);
-        assert_eq!(wrap_mode_for(4, 24), WrapMode::WordChar);
-        assert_eq!(wrap_mode_for(5, 0), WrapMode::WordChar);
     }
 }

@@ -57,6 +57,7 @@ pub(crate) mod rawhtml;
 mod scan;
 pub(crate) mod segments;
 pub(crate) mod start;
+mod wrapchar;
 
 pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
@@ -1111,6 +1112,9 @@ impl Renderer {
     pub(crate) fn finish_region(&mut self) {
         self.block_sep();
         self.apply_enclosing_container_tags();
+        if let Some(start) = self.region_start {
+            self.mark_wide_runs(start, self.end_offset());
+        }
     }
 
     /// Apply the tags of every container the region sits INSIDE, over the region's own
