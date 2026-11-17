@@ -69,10 +69,8 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
-| BQ | Any | Production | A recovered tab in the background shows no unsaved dot until it is opened | Low |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
 | BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
-| BV | Mac | Production | Opening and closing a second window (Cmd+N, Cmd+W) grows RSS by about 1.5 MB per cycle with no plateau over 90 cycles, while the window-cycle memory gate reads about 45 KB per cycle | Medium |
 | BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 | BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
@@ -498,15 +496,6 @@ cancel. Not yet traced.
 **Next step**: trace on the Windows seat which source sets the scroll value after the
 click, before changing anything.
 
-## BQ. A recovered background tab shows no unsaved dot until it is opened
-
-**Severity**: Low (the content is recovered and is saved or discarded as usual; only the
-tab's indicator is late).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): after crash recovery restores
-unsaved changes into a tab that is not the active one, its tab shows no unsaved dot until
-it is selected. `Any` because the tab indicator code is shared; found on Windows, not yet reproduced elsewhere.
-
 ## BT. Device names with an extension are refused on every Windows
 
 **Severity**: Low (a file named `nul.md` or `con.md` is rare, and the refusal names the
@@ -542,34 +531,6 @@ boundary of the card's height plus its gap, so the fixture leaves no margin. Run
 
 **Fix direction**: give the fixture a resize that moves the word well past the boundary,
 rather than relaxing the precondition.
-
-## BV. Each window opened and closed keeps about 1.5 MB on macOS
-
-**Severity**: Medium (a reader needs hundreds of window cycles in one session to notice,
-but the growth does not level off).
-
-**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 8.6, local build tree-identical to the
-1.0.0 target): one window and one document kept open, 80 cycles of Cmd+N then Cmd+W. RSS
-165,792 KB at the start, 188,960 after cycle 1, 227,888 at 20, 258,480 at 40, 286,512 at
-60, 317,424 at 80, 316,528 idle, 330,752 after 10 more: about 1.5 MB per cycle, linear,
-the window count back to its baseline each time. The 2026-11-12 pass measured about 2 MB
-per cycle before the window-cycle retention fixes. Windows (+0.04 MiB per cycle over cycles
-30–80) and Linux pass the same item on the same tree.
-
-**Tension with the gate**: TDD 6.13's window-cycle gate passes on macOS CI and reads
-about 45 KB per cycle of `phys_footprint`. Two differences are untested: the gate closes
-with `window.close()`, where Cmd+W closes the window's last tab, and the gate reads
-`phys_footprint`, where this item reads RSS.
-
-**Footprint reading** (same session, same loop, Cmd+N and Cmd+W 0.7 s apart, `footprint`):
-`phys_footprint` 68 MB at cycle 0, 89 at 1, 98 at 5, 106 at 10, 121 at 20 and still 121
-after 5 s idle. The growth is all `MALLOC_SMALL` (35 → 88 MB); IOSurface stays flat at
-20 MB. So this is real heap retention on the Cmd+N/Cmd+W path, not pages that RSS counts
-and the footprint does not, and not a surface released late.
-
-**Next step**: drive TDD 6.13's gate through the path the reader takes (a new window, then
-closing its last tab), confirm it fails on macOS CI, then find what the close-tab path
-keeps that `window.close()` does not.
 
 ## BX. Export is enabled with two refused documents open
 
