@@ -92,11 +92,17 @@ const ISSUES_MUST_MATCH: &[&str] = &[
     "see `sdd/ISSUES.md` entry AB for details",
     "see entry AB in `sdd/ISSUES.md`",
     "ISSUES.md lists it as entry BH",
+    // The bare `Issue D` form, with no file name: the measured live instances were code
+    // comments, and a freed ID makes each one point at the next finding to take it.
+    "/// Issue D: this used to retry on a fixed number of idles",
+    "    /// Issue D. A reveal asked for before the list is laid out",
+    "(see issue BK)",
 ];
 
 /// Prose ABOUT the register, which must stay legal: the rule is against citing an ENTRY,
 /// not against naming the file. A check with false positives gets disabled.
 const ISSUES_MUST_NOT_MATCH: &[&str] = &[
+    "the issue I raised yesterday",
     "issues a queue_draw that CLEARS the cache",
     "see sdd/ISSUES.md",
     "the sdd/ISSUES.md TOC lists them",

@@ -48,12 +48,15 @@ carried here as two unrelated entries and was nearly fixed twice before anyone n
 were one thing. Before opening work on an entry, scan the others for the same mechanism
 described from a different vantage point.
 
-**One finding per entry, and IDs never come back.** Assign each new entry the next unused
-ID: `A`–`Z`, then `AA`, `AB`, … `AZ`, `BA`, … Never backfill a gap a deletion or a closure
-leaves, never reuse an ID, never renumber the survivors, and never compact: an ID names one
-finding for as long as the entry lives. (The register once compacted at `Z` and, when one
-release pass filed more findings than the alphabet holds, grouped several under one letter;
-both are retired — a group cannot be triaged or deleted one finding at a time.)
+**One finding per entry; a deleted entry's ID is free again.** Assign each new entry the
+first ID no live entry holds: `A`–`Z`, then `AA`, `AB`, … `AZ`, `BA`, … A fixed entry is
+deleted, and its ID is free from then on (the operator's ruling, 2026-11-17): only Git
+history remembers what it once named. That is safe only because nothing outside this file
+cites an ID. A comment saying "Issue D" that outlives D's fix silently retargets onto the
+next finding to take D, which is why `cargo xtask lint-references` refuses such a
+citation. Never renumber a live entry, and never group several findings under one ID: an
+ID names one finding for as long as that entry lives. Closed entries are the exception
+in the other direction: a `CLSD-dd` number stays in the file and is never reused.
 
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
@@ -75,6 +78,7 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | BW | Any | Production | In the preview, Edit's "Change Case" submenu row draws enabled while all four of its items are greyed | Low |
 | BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 | BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
+| BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
 ## Closed issues
 
@@ -630,6 +634,32 @@ unless the paragraph holds a token too wide for the pane; offer a break opportun
 inside long tokens without changing the copied text; or avoid the attribute path that
 aborts. Any route must keep the no-overflow invariant and must not reopen the
 screen-reader abort.
+
+## BZ. The editor colours a task item's caption as link text when a link follows
+
+**Severity**: Low–Medium (colour only; the file and the preview are correct, but every task
+item that holds a link reads wrongly in the editor).
+
+**Observed** (2026-11-17, operator, 1.0.0): in the editor,
+`- [ ] This is an incorrectly colored caption preceding [a link that is here, that is correctly colored](http://www.example.com)`
+colours the caption as link text.
+
+**Cause** (ANALYSED from the language file, not yet measured in the app): the editor uses
+GtkSourceView's stock `markdown` language (`window::tabs::lifecycle`,
+`LanguageManager::default().language("markdown")`). Its `inline-link` context matches
+`\[(.*?)\]\(`, and a lazy `.*?` still starts at the FIRST `[` on the line, so the match runs
+from the task box `[ ]` through the link's `](`. Any earlier bracket on the line does the
+same. The rule is identical in GtkSourceView 5.4.1 (Linux build host) and in the GNOME 46
+runtime's copy, so newer GtkSourceView does not fix it, and the bundled Windows and macOS
+runtimes are presumed to carry it too.
+
+**Upstream evidence**: no ticket searched yet (2026-11-17). Search GtkSourceView's issue
+tracker for the `inline-link` rule and file one if none exists.
+
+**Fix direction**: ship a corrected `markdown` language definition that excludes brackets
+from the link text (`\[([^\[\]]*)\]`), and put its directory first in the
+LanguageManager's search path. That makes it a vendored copy of an LGPL file, with a
+licence notice and an obligation to follow upstream. Alternatively, patch upstream and wait.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

@@ -80,7 +80,12 @@ pub fn issues_rx() -> &'static Regex {
         // holds the measured lines; quoting them here would trip this very check.
         // `[^.]` bounds each to one sentence. The separator also takes the typographic apostrophe `’`, which
         // `sdd/TDD.md` uses, and the description form an adjective before its noun.
-        r#"\bISSUES(\.md)?((?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?[A-Z]{1,2}[0-9]*\b|(?:[ .:_,(`"*-]|['’]s?)*#[A-Z]+[0-9]*\b|[ .:_,(`*-]+"[^"]+"|(?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?(entry|item|issue) (on|about|for|covering|describing)\b|[^.]{0,40}\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b)|\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b[^.]{0,40}\bISSUES|\bentry (in|of) [^.]{0,20}ISSUES|\bCLSD-[0-9]+\b"#,
+        //
+        // The bare form (the word Issue, a letter, a colon) needs no `ISSUES`: three comments
+        // cited a fixed entry that way, unseen, and the register frees a deleted ID for
+        // the next finding, so such a comment retargets silently. It requires trailing
+        // punctuation, so prose like "the issue I raised" stays legal.
+        r#"\bISSUES(\.md)?((?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?[A-Z]{1,2}[0-9]*\b|(?:[ .:_,(`"*-]|['’]s?)*#[A-Z]+[0-9]*\b|[ .:_,(`*-]+"[^"]+"|(?:[ .:_,(`"*-]|['’]s?)*([a-z]+ )?(entry|item|issue) (on|about|for|covering|describing)\b|[^.]{0,40}\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b)|\b(entry|item|issue) [A-Z]{1,2}[0-9]*\b[^.]{0,40}\bISSUES|\bentry (in|of) [^.]{0,20}ISSUES|\b[Ii]ssue [A-Z]{1,2}[0-9]*[:.,;)]|\bCLSD-[0-9]+\b"#,
     )
 }
 

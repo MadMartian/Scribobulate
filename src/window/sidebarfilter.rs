@@ -1150,7 +1150,7 @@ mod gtk_integration_tests {
             Some((target, true)),
             "the focus returns to the highlighted row, which stays the selected one"
         );
-        // Issue D: on CI this has failed three times with the list reading "value 0,
+        // On CI this once failed three times with the list reading "value 0,
         // upper 0, page 0" — never laid out when read, the focus already back on the
         // right row. So wait for layout before judging the scroll, and say how long it
         // took: a laid-out list still at the top is the product failing, not the test.
