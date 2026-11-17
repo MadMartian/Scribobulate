@@ -479,7 +479,14 @@ fn build_edit_menu() -> Menu {
     change_case.append(Some(&mnem("lower case")), Some("win.change-case::lower"));
     change_case.append(Some(&mnem("Title Case")), Some("win.change-case::title"));
     change_case.append(Some(&mnem("tOGGLE cASE")), Some("win.change-case::toggle"));
-    editor_section.append_submenu(Some(&mnem("Change Case")), &change_case);
+    // A submenu row has no action of its own, so GTK draws it enabled whatever its items
+    // say. Naming `win.change-case-available` (the no-parameter twin of `win.change-case`,
+    // which cannot back a row that has no string target) makes the tracker grey the row
+    // with its items, on the menu bar and on macOS's exported menu alike. No `hidden-when`:
+    // the row greys like its siblings and is never removed.
+    let change_case_row = MenuItem::new_submenu(Some(&mnem("Change Case")), &change_case);
+    change_case_row.set_attribute_value("action", Some(&"win.change-case-available".to_variant()));
+    editor_section.append_item(&change_case_row);
     edit_menu.append_section(None, &editor_section);
     edit_menu
 }
@@ -1092,6 +1099,58 @@ mod tests {
             "Play Animations is a direct item, not a nested submenu"
         );
     }
+
+    /// The Change Case submenu row names an action of its own, so it can grey.
+    ///
+    /// A `GMenu` submenu row has no action, and GTK draws such a row enabled whatever its
+    /// items say, so Edit ▸ Change Case sat enabled over four greyed items in the preview.
+    /// The row now carries `win.change-case-available`, a no-parameter twin of
+    /// `win.change-case` (which cannot back the row: it takes a string target the row has
+    /// none of, so GTK would read it as never activatable). Walked off the shipped model,
+    /// never a mirror of it. `hidden-when` is deliberately absent: the row greys like its
+    /// siblings and is never removed.
+    #[test]
+    fn the_change_case_row_names_a_no_parameter_action_and_never_hides() {
+        let edit = build_top_level_menus_with(&crate::theme::Themes::builtin())
+            .menus
+            .into_iter()
+            .find_map(|(title, menu)| (title == "_Edit").then_some(menu))
+            .expect("the Edit menu");
+        let mut row = None;
+        for i in 0..edit.n_items() {
+            let Some(section) = edit.item_link(i, "section") else {
+                continue;
+            };
+            let section: Menu = section.downcast().expect("a section link is a Menu");
+            for j in 0..section.n_items() {
+                if section.item_link(j, "submenu").is_some()
+                    && section
+                        .item_attribute_value(j, "label", None)
+                        .and_then(|v| v.str().map(str::to_string))
+                        .as_deref()
+                        == Some("Chan_ge Case")
+                {
+                    row = Some((section.clone(), j));
+                }
+            }
+        }
+        let (section, j) = row.expect("Edit has a Change Case submenu row");
+        let attr = |name: &str| {
+            section
+                .item_attribute_value(j, name, None)
+                .and_then(|v| v.str().map(str::to_string))
+        };
+        assert_eq!(
+            attr("action").as_deref(),
+            Some("win.change-case-available"),
+            "the Change Case row must name an action, or GTK draws it enabled over greyed items"
+        );
+        assert_eq!(
+            attr("hidden-when"),
+            None,
+            "the row greys; it is never hidden"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -1189,5 +1248,116 @@ mod live_menu_tests {
             None,
             "the DISPLAYED kind must record what the menu shows, not the last request"
         );
+    }
+
+    /// Every `modelbutton` under `root`: `(its text, whether it is sensitive)`.
+    fn model_buttons(root: &gtk::Widget) -> Vec<(String, bool)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(w) = stack.pop() {
+            if w.css_name() == "modelbutton" {
+                let text: Option<String> = w.property("text");
+                out.push((text.unwrap_or_default(), w.is_sensitive()));
+            }
+            let mut c = w.first_child();
+            while let Some(child) = c {
+                c = child.next_sibling();
+                stack.push(child);
+            }
+        }
+        out
+    }
+
+    /// **Edit ▸ Change Case draws as unavailable exactly when its four items are.**
+    ///
+    /// A widget-level check on the shipped Edit model, opened as a `GtkPopoverMenu`
+    /// on a real window so the row resolves `win.` actions through the window's own
+    /// action muxer. (The bar's own popovers are built lazily per item, so the model is
+    /// opened directly; the row's sensitivity is the tracker's, which is the same code on
+    /// the bar and on macOS's exported menu.) Preview: no selection, row and items both
+    /// unavailable. Edit with a selection: both available. The first half is the bug.
+    ///
+    /// Mutation check: dropping the row's `action` attribute leaves the preview row
+    /// sensitive and fails the first assertion.
+    #[gtktest::test]
+    fn the_change_case_row_follows_its_items() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let app = crate::window::testkit::test_app(
+                "com.extollit.scribobulate.integrationtest.changecaserow",
+            );
+            let window = crate::window::new_window(&app, "IT", "# doc\n\nsome text\n", None);
+            window.present();
+            let edit = build_top_level_menus_with(&crate::theme::Themes::builtin())
+                .menus
+                .into_iter()
+                .find_map(|(title, menu)| (title == "_Edit").then_some(menu))
+                .expect("the Edit menu");
+            // Anchored on the window's own content, never swapped in for it: the tabs'
+            // selection handlers resolve their window through that tree.
+            let host = window.child().expect("the window has content");
+            let popover = gtk::PopoverMenu::from_model_full(&edit, gtk::PopoverMenuFlags::NESTED);
+            popover.set_parent(&host);
+            popover.popup();
+            let ctx = glib::MainContext::default();
+            let settle = || {
+                for _ in 0..50 {
+                    while ctx.iteration(false) {}
+                }
+            };
+            settle();
+            let row_and_items = || {
+                let buttons = model_buttons(popover.upcast_ref());
+                let find = |needle: &str| {
+                    buttons
+                        .iter()
+                        .find(|(t, _)| t.contains(needle))
+                        .unwrap_or_else(|| panic!("no menu row {needle:?} in {buttons:?}"))
+                        .1
+                };
+                (find("Change Case"), find("UPPER CASE"))
+            };
+
+            let (row, item) = row_and_items();
+            assert!(
+                !item,
+                "precondition: UPPER CASE is unavailable in the preview"
+            );
+            assert!(
+                !row,
+                "Change Case draws enabled while all four of its items are unavailable"
+            );
+            let sensitive = |name: &str| {
+                window
+                    .lookup_action(name)
+                    .unwrap_or_else(|| panic!("no action {name}"))
+                    .is_enabled()
+            };
+            assert_eq!(
+                sensitive("change-case-available"),
+                sensitive("change-case"),
+                "the row's action must carry the items' own enabled state"
+            );
+
+            crate::window::change_action_state(&window, "view-mode", &"edit".to_variant());
+            let st = crate::winstate::state(&window).expect("state");
+            st.editor_buf.select_range(
+                &st.editor_buf.iter_at_offset(2),
+                &st.editor_buf.iter_at_offset(5),
+            );
+            settle();
+            let (row, item) = row_and_items();
+            assert!(
+                item,
+                "precondition: UPPER CASE is available with a selection"
+            );
+            assert!(row, "Change Case must be available when its items are");
+            assert_eq!(sensitive("change-case-available"), sensitive("change-case"));
+
+            popover.popdown();
+            settle();
+            popover.unparent();
+            window.destroy();
+        });
     }
 }
