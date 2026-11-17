@@ -1656,6 +1656,93 @@ pub(crate) mod gtk_integration_tests {
         );
     }
 
+    /// Shrinking the window until a section reaches its minimum height must not
+    /// overwrite the remembered split, and growing it again brings the split back
+    /// (TDD 20.21).
+    ///
+    /// GtkPaned clamps its position when the window is too short for `shrink=false`
+    /// children, and that clamp arrives as an ordinary `notify::position`. Only a position
+    /// the reader set is theirs to be remembered.
+    #[gtktest::test]
+    fn a_clamp_from_a_short_window_is_not_remembered_as_the_readers_split() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebarclamp");
+        let win = build_window(
+            &app,
+            "IT-clamp",
+            "# H\n\ntext {>>note<<}",
+            None,
+            &WindowInit {
+                chrome: crate::session::ChromeSession {
+                    annotations_visible: true,
+                    sidebar_split: 0.25,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        win.set_default_size(800, 760);
+        win.present();
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        let sidebar = sidebar_paned_of(&ch.outline_scroller);
+        let settle = || {
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(400),
+            )
+        };
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the sidebar is allocated",
+            || sidebar.height() > 0,
+        );
+        settle();
+        let tall = sidebar.height();
+        let quarter = crate::session::sidebar_divider_position(0.25, tall).expect("allocated");
+        assert_eq!(
+            sidebar.position(),
+            quarter,
+            "precondition: restored to 0.25"
+        );
+        let (outline_min, _, _, _) = sidebar
+            .start_child()
+            .expect("outline section")
+            .measure(gtk::Orientation::Vertical, -1);
+
+        // Short enough that a quarter of the sidebar is below the outline's minimum.
+        win.set_default_size(800, 300);
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the window has shrunk",
+            || sidebar.height() > 0 && sidebar.height() * 25 / 100 < outline_min,
+        );
+        settle();
+        assert!(
+            sidebar.position() >= outline_min,
+            "precondition: GTK clamped the divider to the section's minimum \
+             (position {}, minimum {outline_min}, sidebar {}px)",
+            sidebar.position(),
+            sidebar.height()
+        );
+        let stored = read_window_chrome(&win).sidebar_split;
+        assert!(
+            (stored - 0.25).abs() < 0.01,
+            "the clamp from a short window was stored as the reader's split ({stored}, not 0.25)"
+        );
+
+        win.set_default_size(800, 760);
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the window has grown again",
+            || sidebar.height() >= tall,
+        );
+        settle();
+        let restored = sidebar.position() as f64 / sidebar.height() as f64;
+        assert!(
+            (restored - 0.25).abs() < 0.01,
+            "growing the window again did not bring the remembered split back ({restored})"
+        );
+    }
+
     /// The divider cannot take a section away — only its action can (TDD 20.21).
     ///
     /// This is what `shrink_*_child(false)` buys, and it is load-bearing rather than

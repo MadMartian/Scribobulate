@@ -188,24 +188,100 @@ fn restore_sidebar_split(paned: &gtk::Paned, fraction: f64) {
 /// Keep the window's cached divider fraction in step with what the reader dragged, so
 /// `read_window_chrome` has a meaningful value to persist at close (TDD 20.21).
 ///
+/// Only a position the reader set is remembered. When the sidebar's HEIGHT changes, GtkPaned
+/// moves the divider itself — proportionally, or clamped to a section's minimum when the
+/// window is too short — and announces it with the same `notify::position` a drag
+/// produces. GTK offers no flag saying which is which, so the height is the witness: a
+/// divider that moved while the height moved is GTK's doing and is not stored, and the
+/// remembered fraction is applied to the new height instead (which is what brings the
+/// reader's split back when the window grows again). A height change reaches us as
+/// `notify::max-position` (the divider's travel is height minus the end section's
+/// minimum), in either order with the position notify, so both handlers keep `seen_height`
+/// and the `resized` latch consistent whichever comes first.
+///
 /// Reads through `session::sidebar_split_fraction`, which declines to answer for a
 /// hidden or unmapped sidebar — so a toggle that zeroes the sidebar's height cannot
 /// overwrite the remembered split with a degenerate one.
 fn track_sidebar_split(paned: &gtk::Paned) {
-    paned.connect_position_notify(|paned| {
-        let Some(fraction) =
-            crate::session::sidebar_split_fraction(paned.position(), paned.height())
-        else {
-            return;
-        };
-        // Resolve the host window at emission time rather than capturing one: this
-        // widget outlives nothing here, but a captured window would be the GTK4Rs/AP-63
-        // cycle and a stale one after a cross-window move (GTK4Rs/AP-52).
-        if let Some(chrome) = paned
+    use std::cell::Cell;
+    use std::rc::Rc;
+    // The sidebar height the divider was last seen at.
+    let seen_height = Rc::new(Cell::new(0_i32));
+    // Set by the max-position notify of a height change, consumed by the position notify
+    // that follows it within the same allocation, and cleared by the next frame's tick
+    // if none does.
+    let resized = Rc::new(Cell::new(false));
+    // Set while this code moves the divider, so its own notify is not read as a drag.
+    let applying = Rc::new(Cell::new(false));
+
+    fn chrome_of(paned: &gtk::Paned) -> Option<std::rc::Rc<crate::winstate::WindowChrome>> {
+        // Resolve the host window at emission time rather than capturing one: a captured
+        // window would be the GTK4Rs/AP-63 cycle and a stale one after a cross-window
+        // move (GTK4Rs/AP-52).
+        paned
             .root()
             .and_then(|r| r.downcast::<ApplicationWindow>().ok())
             .and_then(|w| winstate::chrome(&w))
-        {
+    }
+
+    {
+        let (seen_height, resized, applying) =
+            (seen_height.clone(), resized.clone(), applying.clone());
+        paned.connect_max_position_notify(move |paned| {
+            let height = paned.height();
+            if height == seen_height.get() {
+                return; // the end section's minimum moved, not the height
+            }
+            seen_height.set(height);
+            resized.set(true);
+            // The latch outlives only the allocation that set it: the next frame's tick
+            // runs after layout, so a position notify that was never coming cannot leave
+            // it set to swallow the reader's next drag.
+            let latch = resized.clone();
+            paned.add_tick_callback(move |_, _| {
+                latch.set(false);
+                gtk::glib::ControlFlow::Break
+            });
+            let Some(chrome) = chrome_of(paned) else {
+                return;
+            };
+            let Some(position) =
+                crate::session::sidebar_divider_position(chrome.sidebar_split.get(), height)
+            else {
+                return;
+            };
+            // Stay inside the divider's travel: a position set past it is accepted as the
+            // property's value while GTK draws something else, and the two then disagree.
+            let (lo, hi) = (paned.min_position(), paned.max_position());
+            let position = if lo <= hi {
+                position.clamp(lo, hi)
+            } else {
+                position
+            };
+            if position != paned.position() {
+                applying.set(true);
+                paned.set_position(position);
+                applying.set(false);
+            }
+        });
+    }
+    paned.connect_position_notify(move |paned| {
+        if applying.get() {
+            return;
+        }
+        let height = paned.height();
+        // A divider that moved while the height moved is GTK's (a clamp, or a
+        // proportional resize), not the reader's.
+        let height_moved = height != seen_height.get();
+        seen_height.set(height);
+        if resized.replace(false) || height_moved {
+            return;
+        }
+        let Some(fraction) = crate::session::sidebar_split_fraction(paned.position(), height)
+        else {
+            return;
+        };
+        if let Some(chrome) = chrome_of(paned) {
             chrome.sidebar_split.set(fraction);
         }
     });
