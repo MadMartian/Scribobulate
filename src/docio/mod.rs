@@ -1023,26 +1023,30 @@ mod tests {
     /// with `screen_name` disabled, `nul.md` reads as `Loaded` (empty), and the write
     /// fails only as "Incorrect function.", which names no reason.
     ///
-    /// On Linux and macOS `nul.md` is an ordinary file, and that is asserted instead:
-    /// the screen must not refuse a legitimate name on a host where it is one.
+    /// **The filesystem decides what is expected, not a name rule (ISSUES BT).** Each
+    /// name is first written unscreened ([`content::host_makes_a_file_of`]): where that
+    /// made a file — Linux, macOS, and reportedly Windows 11 for a device name with an
+    /// extension — the app must open it like any other file; where the write vanished
+    /// into the device — Windows 10 — it must refuse. A rule that refused `nul.md` on a
+    /// Windows that makes it a file fails here, and so does one that admitted it on a
+    /// Windows that does not.
     #[test]
     fn a_windows_device_name_is_refused_before_it_is_opened() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nul.md");
-        if !cfg!(windows) {
-            std::fs::write(&path, "# ordinary\n").unwrap();
-            let doc = describe(&path, title_for(&path), read(&path));
-            assert_eq!(doc.source, "# ordinary\n", "nul.md is a file on this host");
-            assert_eq!(doc.backing.as_deref(), Some(path.as_path()));
-            return;
-        }
-
         // Variants a careless rule would miss: case, a trailing dot, and a COM port
         // that does not exist here (pre-fix, that one read as Missing — a NEW document
         // whose first save would address the port). No CON or CONIN$: unscreened, a
         // read of those would open the test process's own console.
+        let mut devices = 0;
         for name in ["nul.md", "NUL.MD.", "com9.md"] {
+            let dir = tempfile::tempdir().unwrap();
             let p = dir.path().join(name);
+            if content::host_makes_a_file_of(&p, "# ordinary\n") {
+                let doc = describe(&p, title_for(&p), read(&p));
+                assert_eq!(doc.source, "# ordinary\n", "{name} is a file on this host");
+                assert!(doc.backing.is_some(), "{name} opens with a backing path");
+                continue;
+            }
+            devices += 1;
             match read(&p) {
                 DocRead::Refused(Refusal::DeviceName { .. }) => {}
                 other => panic!(
@@ -1050,6 +1054,15 @@ mod tests {
                     DebugRead(&other)
                 ),
             }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nul.md");
+        if content::host_makes_a_file_of(&path, "# ordinary\n") {
+            assert_eq!(
+                devices, 0,
+                "nul.md is a file here, so none of its variants is a device"
+            );
+            return;
         }
         let doc = describe(&path, "t".into(), read(&path));
         assert!(

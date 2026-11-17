@@ -25,6 +25,7 @@
 //! | [`process`] | Windows has no `/proc` and no `proc_pidpath`, so crash recovery cannot otherwise tell whether a snapshot's owner is still running. |
 //! | [`folder_identity`] | GIO's Win32 file monitor is bound to the folder it opened, not to its path, so a folder deleted or moved away and recreated leaves live reload watching nothing. |
 //! | [`unc_monitor`] | GIO's Win32 file monitor spells a UNC folder in a form `CreateFileW` refuses, and returns a monitor that never fires, so a document opened from a share would never live-reload. |
+//! | [`device_name`] | Whether a filename names a device **depends on the Windows release** (Windows 10 reserves `nul.md`; newer releases reportedly do not), so only Windows can say which names are devices on the host it is running on. |
 //! | [`script_fallback`] | Pango's Win32 font map falls back only through its own alias table, whose generic families name no Korean face a stock Windows installs, so the PDF export drew Hangul as tofu where the preview did not; and Segoe UI's table reaches MS UI Gothic's bitmap `▶` (a speck) before any symbol face, so a themed disclosure glyph drew as one; and `serif`'s table takes a combining mark its lead face Georgia lacks to MS Gothic in a run of its own, so `n` + U+0303 drew its tilde detached. |
 //!
 //! Note that `frame` and `appearance` are two causes and not one, though they meet at
@@ -50,6 +51,7 @@
 
 pub(crate) mod appearance;
 pub(crate) mod crash;
+pub(crate) mod device_name;
 pub(crate) mod folder_identity;
 pub(crate) mod frame;
 pub(crate) mod privacy;
@@ -63,6 +65,7 @@ pub(crate) mod unc_monitor;
 // children is therefore a local edit, not a tree-wide rename — which is what keeps the
 // cause-based boundaries above cheap enough to honour.
 pub(crate) use appearance::track_system_dark_mode;
+pub(crate) use device_name::device_behind_name;
 pub(crate) use folder_identity::folder_identity;
 pub(crate) use frame::{
     sync_caption_theme, take_native_frame, track_caption_theme, track_maximized_size,

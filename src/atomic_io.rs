@@ -807,13 +807,19 @@ mod tests {
     /// addresses the device. Mutation: with the screen in `stage` removed, the write
     /// fails, if at all, without naming the device, and `stage_publish` succeeds.
     ///
-    /// Off Windows these are ordinary names and are written normally.
+    /// Which names are devices is the filesystem's answer, not a name rule's (ISSUES
+    /// BT): where an unscreened write makes a file — off Windows, and reportedly on
+    /// Windows 11 for a device name with an extension — these are ordinary names and are
+    /// written normally.
     #[test]
     fn a_windows_device_name_is_refused_before_anything_is_staged() {
-        let dir = tempfile::tempdir().unwrap();
         for name in ["nul.html", "NUL.PDF", "com9.html"] {
+            let probe = tempfile::tempdir().unwrap();
+            let is_file =
+                crate::docio::content::host_makes_a_file_of(&probe.path().join(name), "probe");
+            let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(name);
-            if !cfg!(windows) {
+            if is_file {
                 write_atomic(&path, "<p>ordinary</p>").unwrap();
                 assert_eq!(std::fs::read_to_string(&path).unwrap(), "<p>ordinary</p>");
                 let staged = stage_publish(&path).unwrap_or_else(|e| panic!("{name}: {e}"));

@@ -218,6 +218,11 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
     let generation = RESTORE_GENERATION.get(view).unwrap_or(0).wrapping_add(1);
     RESTORE_GENERATION.set(view, generation);
     let current = move |view: &TextView| RESTORE_GENERATION.get(view) == Some(generation);
+    // And the reader stands every restore down: the idle below cannot run until GTK has
+    // laid the whole document out — seconds, on a large one — and a reader who clicked
+    // or pressed a key meanwhile is somewhere this restore must not drag them from
+    // (ISSUES BK: Ctrl+End, a click mid-document, then this restore's line 0).
+    let place = crate::farscroll::ReaderPlace::of(view);
     RESTORE_IN_FLIGHT.set(view, Some(line));
     let settle_or_drop = move |view: &TextView, landed: bool| {
         if current(view) {
@@ -236,9 +241,9 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
         let (Some(view), Some(sw)) = (view_weak.upgrade(), sw_weak.upgrade()) else {
             return; // widget dropped before the idle ran
         };
-        if !view.is_realized() || !current(&view) {
+        if !view.is_realized() || !current(&view) || !place.still_holds(&view) {
             settle_or_drop(&view, false);
-            return; // torn down, not yet on screen, or superseded — nothing to scroll
+            return; // torn down, superseded, or the reader has moved — nothing to scroll
         }
         // **The allocation gate the preview's twin has** (`CodePreviewView::run_scroll_work`):
         // mapped is not allocated, and a `scroll_to_mark` issued before the first layout
@@ -261,6 +266,7 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
                 if !view.is_realized()
                     || !view.is_mapped()
                     || !current(view)
+                    || !place.still_holds(view)
                     || gtk::glib::monotonic_time() >= deadline
                 {
                     settle_or_drop(view, false);
@@ -562,6 +568,10 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
     // `notify::upper` passes and a `re_render` (`set_buffer`) in between can orphan the
     // mark, so resolution must be membership-gated (GTK4Rs/AP-89) via the one safe path.
     let bmark = crate::saferizer::buffer_mark::BufferMark::new(mark, &buffer);
+    // The reader stands it down too: it re-applies on every validation step for as long
+    // as the layout takes, and a reader who clicks or presses a key meanwhile must not be
+    // dragged on to the line it was issued for (ISSUES BK).
+    let place = crate::farscroll::ReaderPlace::of(view);
 
     // `apply` tracks the target line's top-y DOWN as heights validate top→down;
     // returns true once settled (landed on the target, or clamped at the bottom).
@@ -612,6 +622,10 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
         };
         if !restore_is_current(generation, FAR_RESTORE_GENERATION.get(&view)) {
             return true; // superseded — its successor owns the adjustment now
+        }
+        if !place.still_holds(&view) {
+            FAR_RESTORE_IN_FLIGHT.set(&view, None);
+            return true; // the reader has moved: the viewport is theirs now
         }
         let settled = step();
         if settled {
@@ -865,6 +879,122 @@ mod gtk_integration_tests {
             sw.vadjustment().value(),
             0.0,
             "the restore idle scrolled a destroyed view instead of declining"
+        );
+    }
+
+    /// **A pending editor restore stands down once the reader has moved the caret
+    /// (ISSUES BK, TDD 9.33).**
+    ///
+    /// The defect: switching to the editor on a large document issues a restore of the
+    /// reader's place (the top, on a document just opened), and its idle runs at
+    /// `DEFAULT_IDLE`, which GTK's validation idles starve until the whole document is
+    /// laid out. MEASURED on Windows (`large-doc.md`, 2026-11-17): the reader pressed
+    /// Ctrl+End and clicked mid-document at 0.43 s, the restore ran when the layout
+    /// finished at 2.6-3.7 s, and its `scroll_to_mark` took the view to line 1 with
+    /// the caret still on the clicked line. Linux lays the document out in under 0.1 s,
+    /// so the restore ran before anyone could click.
+    ///
+    /// Deterministic on every platform: a priority-200 idle cannot run before
+    /// validation finishes (`farscroll::after_line_heights_validated` rests on the same
+    /// fact), so however fast the platform lays out, the reader's scroll and click land
+    /// while the restore is pending — asserted, by its mark not existing yet. Without
+    /// the fix the restore then animates the view to the top and the clicked line,
+    /// four pages down, leaves the screen.
+    #[gtktest::test]
+    fn a_pending_editor_restore_stands_down_once_the_reader_has_clicked() {
+        use crate::testpump::{drain_for, until_for, Clock};
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
+        let body: String = (0..20_000)
+            .map(|i| format!("Line {i} — {}\n", "lorem ipsum dolor sit amet ".repeat(4)))
+            .collect();
+        let (buffer, view) = crate::window::build_tab_editor(&body);
+        let sw = ScrolledWindow::new();
+        sw.set_child(Some(&view));
+        let window = gtk::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&sw));
+        window.present();
+        let adjustment = sw.vadjustment();
+        // Allocated, NOT laid out: letting validation finish first removes the
+        // precondition and the test passes on broken code (GTK4Rs/AP-78).
+        let ctx = gtk::glib::MainContext::default();
+        for _ in 0..200 {
+            ctx.iteration(false);
+            if adjustment.page_size() > 0.0 {
+                break;
+            }
+        }
+        assert!(
+            adjustment.page_size() > 0.0,
+            "precondition: the view is allocated"
+        );
+        let view: TextView = view.upcast();
+
+        // A switch into the editor restores the reader's place: the top.
+        restore_textview_scroll_to_line(&sw, &view, 0);
+        // While it waits, GTK lays the first pages out; the reader can only scroll into
+        // what is laid out. The restore cannot have run yet: its idle is starved until
+        // the whole document is, and it has not created its mark.
+        let page = adjustment.page_size();
+        {
+            let adjustment = adjustment.clone();
+            until_for(
+                Clock::Idle,
+                std::time::Duration::from_secs(30),
+                "the first pages to be laid out",
+                move || adjustment.upper() > page * 8.0,
+            );
+        }
+        assert!(
+            buffer.mark("scrib-scroll-restore").is_none(),
+            "precondition: the restore is still pending when the reader clicks"
+        );
+        // The reader scrolls a few pages down and clicks the first line wholly on
+        // screen, which sets the caret there and scrolls nothing.
+        crate::saferizer::scrollpos::jump(&adjustment, page * 4.0);
+        let visible = view.visible_rect();
+        let (mut iter, line_top) = view.line_at_y(visible.y());
+        if line_top < visible.y() {
+            iter.forward_line();
+        }
+        buffer.place_cursor(&iter);
+        let clicked = iter.line();
+        assert!(
+            adjustment.value() >= page * 2.0,
+            "precondition: the clicked line is pages from the top, so a restore to the \
+             top takes it off screen (value {:.0}, page {page:.0})",
+            adjustment.value()
+        );
+
+        {
+            // Laid out: the range has stopped changing at a document many pages tall.
+            let adjustment = adjustment.clone();
+            let mut last = f64::NAN;
+            let mut unchanged = 0u32;
+            until_for(
+                Clock::Idle,
+                std::time::Duration::from_secs(30),
+                "the document to be laid out",
+                move || {
+                    let upper = adjustment.upper();
+                    unchanged = if upper == last { unchanged + 1 } else { 0 };
+                    last = upper;
+                    upper > adjustment.page_size() * 20.0 && unchanged >= 200
+                },
+            );
+        }
+        // Long past GTK's ~200 ms scroll animation.
+        drain_for(Clock::Frame, std::time::Duration::from_millis(1_500));
+
+        let (y, h) = view.line_yrange(&buffer.iter_at_mark(&buffer.get_insert()));
+        let visible = view.visible_rect();
+        let shown = h > 0 && y < visible.y() + visible.height() && y + h > visible.y();
+        let (top, value) = (view.line_at_y(visible.y()).0.line(), adjustment.value());
+        window.destroy();
+        assert!(
+            shown,
+            "the reader clicked line {clicked} while a restore to the top was pending; the \
+             restore must stand down, but the view shows top line {top} (value {value:.0})"
         );
     }
 
