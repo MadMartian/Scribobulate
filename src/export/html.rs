@@ -72,11 +72,18 @@ pub(crate) fn render(doc: &ExportDoc, palette: &Palette, theme: &Theme) -> Strin
             } else {
                 format!("<p>{}</p>", escape(&ann.comment))
             };
-            let _ = writeln!(
-                out,
-                "<li><blockquote class=\"claim\">{}</blockquote>{comment}</li>",
-                escape(&ann.claim),
-            );
+            // A comment with no claim (a point comment) is the mirror case: the preview's
+            // card shows the comment alone, so the row is the comment alone, never an
+            // empty quote.
+            let quote = if ann.claim.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<blockquote class=\"claim\">{}</blockquote>",
+                    escape(&ann.claim)
+                )
+            };
+            let _ = writeln!(out, "<li>{quote}{comment}</li>");
         }
         out.push_str("</ol>\n</section>\n");
     }
@@ -316,7 +323,7 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
     for inline in inlines {
         match inline {
             Inline::Text { text, .. } => out.push_str(&escape(text)),
-            Inline::Code(c) => {
+            Inline::Code { text: c, .. } => {
                 let _ = write!(out, "<code>{}</code>", escape(c));
             }
             Inline::Emphasis(v) => wrap(out, "em", "", v, page),
@@ -2205,6 +2212,61 @@ mod html_sink_tests {
             "{out}"
         );
         assert!(!out.contains("<p></p>"), "{out}");
+    }
+
+    /// TDD 25.13 (the highlight covers exactly the annotated characters): inline code
+    /// inside a claim is highlighted with the words around it.
+    #[test]
+    fn inline_code_inside_a_claim_is_highlighted() {
+        let out = html_of("{==see `code` here==}{>>c<<}\n");
+        assert!(
+            out.contains("claim\"><code>code</code>")
+                || out.contains("claim-1\"><code>code</code>"),
+            "`code` sits outside every claim span: {out}"
+        );
+    }
+
+    /// TDD 25.13: the comment follows its whole claim, including a closing code span.
+    #[test]
+    fn a_claim_ending_in_inline_code_puts_its_aside_after_the_code() {
+        let out = html_of("{==ends in `code`==}{>>c<<}\n");
+        let code = out.find("<code>code</code>").expect(&out);
+        let aside = out.find("<aside").expect(&out);
+        assert!(code < aside, "aside precedes the code: {out}");
+        assert_eq!(out.matches("<aside").count(), 1, "{out}");
+        assert_eq!(out.matches("id=\"claim-1\"").count(), 1, "{out}");
+    }
+
+    /// TDD 25.13 / 17.67: a comment with no claim is in the body as an aside and in the
+    /// summary as its comment alone (the preview shows a marker and a card with the
+    /// comment and no claim) -- never as a row with an empty quote.
+    #[test]
+    fn a_claimless_comment_is_in_the_body_and_the_summary_without_an_empty_quote() {
+        let out = html_of("First words. {>>a note<<}\n\nSecond.\n");
+        let body = &out[..out.find("<section class=\"annotations\">").expect(&out)];
+        assert!(body.contains("<aside class=\"comment\">"), "{out}");
+        let (first, second) = (
+            body.find("First words.").unwrap(),
+            body.find("Second.").unwrap(),
+        );
+        let aside = body.find("<aside").unwrap();
+        assert!(first < aside && aside < second, "aside misplaced: {out}");
+        assert!(out.contains("<li><p>a note</p></li>"), "{out}");
+        assert!(
+            !out.contains("<blockquote class=\"claim\"></blockquote>"),
+            "{out}"
+        );
+        assert_eq!(out.matches("id=\"claim-1\"").count(), 1, "{out}");
+    }
+
+    /// 17.68: a comment on a line of its own above a paragraph is placed with that paragraph.
+    #[test]
+    fn a_claimless_comment_above_a_paragraph_is_exported_with_that_paragraph() {
+        let out = html_of("First.\n\n{>>about next<<}\nSecond.\n");
+        let body = &out[..out.find("<section class=\"annotations\">").expect(&out)];
+        let aside = body.find("about next").expect(&out);
+        assert!(body.find("First.").unwrap() < aside, "{out}");
+        assert_eq!(body.matches("<aside").count(), 1, "{out}");
     }
 
     /// TDD 18.21 / 25.3 — the artefact shows the per-level heading colour and face the

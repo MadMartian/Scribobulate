@@ -4419,6 +4419,8 @@ up doing.
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
 - **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
 - **And** a bare highlight (17.67) is exported highlighted and listed by its claim alone: it has no comment, so it gets no aside or margin note and no empty paragraph in the summary
+- **And** inline code inside a claim is highlighted with the text around it, and a comment follows the whole claim, including a claim that ends in inline code
+- **And** a comment with no claim (`{>>a note<<}`) is exported where the preview puts its margin marker, as an aside or margin note with no highlight, and the HTML summary lists it by its comment alone, with no empty quote
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export

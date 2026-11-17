@@ -207,7 +207,12 @@ pub(crate) enum Inline {
         text: String,
         span: (i32, i32),
     },
-    Code(String),
+    /// An inline code span, with the rendered char range it occupies, counted exactly
+    /// as [`Inline::Text::span`] is, so an annotation's claim can cover it.
+    Code {
+        text: String,
+        span: (i32, i32),
+    },
     Emphasis(Vec<Inline>),
     Strong(Vec<Inline>),
     Strikethrough(Vec<Inline>),
@@ -273,7 +278,7 @@ impl Inline {
             | Inline::Claim { inner: v, .. } => Some(v),
             // Leaves. Listed, never `_`.
             Inline::Text { .. }
-            | Inline::Code(_)
+            | Inline::Code { .. }
             | Inline::Image(_)
             | Inline::Break
             | Inline::Anchor(_) => None,
@@ -292,7 +297,7 @@ impl Inline {
             | Inline::Link { inner: v, .. }
             | Inline::Claim { inner: v, .. } => Some(v),
             Inline::Text { .. }
-            | Inline::Code(_)
+            | Inline::Code { .. }
             | Inline::Image(_)
             | Inline::Break
             | Inline::Anchor(_) => None,
@@ -407,7 +412,7 @@ fn collect_text(inlines: &[Inline], out: &mut String) {
     for inline in inlines {
         match inline {
             Inline::Text { text, .. } => out.push_str(text),
-            Inline::Code(c) => out.push_str(c),
+            Inline::Code { text: c, .. } => out.push_str(c),
             Inline::Break => out.push(' '),
             Inline::Anchor(_) => {}
             Inline::Image(img) => out.push_str(&img.alt),
