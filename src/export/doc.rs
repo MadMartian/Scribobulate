@@ -64,6 +64,20 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
             ann.cleaned_content.start.raw(),
             ann.cleaned_content.end.raw(),
         );
+        if ann.kind == crate::annotate::AnnKind::Comment {
+            // A point comment has no claim to highlight, so the mapper below has nothing
+            // to map. It is placed where the preview puts its margin marker (the same
+            // anchor), as an EMPTY claim: no highlight, but the comment's aside or margin
+            // note and the anchor its back-link needs. It used to be dropped here, so it
+            // reached neither body nor (usefully) the summary.
+            let anchor = crate::annotate::chip_anchor(normalised.as_str(), ann);
+            place_point_comment(&mut doc.blocks, idx, cleaned, anchor, &content_evs);
+            doc.annotations.push(ExportAnnotation {
+                comment: ann.comment.clone().unwrap_or_default(),
+                claim: String::new(),
+            });
+            continue;
+        }
         // The SAME mapper the preview places its claim highlight with, so the extent
         // obligation (Document Rendering CAM row 3) is satisfied by one implementation
         // rather than two that agree today.
@@ -82,6 +96,130 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         });
     }
     doc
+}
+
+/// Put an empty, tail [`Inline::Claim`] carrying annotation `idx` at the rendered
+/// position the cleaned byte `anchor` falls at: inside the content event holding it, else
+/// right after the nearest event before it, else before the first event after it.
+/// Left out (the annotation is still listed) only where no inline text is nearby, such as
+/// a comment inside a code block.
+fn place_point_comment(
+    blocks: &mut [Block],
+    idx: usize,
+    cleaned: &str,
+    anchor: usize,
+    evs: &[(usize, usize, i32, i32)],
+) {
+    let containing = evs.iter().find(|&&(s, e, _, _)| s <= anchor && anchor < e);
+    let (pos, after) = if let Some(&(s, e, before, after)) = containing {
+        let run = cleaned.get(s..e).unwrap_or("");
+        let head = cleaned.get(s..anchor).unwrap_or("");
+        // Char-precise only where the run rendered 1:1; otherwise the run's start.
+        let exact = run.chars().count() as i32 == after - before;
+        (
+            if exact {
+                before + head.chars().count() as i32
+            } else {
+                before
+            },
+            false,
+        )
+    } else if let Some(&(_, _, _, after)) = evs.iter().rev().find(|&&(_, e, _, _)| e <= anchor) {
+        (after, true)
+    } else if let Some(&(_, _, before, _)) = evs.first() {
+        (before, false)
+    } else {
+        return;
+    };
+    for block in blocks.iter_mut() {
+        if insert_point(block, idx, pos, after) {
+            return;
+        }
+    }
+}
+
+fn insert_point(block: &mut Block, idx: usize, pos: i32, after: bool) -> bool {
+    match block {
+        Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+            insert_point_inlines(inlines, idx, pos, after)
+        }
+        Block::BlockQuote(inner) => inner.iter_mut().any(|b| insert_point(b, idx, pos, after)),
+        Block::Disclosure { body, .. } => body.iter_mut().any(|b| insert_point(b, idx, pos, after)),
+        Block::List { items, .. } => items.iter_mut().any(|i| {
+            i.blocks
+                .iter_mut()
+                .any(|b| insert_point(b, idx, pos, after))
+        }),
+        Block::Table { head, rows, .. } => {
+            head.iter_mut()
+                .any(|c| insert_point_inlines(c, idx, pos, after))
+                || rows.iter_mut().any(|r| {
+                    r.iter_mut()
+                        .any(|c| insert_point_inlines(c, idx, pos, after))
+                })
+        }
+        Block::CodeBlock { .. } | Block::Rule => false,
+    }
+}
+
+fn point_marker(idx: usize) -> Inline {
+    Inline::Claim {
+        idx,
+        tail: true,
+        inner: Vec::new(),
+    }
+}
+
+/// Insert the marker at rendered position `pos` among a run of inlines (descending into
+/// nesting), splitting a text run when `pos` is inside it. At a boundary between two
+/// leaves `after` picks the earlier one's end, else the later one's start.
+fn insert_point_inlines(inlines: &mut Vec<Inline>, idx: usize, pos: i32, after: bool) -> bool {
+    let mut i = 0;
+    while i < inlines.len() {
+        let (ts, te) = match &inlines[i] {
+            Inline::Text { span, .. } | Inline::Code { span, .. } => *span,
+            _ => {
+                if let Some(nested) = inlines[i].nested_mut() {
+                    if insert_point_inlines(nested, idx, pos, after) {
+                        return true;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+        };
+        if after && te == pos {
+            inlines.insert(i + 1, point_marker(idx));
+            return true;
+        }
+        if !after && ts == pos {
+            inlines.insert(i, point_marker(idx));
+            return true;
+        }
+        if ts < pos && pos < te {
+            if let Inline::Text { text, .. } = &inlines[i] {
+                let chars: Vec<char> = text.chars().collect();
+                let k = (pos - ts) as usize;
+                let (a, b): (String, String) =
+                    (chars[..k].iter().collect(), chars[k..].iter().collect());
+                inlines[i] = Inline::Text {
+                    text: a,
+                    span: (ts, pos),
+                };
+                inlines.insert(i + 1, point_marker(idx));
+                inlines.insert(
+                    i + 2,
+                    Inline::Text {
+                        text: b,
+                        span: (pos, te),
+                    },
+                );
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// The claim's own text as the page shows it ([`crate::annotate::plain_claim`], the
@@ -302,6 +440,44 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
                 if !after.is_empty() {
                     out.push(Inline::Text {
                         text: after,
+                        span: (oe, te),
+                    });
+                }
+            }
+            // A code span is a leaf with a rendered extent, like a text run, and the
+            // claim covers it the same way: it was left out of this pass, so
+            // `{==see `code` here==}` highlighted `see` and `here` and not `code`, and the
+            // tail fragment (which carries the comment) fell before it.
+            Inline::Code { text, span } => {
+                let (ts, te) = span;
+                let (os, oe) = (rs.max(ts), re.min(te));
+                if os >= oe {
+                    out.push(Inline::Code { text, span });
+                    continue;
+                }
+                let chars: Vec<char> = text.chars().collect();
+                let cut = |a: i32, b: i32| -> String {
+                    chars[(a - ts).max(0) as usize..(b - ts).max(0) as usize]
+                        .iter()
+                        .collect()
+                };
+                if os > ts {
+                    out.push(Inline::Code {
+                        text: cut(ts, os),
+                        span: (ts, os),
+                    });
+                }
+                out.push(Inline::Claim {
+                    idx,
+                    tail: false,
+                    inner: vec![Inline::Code {
+                        text: cut(os, oe),
+                        span: (os, oe),
+                    }],
+                });
+                if oe < te {
+                    out.push(Inline::Code {
+                        text: cut(oe, te),
                         span: (oe, te),
                     });
                 }
@@ -862,6 +1038,51 @@ mod export_doc_tests {
         assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
         assert_eq!(doc.annotations[0].comment, "");
         assert_eq!(doc.annotations[0].claim, "claim");
+    }
+
+    #[test]
+    fn a_claim_covers_inline_code_it_contains() {
+        let doc = doc_of("{==see `code` here==}{>>c<<}\n");
+        let Some(Block::Paragraph(v)) = doc.blocks.first() else {
+            panic!("{:?}", doc.blocks);
+        };
+        let claimed: String = v
+            .iter()
+            .filter_map(|i| match i {
+                Inline::Claim { inner, .. } => Some(crate::export::plain_text(inner)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(claimed, "see code here", "{v:?}");
+        assert!(
+            matches!(v.last(), Some(Inline::Claim { tail: true, .. })),
+            "the tail fragment must close the claim: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_claimless_comment_is_one_listed_annotation_placed_in_the_body() {
+        let doc = doc_of("First words. {>>a note<<}\n");
+        assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
+        assert_eq!(doc.annotations[0].comment, "a note");
+        assert_eq!(doc.annotations[0].claim, "");
+        let Some(Block::Paragraph(v)) = doc.blocks.first() else {
+            panic!("{:?}", doc.blocks);
+        };
+        let tails = v
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i,
+                    Inline::Claim {
+                        idx: 0,
+                        tail: true,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(tails, 1, "the comment is absent from the body: {v:?}");
     }
 
     #[test]

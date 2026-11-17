@@ -263,7 +263,10 @@ impl<'a> Builder<'a> {
                 self.rendered += c.chars().count() as i32;
                 self.content_evs
                     .push((src.start, src.end, before, self.rendered));
-                self.push_inline(Inline::Code(c.to_string()));
+                self.push_inline(Inline::Code {
+                    text: c.to_string(),
+                    span: (before, self.rendered),
+                });
             }
             // CommonMark line breaks, as the preview renders them (TDD 2.20): a soft
             // break is a space, a hard break the one `Inline::Break` a sink draws as a

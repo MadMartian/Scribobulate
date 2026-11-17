@@ -177,7 +177,7 @@ fn push_inlines(inlines: &[Inline], out: &mut String) {
     for inline in inlines {
         match inline {
             Inline::Text { text, .. } => out.push_str(text),
-            Inline::Code(code) => out.push_str(code),
+            Inline::Code { text: code, .. } => out.push_str(code),
             Inline::Break => out.push('\n'),
             Inline::Anchor(_) => {}
             // Alt text describes an image; it is not prose on the page.
