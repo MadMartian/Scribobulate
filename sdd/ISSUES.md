@@ -70,7 +70,6 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
-| BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
 | BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 | BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
@@ -517,20 +516,6 @@ as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` 
 `COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
 matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
 directory, and the app must open it if the directory lists it and refuse it otherwise.
-
-## BU. The Annotate-card resize-flip test misses its precondition under load
-
-**Severity**: Low (test-only; passes on re-run and 3 of 3 alone).
-
-**Observed** (2026-11-16, Linux, full GTK suite through `scripts/run-integration.sh`):
-`preview::annotate::overlay::resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it`
-panicked at its precondition "the resize must move the word up to where the card has no
-room above it": word top 105 → 45, card height 41. The word stopped right at the
-boundary of the card's height plus its gap, so the fixture leaves no margin. Run alone,
-3 of 3 pass.
-
-**Fix direction**: give the fixture a resize that moves the word well past the boundary,
-rather than relaxing the precondition.
 
 ## BX. Export is enabled with two refused documents open
 
