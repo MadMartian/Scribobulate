@@ -891,6 +891,56 @@ fn the_recovery_notice_follows_the_active_tab() {
     });
 }
 
+/// A recovery into a tab that is not in front badges that tab's own strip label at once.
+///
+/// The dirty indicator hangs off `refresh_dirty_status`, which recomputes the ACTIVE
+/// tab's label; the recovered tab is not the active one, so without a refresh aimed at
+/// the tab itself its unsaved dot only appeared once the user selected it.
+#[gtktest::test]
+fn a_recovered_background_tab_shows_its_unsaved_dot_without_being_selected() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let app =
+            super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.rec24");
+        let win = new_window(&app, "IT", "first", None);
+        let recovered = winstate::state(&win).expect("a tab");
+        let doc_id = DocId::generate();
+        recovered.adopt_doc_id(doc_id.clone());
+        seed_swap(dir.path(), &header(doc_id, None, b"first"), "first, edited");
+
+        // A second tab takes the front; the one to be recovered is now in the background.
+        let other = create_tab_in_window(&win, "unrelated", None, false, false)
+            .and_then(winstate::tab_by_id)
+            .expect("a second tab");
+        let chrome = winstate::chrome(&win).expect("chrome");
+        assert_eq!(
+            winstate::state(&win).map(|t| t.id),
+            Some(other.id),
+            "precondition: the recovered tab is not the active one"
+        );
+
+        gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
+
+        assert!(recovered.is_dirty(), "precondition: the recovery applied");
+        let label = chrome
+            .tabs
+            .tab_label_text(&recovered.content_box)
+            .expect("a label");
+        assert!(
+            label.contains('•'),
+            "the background tab's label shows the unsaved dot without activation, got {label:?}"
+        );
+        assert!(
+            !chrome
+                .tabs
+                .tab_label_text(&other.content_box)
+                .expect("a label")
+                .contains('•'),
+            "and the unrecovered tab stays clean"
+        );
+    });
+}
+
 /// **The preview must show the recovered text, not the pre-crash file.**
 ///
 /// This asserts `source` — the text every *derived* view renders from — and not

@@ -6,13 +6,29 @@
 
 use crate::icons::Icon;
 
-pub(crate) const WELCOME: &str = r#"# Scribobulate
+pub(crate) const WELCOME: &str = r#"# Welcome to Scribobulate!
 
-A native Markdown viewer/editor. Open a file to begin:
+We're so glad you're here. Make yourself at home: this page is yours to read, scribble
+on, or toss away. Nothing is saved unless you ask.
 
-```sh
-scribobulate path/to/document.md
-```
+## A few ways to settle in
+
+- **Open a document** with File ▸ Open, or hand one over from a terminal:
+
+  ```sh
+  scribobulate path/to/document.md
+  ```
+
+- **Write beside the finished page.** View ▸ Side by Side puts the editor and the
+  preview next to each other, and the preview follows along as you type.
+- **Leave a note for whoever reads next.** Select some text and choose Edit ▸ Annotate.
+  Your comment lives right inside the Markdown, so it travels with the file, and any
+  person or agent who opens it will find it there.
+- **Let your agents get to work.** When something rewrites an open file, the page
+  refreshes on its own, and your unsaved edits are never quietly overwritten.
+- **Find your way around.** Press F1 whenever you like for every keyboard shortcut.
+
+Happy writing, and thank you for stopping by!
 "#;
 
 // ── command descriptor table (single source of truth for labels/accels/icons) ─

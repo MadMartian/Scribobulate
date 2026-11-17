@@ -519,19 +519,18 @@ mod gtk_integration_tests {
             &crate::fold::FoldState::default(),
         );
         let view = crate::preview::view_of(&widget).expect("the preview tree render() built");
-        // WordChar only where GTK translates it for AT-SPI (4.8+); below, Char. Never
-        // Word: it lets long unbreakable tokens overflow → blank-view churn
-        // (GTK4Rs/AP-22/23).
-        let atspi_safe = if gtk::check_version(4, 8, 0).is_none() {
+        // WordChar only where GTK translates it for AT-SPI (4.7+); below, Word. Never
+        // Char (it breaks prose mid-word) and never WordChar below the floor.
+        let atspi_safe = if gtk::check_version(4, 7, 0).is_none() {
             WrapMode::WordChar
         } else {
-            WrapMode::Char
+            WrapMode::Word
         };
         assert_eq!(
             view.wrap_mode(),
             atspi_safe,
-            "GTK4Rs/AP-136: below GTK 4.8 WordChar aborts the app under a screen reader \
-             (gtkatspitextbuffer.c Site A); Word overflows the pane"
+            "GTK4Rs/AP-136: below GTK 4.7 WordChar aborts the app under a screen reader \
+             (gtkatspitextbuffer.c Site A)"
         );
 
         // Site B — the CodeInline tag's wrap mode (per-run tag attributes), read from
@@ -548,14 +547,32 @@ mod gtk_integration_tests {
                 .tag_table()
                 .lookup(name)
                 .unwrap_or_else(|| panic!("{name} installed by setup_tags"));
-            assert_eq!(
-                code_tag.wrap_mode(),
-                atspi_safe,
-                "GTK4Rs/AP-136: {name} below GTK 4.8 must not use WordChar (Site B)"
-            );
+            if atspi_safe == WrapMode::WordChar {
+                assert_eq!(code_tag.wrap_mode(), WrapMode::WordChar, "{name}");
+            } else {
+                assert!(
+                    !code_tag.property::<bool>("wrap-mode-set"),
+                    "GTK4Rs/AP-136: {name} below GTK 4.7 must state no wrap mode, so it \
+                     inherits Word and cannot override a paragraph's `wrap-char` (Site B)"
+                );
+            }
             assert!(
                 !code_tag.is_insert_hyphens(),
                 "{name}: a wrap inside code must not insert a hyphen the code does not have"
+            );
+        }
+        // Site B in full: no tag anywhere in the table may carry WordChar below the
+        // floor, whatever it is for (a screen reader reading an offset inside it aborts).
+        if atspi_safe != WrapMode::WordChar {
+            let mut offenders = Vec::new();
+            view.buffer().tag_table().foreach(|t| {
+                if t.property::<bool>("wrap-mode-set") && t.wrap_mode() == WrapMode::WordChar {
+                    offenders.push(t.name());
+                }
+            });
+            assert!(
+                offenders.is_empty(),
+                "GTK4Rs/AP-136: tags carrying WordChar below GTK 4.7: {offenders:?}"
             );
         }
         for quote_depth in 0..=crate::tags::MAX_QUOTE_DEPTH {

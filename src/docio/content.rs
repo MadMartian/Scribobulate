@@ -122,16 +122,35 @@ impl Refusal {
 /// platform from any host — and the callers pass `host_rules()`, so on Linux and macOS
 /// `nul.md` stays an ordinary name.
 pub(crate) fn screen_name(path: &Path, rules: FsRules) -> Result<(), Refusal> {
-    if rules != FsRules::Windows {
-        return Ok(());
-    }
     let Some(name) = path.file_name() else {
         return Ok(());
     };
-    match super::rename::windows_device_name(&name.to_string_lossy()) {
+    match rules.device_name(&name.to_string_lossy()) {
         Some(device) => Err(Refusal::DeviceName { device }),
         None => Ok(()),
     }
+}
+
+/// The filesystem's own answer to whether `path`'s name is a device on this host — the
+/// oracle the device tests decide by. It writes `contents` to `path`
+/// UNSCREENED and reports whether `path`'s directory, which must start empty, then lists
+/// anything: a device swallows the write and leaves nothing.
+///
+/// No name rule decides what the tests expect, because which names are devices depends
+/// on the Windows release: Windows 10 reserves `nul.md`, newer releases reportedly do
+/// not, and on Linux and macOS no name is a device. Only names whose device swallows a
+/// write harmlessly belong here — `NUL`, and a `COM`/`LPT` port the host does not have,
+/// whose open fails — never `CON`, `PRN` or `AUX`.
+#[cfg(test)]
+pub(crate) fn host_makes_a_file_of(path: &Path, contents: &str) -> bool {
+    let dir = path.parent().expect("a path in a directory");
+    assert_eq!(
+        std::fs::read_dir(dir).expect("list the directory").count(),
+        0,
+        "the oracle needs an empty directory"
+    );
+    let _ = std::fs::write(path, contents);
+    std::fs::read_dir(dir).expect("list the directory").count() > 0
 }
 
 /// Screen a document's raw bytes, BEFORE any byte-order mark is stripped, so the offset

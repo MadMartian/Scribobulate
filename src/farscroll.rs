@@ -320,6 +320,46 @@ fn reissue_still_current(
     caret_at_call == caret_now && generation_at_call == generation_now
 }
 
+/// Where the reader was when a deferred scroll was issued: the caret, and the render the
+/// buffer held. Every deferred scroll checks it before it runs and stands down if it no
+/// longer holds (TDD 9.33).
+///
+/// **Why a deferred scroll needs it.** One deferred to an idle at `DEFAULT_IDLE` or
+/// later cannot run until GTK has laid the whole document out, and on a large document
+/// on a slow platform that is seconds (MEASURED on Windows: 2.6-3.7 s for
+/// `large-doc.md`). The reader acts in the meantime — Ctrl+End, a click, Go To Line —
+/// and a scroll issued for where they WERE then lands over where they are: the editor
+/// restore a switch into Edit issues took the view to line 1 under a caret the reader
+/// had just put mid-document. A newer scroll of the same kind already retires an older
+/// one; this retires it on anything the reader does with the caret.
+///
+/// The caret is the token because every route a reader moves through — a click, a key,
+/// a navigation — sets it. The render generation covers an in-place rebuild, which drags
+/// marks without touching the caret ([`note_buffer_rebuilt`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReaderPlace {
+    caret: i32,
+    generation: u64,
+}
+
+impl ReaderPlace {
+    /// The reader's place in `view` now.
+    pub(crate) fn of(view: &gtk::TextView) -> Self {
+        let buffer = view.buffer();
+        Self {
+            caret: buffer.iter_at_mark(&buffer.get_insert()).offset(),
+            generation: render_generation(&buffer),
+        }
+    }
+
+    /// Whether the reader is still where they were when this was taken: a deferred
+    /// scroll that captured it may still run.
+    pub(crate) fn still_holds(self, view: &gtk::TextView) -> bool {
+        let now = Self::of(view);
+        reissue_still_current(self.caret, now.caret, self.generation, now.generation)
+    }
+}
+
 /// Whether `view` has a viewport to scroll *within*.
 ///
 /// A realized view that has never been allocated has a zero-height text window, and
@@ -430,8 +470,7 @@ pub(crate) fn scroll_to_mark_when_ready(
     yalign: f64,
 ) {
     let buffer = view.buffer();
-    let caret_at_call = buffer.iter_at_mark(&buffer.get_insert()).offset();
-    let generation_at_call = render_generation(&buffer);
+    let place = ReaderPlace::of(view);
     let target = crate::saferizer::buffer_mark::BufferMark::new(mark.clone(), &buffer);
     stop_kinetic_glide(view);
 
@@ -440,15 +479,10 @@ pub(crate) fn scroll_to_mark_when_ready(
     view.scroll_to_mark(mark, within_margin, use_align, xalign, yalign);
 
     after_line_heights_validated(view, move |view| {
-        let buffer = view.buffer();
-        if !reissue_still_current(
-            caret_at_call,
-            buffer.iter_at_mark(&buffer.get_insert()).offset(),
-            generation_at_call,
-            render_generation(&buffer),
-        ) {
+        if !place.still_holds(view) {
             return; // superseded — the reader has moved on, or the render was rebuilt
         }
+        let buffer = view.buffer();
         if !has_viewport(view) {
             return; // no viewport to scroll within; see `has_viewport`
         }

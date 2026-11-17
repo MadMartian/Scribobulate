@@ -413,7 +413,7 @@ pub(crate) fn new_window_from_source(
 /// it is the reason no monitor-aware clamp is applied to this value: at 360 the
 /// floor is already below any display the app can be used on at all, so a clamp
 /// against monitor geometry could never fire and would only read as if it might.
-const MIN_WINDOW_WIDTH: i32 = 360;
+pub(crate) const MIN_WINDOW_WIDTH: i32 = 360;
 
 /// The shared window/first-tab construction every window goes through,
 /// regardless of whether its initial numbers came from `WindowInit::default()`
@@ -1653,6 +1653,104 @@ pub(crate) mod gtk_integration_tests {
         assert!(
             (persisted - 0.25).abs() > 1e-9,
             "precondition: the drag actually moved the divider off its restored value"
+        );
+    }
+
+    /// Shrinking the window until a section reaches its minimum height must not
+    /// overwrite the remembered split, and growing it again brings the split back
+    /// (TDD 20.21).
+    ///
+    /// GtkPaned clamps its position when the window is too short for `shrink=false`
+    /// children, and that clamp arrives as an ordinary `notify::position`. Only a position
+    /// the reader set is theirs to be remembered.
+    #[gtktest::test]
+    fn a_clamp_from_a_short_window_is_not_remembered_as_the_readers_split() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebarclamp");
+        let win = build_window(
+            &app,
+            "IT-clamp",
+            "# H\n\ntext {>>note<<}",
+            None,
+            &WindowInit {
+                chrome: crate::session::ChromeSession {
+                    annotations_visible: true,
+                    sidebar_split: 0.25,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        win.set_default_size(800, 760);
+        win.present();
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        let sidebar = sidebar_paned_of(&ch.outline_scroller);
+        let settle = || {
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(400),
+            )
+        };
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the sidebar is allocated",
+            || sidebar.height() > 0,
+        );
+        settle();
+        let tall = sidebar.height();
+        let quarter = crate::session::sidebar_divider_position(0.25, tall).expect("allocated");
+        assert_eq!(
+            sidebar.position(),
+            quarter,
+            "precondition: restored to 0.25"
+        );
+        let (outline_min, _, _, _) = sidebar
+            .start_child()
+            .expect("outline section")
+            .measure(gtk::Orientation::Vertical, -1);
+
+        // As short as the window will go, so a quarter of the sidebar is below the
+        // outline's minimum: GTK clamps the request to the window's own minimum height,
+        // which differs per platform (a fixed 300 never got there on Windows CI).
+        win.set_default_size(800, 1);
+        let shrunk = crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_secs(30),
+            || sidebar.height() > 0 && sidebar.height() * 25 / 100 < outline_min,
+        );
+        if !shrunk {
+            println!(
+                "SKIPPED [TDD 20.21]: this platform kept the sidebar at {}px, too tall for a \
+                 quarter of it to fall below the outline's {outline_min}px minimum, so no clamp \
+                 could be staged. The behaviour this test verifies is NOT verified by this run.",
+                sidebar.height()
+            );
+            return;
+        }
+        settle();
+        assert!(
+            sidebar.position() >= outline_min,
+            "precondition: GTK clamped the divider to the section's minimum \
+             (position {}, minimum {outline_min}, sidebar {}px)",
+            sidebar.position(),
+            sidebar.height()
+        );
+        let stored = read_window_chrome(&win).sidebar_split;
+        assert!(
+            (stored - 0.25).abs() < 0.01,
+            "the clamp from a short window was stored as the reader's split ({stored}, not 0.25)"
+        );
+
+        win.set_default_size(800, 760);
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the window has grown again",
+            || sidebar.height() >= tall,
+        );
+        settle();
+        let restored = sidebar.position() as f64 / sidebar.height() as f64;
+        assert!(
+            (restored - 0.25).abs() < 0.01,
+            "growing the window again did not bring the remembered split back ({restored})"
         );
     }
 

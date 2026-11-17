@@ -343,7 +343,7 @@ thread_local! {
 
 /// Run the reveal again once `scroller`'s list has a size.
 ///
-/// Issue D: this used to retry on a fixed number of idles, and on a loaded machine all of
+/// This used to retry on a fixed number of idles, and on a loaded machine all of
 /// them ran before GTK laid the list out, so the reveal gave up and the list stayed at the
 /// top. Layout runs on the frame clock, not on idles (GTK4Rs/AP-261), and no count of
 /// either is a bound on when it comes. So wait for the event itself: the vadjustment's
@@ -501,7 +501,7 @@ mod gtk_integration_tests {
             .build()
     }
 
-    /// Issue D. A reveal asked for before the list is laid out still lands, however long the
+    /// A reveal asked for before the list is laid out still lands, however long the
     /// layout takes: the reveal is asked for while the scroller is in no window at all, the
     /// loop runs well past the eight idles the old fixed retry budget allowed, and only then
     /// does the list get a window and a size. Mutation guard: restore a bounded retry in

@@ -62,16 +62,82 @@ pub(crate) enum FsRules {
     /// Linux and macOS: only the separator, NUL, and the `.`/`..` entries are illegal.
     Posix,
     /// Windows: additionally reserved device names, a trailing dot or space, the
-    /// `< > : " | ? *` set, and `/` as a second separator.
+    /// `< > : " | ? *` set, and `/` as a second separator. The device names are the
+    /// Windows 10 name rule ([`windows_device_name`]), pure, so these rules answer the
+    /// same on every host. Only the tests apply them; the app applies
+    /// [`Self::WindowsHost`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the host-independent form the tests check every platform with"
+        )
+    )]
     Windows,
+    /// [`Self::Windows`] as the host it is running on applies it: which names are devices
+    /// is asked of Windows ([`crate::platform::host_device_behind_name`]), with the name
+    /// rule as the fallback where it cannot be asked. Windows 10 reserves `nul.md`; newer
+    /// releases reportedly do not, and there it is a file this application must open.
+    /// What [`host_rules`] returns on Windows.
+    WindowsHost,
+}
+
+impl FsRules {
+    /// Whether these are Windows's rules, in either form.
+    pub(crate) const fn is_windows(self) -> bool {
+        matches!(self, Self::Windows | Self::WindowsHost)
+    }
+
+    /// The device `name` addresses under these rules, if it addresses one — its canonical
+    /// spelling, so a caller can show it without echoing the filename.
+    pub(crate) fn device_name(self, name: &str) -> Option<&'static str> {
+        match self {
+            Self::Posix => None,
+            Self::Windows => windows_device_name(name),
+            Self::WindowsHost => {
+                device_from_host_answer(crate::platform::host_device_behind_name(name), name)
+            }
+        }
+    }
 }
 
 /// The rules for the platform this binary was built for.
 pub(crate) const fn host_rules() -> FsRules {
     if cfg!(windows) {
-        FsRules::Windows
+        FsRules::WindowsHost
     } else {
         FsRules::Posix
+    }
+}
+
+/// What a device refusal calls a device Windows reports that the name rule does not know.
+/// Never the filename: the refusal must not echo a hostile name.
+const UNLISTED_DEVICE: &str = "This name";
+
+/// The device `name` addresses, given what the host answered when asked
+/// ([`crate::platform::host_device_behind_name`]). Split out so the decision is testable
+/// on every host with any answer.
+///
+/// - Not asked, or the call failed (`None`): the name rule decides, as it did before Windows was asked.
+/// - An ordinary file (`Some(None)`): no device, whatever the name rule says — on a
+///   Windows that no longer reserves `nul.md`, that is a real file.
+/// - A device (`Some(Some(spelled))`): refused, named canonically — the name rule's
+///   spelling, else the host's matched against [`WINDOWS_DEVICE_NAMES`], else
+///   [`UNLISTED_DEVICE`].
+fn device_from_host_answer(answer: Option<Option<String>>, name: &str) -> Option<&'static str> {
+    match answer {
+        None => windows_device_name(name),
+        Some(None) => None,
+        Some(Some(spelled)) => Some(
+            windows_device_name(name)
+                .or_else(|| {
+                    WINDOWS_DEVICE_NAMES
+                        .iter()
+                        .copied()
+                        .find(|d| d.eq_ignore_ascii_case(&spelled))
+                })
+                .unwrap_or(UNLISTED_DEVICE),
+        ),
     }
 }
 
@@ -165,9 +231,11 @@ const WINDOWS_DEVICE_NAMES: &[&str] = &[
 /// (MEASURED, as the table above). A trailing dot or space on the whole name is the
 /// same rule seen from the other end: it falls after the first `.`, or is trimmed.
 ///
-/// A pure name rule, applied by [`check_filename`] under [`FsRules::Windows`] and by the
-/// document readers and every atomic write on a Windows host
-/// (`super::content::screen_name`).
+/// A pure name rule: what [`FsRules::Windows`] applies, and the fallback of
+/// [`FsRules::WindowsHost`] where Windows cannot be asked. On a Windows host the app asks
+/// Windows instead, because newer releases reportedly stopped reserving a device name
+/// with an extension; measured on Windows 10, the two agree on every name
+/// above and below.
 pub(crate) fn windows_device_name(name: &str) -> Option<&'static str> {
     let stem = name
         .split(['.', ':'])
@@ -226,17 +294,17 @@ pub(crate) fn check_filename(name: &str, rules: FsRules) -> Result<(), NameRefus
     // `/` is a separator on BOTH platforms — GLib's own path code honours it on
     // Windows even though `G_DIR_SEPARATOR` is `\` there, which is precisely the
     // hole GIO's one-character guard leaves open.
-    if name.contains('/') || (rules == FsRules::Windows && name.contains('\\')) {
+    if name.contains('/') || (rules.is_windows() && name.contains('\\')) {
         return Err(NameRefusal::Separator);
     }
-    if rules == FsRules::Windows {
+    if rules.is_windows() {
         if let Some(c) = name.chars().find(|c| WINDOWS_FORBIDDEN.contains(c)) {
             return Err(NameRefusal::ForbiddenCharacter(c));
         }
         if name.ends_with('.') || name.ends_with(' ') {
             return Err(NameRefusal::TrailingDotOrSpace);
         }
-        if windows_device_name(name).is_some() {
+        if rules.device_name(name).is_some() {
             return Err(NameRefusal::ReservedDeviceName);
         }
     }
@@ -754,6 +822,55 @@ mod tests {
         ] {
             assert_eq!(windows_device_name(file), None, "{file:?}");
         }
+    }
+
+    /// **Windows's answer decides, the name rule only where Windows was not asked.**
+    /// A Windows that makes `nul.md` a file (reportedly 11) answers "a
+    /// file", and the name is then usable; a Windows 10 answer of `\\.\nul` is the NUL
+    /// device; a failed call falls back to the rule. Pure over the answer, so every
+    /// host checks every case.
+    #[test]
+    fn the_host_answer_decides_and_the_name_rule_is_the_fallback() {
+        let file = Some(None);
+        let device = |spelled: &str| Some(Some(spelled.to_owned()));
+        assert_eq!(device_from_host_answer(file.clone(), "nul.md"), None);
+        assert_eq!(device_from_host_answer(file, "COM1.txt"), None);
+        assert_eq!(
+            device_from_host_answer(device("nul"), "nul.md"),
+            Some("NUL")
+        );
+        assert_eq!(device_from_host_answer(None, "nul.md"), Some("NUL"));
+        assert_eq!(device_from_host_answer(None, "nulbyte.md"), None);
+        // Named canonically, never by the filename: from the rule where it knows the
+        // name, else the host's spelling matched against the list, else generically.
+        assert_eq!(
+            device_from_host_answer(device("CON"), "unlisted.md"),
+            Some("CON")
+        );
+        assert_eq!(
+            device_from_host_answer(device("SOMEDEV"), "unlisted.md"),
+            Some(UNLISTED_DEVICE)
+        );
+    }
+
+    /// The host's rules are Windows's in every respect but where the device names come
+    /// from: a forbidden character, a trailing dot and a separator are refused alike.
+    #[test]
+    fn windows_host_rules_refuse_what_windows_rules_refuse_besides_devices() {
+        for name in ["a?b.md", "b.md.", "b.md ", "sub\\b.md", "sub/b.md"] {
+            assert_eq!(
+                check_filename(name, FsRules::WindowsHost),
+                check_filename(name, FsRules::Windows),
+                "{name}"
+            );
+            assert!(
+                check_filename(name, FsRules::WindowsHost).is_err(),
+                "{name}"
+            );
+        }
+        assert!(FsRules::WindowsHost.is_windows() && FsRules::Windows.is_windows());
+        assert!(!FsRules::Posix.is_windows());
+        assert_eq!(FsRules::Posix.device_name("nul.md"), None);
     }
 
     /// A case-only change is a *legitimate rename* that must be recognised as its own

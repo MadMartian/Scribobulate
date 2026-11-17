@@ -260,8 +260,9 @@ mod device_name_tests {
     /// `atomic_io`'s staging screen removed, `nul.pdf` reports no device name.
     ///
     /// `nulbyte.*` is the positive control on every host: a name that merely starts
-    /// with a device's letters exports normally, so the refusal is the name rule's and
-    /// not the export failing for some other reason. Off Windows `nul.*` exports too.
+    /// with a device's letters exports normally, so the refusal is the device check's
+    /// and not the export failing for some other reason. Where the filesystem makes a
+    /// file of `nul.*` — off Windows, and reportedly on Windows 11 — it exports too.
     #[gtktest::test]
     fn an_export_to_a_windows_device_name_fails_by_name_and_leaves_nothing() {
         let app = gtk::Application::new(
@@ -286,9 +287,17 @@ mod device_name_tests {
 
         for target in [ExportTarget::Html, ExportTarget::Pdf] {
             let ext = target.extension();
-            for (stem, refused) in [("nul", cfg!(windows)), ("nulbyte", false)] {
-                let dir = tempfile::tempdir().expect("temp dir");
+            for stem in ["nul", "nulbyte"] {
                 let name = format!("{stem}.{ext}");
+                // Refused exactly where the filesystem makes no file of the name
+                // (a device on Windows 10, a file off Windows and
+                // reportedly on Windows 11).
+                let probe = tempfile::tempdir().expect("temp dir");
+                let refused = !crate::docio::content::host_makes_a_file_of(
+                    &probe.path().join(&name),
+                    "probe",
+                );
+                let dir = tempfile::tempdir().expect("temp dir");
                 let path = dir.path().join(&name);
                 run_export(&window, std::rc::Rc::clone(&st), target, path.clone());
                 let expected = if refused {

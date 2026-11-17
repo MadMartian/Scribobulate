@@ -48,37 +48,28 @@ carried here as two unrelated entries and was nearly fixed twice before anyone n
 were one thing. Before opening work on an entry, scan the others for the same mechanism
 described from a different vantage point.
 
-**One finding per entry, and IDs never come back.** Assign each new entry the next unused
-ID: `A`–`Z`, then `AA`, `AB`, … `AZ`, `BA`, … Never backfill a gap a deletion or a closure
-leaves, never reuse an ID, never renumber the survivors, and never compact: an ID names one
-finding for as long as the entry lives. (The register once compacted at `Z` and, when one
-release pass filed more findings than the alphabet holds, grouped several under one letter;
-both are retired — a group cannot be triaged or deleted one finding at a time.)
+**One finding per entry; a deleted entry's ID is free again.** Assign each new entry the
+first ID no live entry holds: `A`–`Z`, then `AA`, `AB`, … `AZ`, `BA`, … A fixed entry is
+deleted, and its ID is free from then on (the operator's ruling, 2026-11-17): only Git
+history remembers what it once named. That is safe only because nothing outside this file
+cites an ID. A comment saying "Issue D" that outlives D's fix silently retargets onto the
+next finding to take D, which is why `cargo xtask lint-references` refuses such a
+citation. Never renumber a live entry, and never group several findings under one ID: an
+ID names one finding for as long as that entry lives. Closed entries are the exception
+in the other direction: a `CLSD-dd` number stays in the file and is never reused.
 
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
+| D | Windows | Production | In the preview, Ctrl+End pressed before a large document has finished rendering stops short of the end (Section 33–47 of `large-doc.md`) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
-| BL | Any | Production | Shrinking a window until a sidebar section reaches its minimum height overwrites the remembered divider ratio for good, so the next restart restores the squeezed split | Low |
-| BM | Any | Production | In HTML and PDF export, inline code inside a highlighted claim is not highlighted | Low |
-| BN | Any | Production | In HTML and PDF export, a claim that ends in inline code puts its comment before the code rather than after it | Low |
-| BO | Any | Production | In HTML and PDF export, a comment attached to no highlighted text is missing from the exported body, and the HTML summary lists it with an empty quote | Low–Medium |
-| BP | Any | Production | Typing over a selection takes two Ctrl+Z to undo | Low |
-| BQ | Any | Production | A recovered tab in the background shows no unsaved dot until it is opened | Low |
-| BR | Any | Production | An open comment card follows its marker when the preview is scrolled, rather than closing | Low |
-| BS | Any | Production | Ctrl+T's new document holds the welcome text as editable document text | Low |
-| BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
-| BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
-| BV | Mac | Production | Opening and closing a second window (Cmd+N, Cmd+W) grows RSS by about 1.5 MB per cycle with no plateau over 90 cycles, while the window-cycle memory gate reads about 45 KB per cycle | Medium |
-| BW | Any | Production | In the preview, Edit's "Change Case" submenu row draws enabled while all four of its items are greyed | Low |
-| BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
+| BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
 ## Closed issues
 
@@ -93,6 +84,7 @@ reused, and run in a series of their own apart from the IDs above.
 | CLSD-04 | Mac | Upstream | In fullscreen, a click issued while the transition animation is still running is never delivered — AppKit blocks input for its own ~250-500ms window, in any Cocoa application. Not ours to fix, and not GTK's |
 | CLSD-05 | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141, informational): `syntect` reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml`; the data is never a user's file |
 | CLSD-06 | Windows | Upstream | After a native file dialog has been used, the process outlives Quit by about a second (network-dependent) while Windows tears down a shell thread blocked in network browsing; the app itself has exited |
+| CLSD-07 | Any | Upstream | Typing over a selection of two or more characters takes two Ctrl+Z to undo: GTK records the deletion and the insertion as separate steps by design |
 
 
 ## CLSD-01. Tables are selection islands
@@ -311,6 +303,20 @@ Windows have not been driven.
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
 
+## D. Preview Ctrl+End before the render settles stops short of the end
+
+**Severity**: Low (a second Ctrl+End, or waiting a moment, reaches the end).
+
+**Observed** (2026-11-17, `windows` seat, `large-doc.md`; 1.0.0 install 2 of 2, the 1.0.1
+build 1 of 1): click into the preview about 0.4 s after the window shows, then press
+Ctrl+End. The view stops partway (Section 47 and Section 33 on 1.0.0, Section 35 on 1.0.1)
+instead of at the last paragraph. Once the preview has rendered first, Ctrl+End reaches
+the end. Linux and macOS not yet checked; on Linux the render settles in well under
+0.4 s, so the window may be too short to hit there.
+
+**Cause**: not traced. It fits a Ctrl+End target computed against the layout GTK has
+validated so far, while the rest of the document is still being laid out on idles.
+
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
@@ -479,196 +485,31 @@ critical fires and names the holder; if it points at a closure or idle captured 
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
 
-## BK. A click during Ctrl+End's travel snaps the view back to line 1 on Windows
+## BZ. The editor colours a task item's caption as link text when a link follows
 
-**Severity**: Low–Medium (the caret is where the reader clicked, but the view leaves it,
-and the reader has to find their place again).
+**Severity**: Low–Medium (colour only; the file and the preview are correct, but every task
+item that holds a link reads wrongly in the editor).
 
-**Observed** (2026-11-15, `windows` seat, 1.0.0 release pass, MANUAL-TEST 9.33a, 2 of 2
-launches, and in two earlier rounds): `large-doc.md`, Ctrl+End, then a click mid-document
-while the jump is still travelling. The caret lands on the clicked line; 1.5–2.5 s later
-the view returns to line 1. The jump also logs two `Trying to snapshot GtkGizmo … without
-a current allocation` warnings. Linux 0 of 4: there the jump finishes in under 0.1 s, so
-there is nothing to click into. macOS not yet checked.
+**Observed** (2026-11-17, operator, 1.0.0): in the editor,
+`- [ ] This is an incorrectly colored caption preceding [a link that is here, that is correctly colored](http://www.example.com)`
+colours the caption as link text.
 
-**What is known**: the 1.0.0 fix that stops the travel where the reader clicks holds on
-Linux by construction and does not hold on Windows, so something else moves the view
-after the travel has stopped. The late return to the top fits a deferred scroll (an idle
-or a re-validation finishing the original Ctrl+End request) that the stop does not
-cancel. Not yet traced.
+**Cause** (ANALYSED from the language file, not yet measured in the app): the editor uses
+GtkSourceView's stock `markdown` language (`window::tabs::lifecycle`,
+`LanguageManager::default().language("markdown")`). Its `inline-link` context matches
+`\[(.*?)\]\(`, and a lazy `.*?` still starts at the FIRST `[` on the line, so the match runs
+from the task box `[ ]` through the link's `](`. Any earlier bracket on the line does the
+same. The rule is identical in GtkSourceView 5.4.1 (Linux build host) and in the GNOME 46
+runtime's copy, so newer GtkSourceView does not fix it, and the bundled Windows and macOS
+runtimes are presumed to carry it too.
 
-**Next step**: trace on the Windows seat which source sets the scroll value after the
-click, before changing anything.
+**Upstream evidence**: no ticket searched yet (2026-11-17). Search GtkSourceView's issue
+tracker for the `inline-link` rule and file one if none exists.
 
-## BL. Shrinking a window overwrites the remembered sidebar split
-
-**Severity**: Low (only a window shrunk to a section's minimum height; the divider can be
-dragged back).
-
-**Observed** (2026-11-15, `windows` seat, MANUAL-TEST 20.21b): each window's divider
-survives a restart and holds its ratio as the window grows taller. Shrinking a window
-until a section reaches its minimum height rewrites `sidebar_split` in `session.toml` for
-good (0.235 → 0.376, 0.82 → 0.71).
-
-**Cause**: `window::chrome::track_sidebar_split` records the fraction on every
-`notify::position`, and GTK clamps the position when the window gets too short for a
-section, so the clamp is stored as if the reader had dragged it. The code is shared, so
-every platform is affected.
-
-**Fix direction**: record only a position the reader set (a drag), or ignore a position
-change that arrives with a height change, and re-apply the remembered fraction when the
-window grows again.
-
-## BM. Export does not highlight inline code inside a claim
-
-**Severity**: Low (the claim's text is highlighted around the code; the code itself is
-plain).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF):
-`{==see `code` here==}{>>c<<}` exports with `see` and `here` highlighted and `code` not.
-TDD 25.13 says the highlight covers exactly the annotated characters. The export builder is
-shared, so every platform is affected. Not yet reproduced in a unit test.
-
-## BN. Export puts a claim's comment before its closing inline code
-
-**Severity**: Low (the comment is present; only its position is wrong).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF): a
-claim that ends in inline code, `{==ends in `code`==}{>>c<<}`, exports with the comment's
-aside or margin note placed before `code` rather than after the claim. Likely the same
-place in the export builder as BM: the code span is emitted outside the claim. Not yet
-reproduced in a unit test.
-
-## BO. Export drops a comment attached to no highlighted text
-
-**Severity**: Low–Medium (the reader's comment is missing from the exported document; the
-source file is untouched).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently): a comment with no
-claim (`{>>a note<<}` on its own, not after a `{==…==}`) does not appear in the exported
-body, HTML or PDF, and the HTML Annotations summary lists it with an empty quote. The
-preview shows its marker. The export builder is shared, so every platform is affected.
-Not yet reproduced in a unit test.
-
-## BP. Typing over a selection takes two undos
-
-**Severity**: Low (both steps undo correctly; it takes two presses).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): select text in the editor, type a
-character, Ctrl+Z → the deletion and the insertion are undone as two steps. Not checked
-on Linux or macOS; GtkSourceView's undo grouping is shared, so it is likely `Any`.
-
-## BQ. A recovered background tab shows no unsaved dot until it is opened
-
-**Severity**: Low (the content is recovered and is saved or discarded as usual; only the
-tab's indicator is late).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): after crash recovery restores
-unsaved changes into a tab that is not the active one, its tab shows no unsaved dot until
-it is selected. `Any` because the tab indicator code is shared; found on Windows, not yet reproduced elsewhere.
-
-## BR. An open comment card follows its marker on scroll
-
-**Severity**: Low (the card stays readable and re-pins to its marker; the question is only
-whether it should close).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): with a comment card open, scrolling
-the preview carries the card along with its marker rather than closing it. No TDD rubric
-states what a scroll does to an open comment card, so this is a gap in the spec before it
-is a defect: decide the behaviour first, then fix or record it.
-
-## BS. Ctrl+T opens a document holding the welcome text as editable text
-
-**Severity**: Low (the text can be selected and deleted; nothing is saved unless the
-reader saves it).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): Ctrl+T's new tab shows the welcome
-document as editable document text, rather than an empty document. `Any` because the code is shared; found on Windows, not yet reproduced
-elsewhere.
-
-## BT. Device names with an extension are refused on every Windows
-
-**Severity**: Low (a file named `nul.md` or `con.md` is rare, and the refusal names the
-reason).
-
-**Observed** (2026-11-16, `windows` seat): the app refuses a filename whose part before
-the first dot is a Windows device name (`docio::rename::windows_device_name`), because on
-Windows 10 `nul.md` opens the NUL device: a read returns nothing and a write disappears.
-Windows 11 and Windows Server 2025 reportedly stopped treating a device name with an
-extension as a device, so there such a name can be a real file, which the app then
-refuses to open, save, rename to or export to. Inferred, not yet checked on a Windows 11
-host.
-
-**Fix direction**: ask Windows whether the path is a device (for example,
-`GetFullPathNameW` returning a `\\.\` path) and refuse only then, keeping the name rule
-as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` maps
-`nul.md`, `NUL`, `nul .md`, `nul.tar.gz`, `con.md`, `COM1.md`, `com9.md.`, `lpt1.txt`,
-`aux`, `prn.md`, `conin$`, `CONOUT$.md` and `COM¹.md` to a `\\.\<device>` path, and
-`COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
-matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
-directory, and the app must open it if the directory lists it and refuse it otherwise.
-
-## BU. The Annotate-card resize-flip test misses its precondition under load
-
-**Severity**: Low (test-only; passes on re-run and 3 of 3 alone).
-
-**Observed** (2026-11-16, Linux, full GTK suite through `scripts/run-integration.sh`):
-`preview::annotate::overlay::resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it`
-panicked at its precondition "the resize must move the word up to where the card has no
-room above it": word top 105 → 45, card height 41. The word stopped right at the
-boundary of the card's height plus its gap, so the fixture leaves no margin. Run alone,
-3 of 3 pass.
-
-**Fix direction**: give the fixture a resize that moves the word well past the boundary,
-rather than relaxing the precondition.
-
-## BV. Each window opened and closed keeps about 1.5 MB on macOS
-
-**Severity**: Medium (a reader needs hundreds of window cycles in one session to notice,
-but the growth does not level off).
-
-**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 8.6, local build tree-identical to the
-1.0.0 target): one window and one document kept open, 80 cycles of Cmd+N then Cmd+W. RSS
-165,792 KB at the start, 188,960 after cycle 1, 227,888 at 20, 258,480 at 40, 286,512 at
-60, 317,424 at 80, 316,528 idle, 330,752 after 10 more: about 1.5 MB per cycle, linear,
-the window count back to its baseline each time. The 2026-11-12 pass measured about 2 MB
-per cycle before the window-cycle retention fixes. Windows (+0.04 MiB per cycle over cycles
-30–80) and Linux pass the same item on the same tree.
-
-**Tension with the gate**: TDD 6.13's window-cycle gate passes on macOS CI and reads
-about 45 KB per cycle of `phys_footprint`. Two differences are untested: the gate closes
-with `window.close()`, where Cmd+W closes the window's last tab, and the gate reads
-`phys_footprint`, where this item reads RSS.
-
-**Footprint reading** (same session, same loop, Cmd+N and Cmd+W 0.7 s apart, `footprint`):
-`phys_footprint` 68 MB at cycle 0, 89 at 1, 98 at 5, 106 at 10, 121 at 20 and still 121
-after 5 s idle. The growth is all `MALLOC_SMALL` (35 → 88 MB); IOSurface stays flat at
-20 MB. So this is real heap retention on the Cmd+N/Cmd+W path, not pages that RSS counts
-and the footprint does not, and not a surface released late.
-
-**Next step**: drive TDD 6.13's gate through the path the reader takes (a new window, then
-closing its last tab), confirm it fails on macOS CI, then find what the close-tab path
-keeps that `window.close()` does not.
-
-## BW. The preview's Change Case submenu row draws enabled over greyed items
-
-**Severity**: Low (cosmetic; the items themselves are correctly unavailable).
-
-**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 9.14): with the preview focused, Edit ▸
-Change Case draws as an enabled row while its four items and Insert Emoji are greyed. A
-submenu row has no action of its own, so GTK draws it enabled whatever its items say. The
-menu model is shared, so every platform is affected.
-
-## BX. Export is enabled with two refused documents open
-
-**Severity**: Low (an export of a refusal page is harmless; the button's state is merely
-inconsistent).
-
-**Observed** (2026-11-16, `windows` seat, ungraded, on the 1.0.0 installer): with one
-refused document open (its refusal page shown, no backing file) the toolbar's Export
-button is greyed; with two such tabs open it is enabled. Not traced; a sensitivity that
-follows the tab count rather than the active tab's backing fits the symptom. `Any` because the toolbar
-sensitivity code is shared; found on Windows, not yet reproduced elsewhere.
+**Fix direction**: ship a corrected `markdown` language definition that excludes brackets
+from the link text (`\[([^\[\]]*)\]`), and put its directory first in the
+LanguageManager's search path. That makes it a vendored copy of an LGPL file, with a
+licence notice and an obligation to follow upstream. Alternatively, patch upstream and wait.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
@@ -846,3 +687,26 @@ throughout, so a relaunch never reaches the dying process. The only lever, stopp
 `IFileDialog` from enumerating the network, is not exposed by GTK's native chooser, and
 `FOS_HIDEPINNEDPLACES` would strip the whole navigation pane. Time an exit by waiting on
 the process handle: `GetExitCodeProcess` is set at `ExitProcess`, before thread teardown.
+
+## CLSD-07. Typing over a selection takes two undos
+
+**Status**: Closed (GTK's deliberate design; the operator ruled to leave it, 2026-11-17).
+
+**Platform**: Any. It was measured on Linux with GTK 4.6.9, and the code is GTK's own, shared by every
+backend.
+
+Select two or more characters in the editor and type one: Ctrl+Z restores the selection's
+deletion and the typed character as two steps. A plain `GtkTextView`, and a bare
+`GtkSourceView` buffer and view with none of the app's wiring, behave the same: one
+`buf.undo()` after the replacement leaves `" world\n"` where `"hello world\n"` was.
+`gtk_text_view_commit_text` (gtktextview.c, GTK 4.6.9) ends and reopens the user action
+after deleting a selection longer than one character. Its own comment says that is so
+there are two undo operations. The event trace is `begin, delete, end, begin, insert,
+end`. A one-character selection stays one step.
+
+**Why not fixed**: the only app-side route overrides GTK's design. It would open an undo
+group from a capture-phase key controller when a printable key arrives over a selection,
+and close it on an idle, holding the group open across a main-loop turn, and it would do
+nothing for input-method composition. Reopen only if GTK changes the behaviour, or if a
+route appears that also covers composition.
+

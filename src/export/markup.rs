@@ -40,7 +40,7 @@ fn emit_markup(
     for inline in inlines {
         match inline {
             Inline::Text { text, .. } => out.push_str(&escape_pango(text)),
-            Inline::Code(c) => {
+            Inline::Code { text: c, .. } => {
                 // The chip, from the ONE builder the preview's table cell also reads.
                 // `chip` is the caller's, because the fill is a function of the SURFACE
                 // this run sits on — a banded heading, a quote panel, a header cell —
@@ -370,6 +370,49 @@ mod markup_tests {
         assert!(
             !out.contains('['),
             "no note for a comment-less claim: {out}"
+        );
+    }
+
+    fn claim_markup(md: &str) -> String {
+        let theme = crate::theme::Themes::builtin().resolve("system");
+        let d = doc::build(md, &RenderOptions::default());
+        let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
+            panic!("expected one paragraph: {:?}", d.blocks);
+        };
+        inline_markup(inlines, &d, &theme, None)
+    }
+
+    /// TDD 25.13: inline code inside a claim is drawn inside the claim's highlight.
+    #[test]
+    fn inline_code_inside_a_claim_is_inside_its_highlight_in_pdf_markup() {
+        let theme = crate::theme::Themes::builtin().resolve("system");
+        let claim = crate::pangospan::annotation_claim(&theme).open;
+        let code = crate::pangospan::code(None).open;
+        let out = claim_markup("{==see `code` here==}{>>c<<}\n");
+        assert!(
+            out.contains(&format!("{claim}{code}")),
+            "`code` is outside the claim highlight: {out}"
+        );
+    }
+
+    /// TDD 25.13: the margin note follows a claim that ends in inline code.
+    #[test]
+    fn a_claim_ending_in_inline_code_has_its_margin_note_after_the_code() {
+        let out = claim_markup("{==ends in `code`==}{>>c<<}\n");
+        let note = out.find("[c]").expect(&out);
+        let code = out.rfind("code").unwrap();
+        assert!(code < note, "note precedes the code: {out}");
+        assert_eq!(out.matches("[c]").count(), 1, "{out}");
+    }
+
+    /// TDD 25.13: a comment with no claim reaches the PDF as a margin note.
+    #[test]
+    fn a_claimless_comment_has_a_margin_note_in_pdf_markup() {
+        let out = claim_markup("First words. {>>a note<<}\n");
+        assert!(out.contains("[a note]"), "{out}");
+        assert!(
+            out.find("First words.").unwrap() < out.find("[a note]").unwrap(),
+            "{out}"
         );
     }
 

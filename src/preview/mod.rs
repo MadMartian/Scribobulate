@@ -43,6 +43,8 @@ mod scripttests;
 mod scroll;
 pub(crate) mod sourcemap;
 pub(crate) mod splice;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod wrapchar_tests;
 
 pub(crate) use cells::{cell_copymap, cell_search_targets};
 /// Re-exported for `widgets::disclosure`'s vocabulary guard only — the sheet is the sole

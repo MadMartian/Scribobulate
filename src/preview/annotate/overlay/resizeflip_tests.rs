@@ -9,11 +9,17 @@ use crate::widgets::floating_card::FloatingCardExt;
 use gtk::prelude::*;
 use std::time::Duration;
 
-/// Narrow, so the lead paragraphs and the target paragraph wrap.
-const NARROW: i32 = 320;
+/// Narrow, so the lead paragraphs and the target paragraph wrap. Narrow enough that the word
+/// with `CARD_ROOM` above it is within the first line's width once widened: from a wider
+/// start it landed on the second wide line, 3 px clear of the card's height plus its gap.
+const NARROW: i32 = 150;
 /// Wide, so none of them does.
 const WIDE: i32 = 1000;
 const HEIGHT: i32 = 400;
+/// Scrolled this far past the target's top, so the word that reflows to the first line sits
+/// well above the card's height plus its gap (measured 33 px clear, where the target at the
+/// very top left 3 px and a loaded run read 45 against 45).
+const SCROLL_PAST: f64 = 20.0;
 /// Room the word needs above it for the card to sit there: the card is 41 px high on macOS,
 /// plus its gap to the word and a margin for a taller one elsewhere.
 const CARD_ROOM: i32 = 80;
@@ -110,7 +116,7 @@ fn a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it() {
     let vadj = scroller.vadjustment();
     crate::saferizer::scrollpos::jump(
         &vadj,
-        f64::from(view.iter_location(&buf.iter_at_offset(target)).y()),
+        f64::from(view.iter_location(&buf.iter_at_offset(target)).y()) + SCROLL_PAST,
     );
     drain_for(Clock::Frame, Duration::from_millis(300));
 
@@ -156,14 +162,24 @@ fn a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it() {
     let _moved = until_or_for(Clock::Frame, Duration::from_secs(5), || {
         vadj.value() != value_before
     });
-    // The card's re-pin is debounced (~40 ms) and then waits for a paint.
-    let flipped = until_or_for(Clock::Frame, Duration::from_secs(2), || {
+    // The card's re-pin is debounced (~40 ms) and then waits for a paint. The card still
+    // sits where it did above the word until then, and once the word has moved up that
+    // stale spot is already clear of it, so "below the word" alone is true before any flip:
+    // wait for the card to leave its old place, let the re-pin settle, then read the final
+    // state.
+    let below_word = || {
         let (_, _, word_bottom) = line_box_in(&view, &overlay, &word);
         card.is_visible()
             && card
                 .compute_bounds(&overlay)
                 .is_some_and(|b| f64::from(b.y()) >= word_bottom)
+    };
+    let _repinned = until_or_for(Clock::Frame, Duration::from_secs(2), || {
+        card.compute_bounds(&overlay)
+            .is_some_and(|b| b.y() != bounds.y())
     });
+    drain_for(Clock::Frame, Duration::from_millis(300));
+    let flipped = below_word();
     let (word_x, word_top, word_bottom) = line_box_in(&view, &overlay, &word);
     assert!(
         // No room above is the placement's own rule: the card's height plus its gap.

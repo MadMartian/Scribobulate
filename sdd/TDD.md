@@ -80,7 +80,7 @@
 - **When** the application tries to open it
 - **Then** the path is refused before it is read, the tab shows a refusal notice naming the reason, and the tab carries no backing path — so a later save cannot write the notice over the user's file
 - **And** a path that merely does not exist is unaffected, still opening as an empty creatable document (1.3)
-- **And** on Windows, a filename Windows reserves for a device is refused the same way, from its name alone, before anything opens it — `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`COM9`, `LPT1`–`LPT9`, their superscript forms `COM¹`–`COM³` and `LPT¹`–`LPT³`, `CONIN$` and `CONOUT$`, under any extension, in any letter case, and with trailing dots or spaces (`nul.md`, `Nul.Md.`, `nul .md`) — the notice says it is a Windows device name, not a file. Opening one reaches the device: `nul.md` read as an empty document with a backing path. A Save As to such a name is refused with the same reason ("Could not save the file"), and the document stays untitled. On Linux and macOS these are ordinary names
+- **And** on Windows, a filename Windows treats as a device is refused the same way, from its name alone, before anything opens it. Which names those are is asked of Windows, because it depends on the release: on Windows 10 they are `NUL`, `CON`, `PRN`, `AUX`, `COM1`–`COM9`, `LPT1`–`LPT9`, their superscript forms `COM¹`–`COM³` and `LPT¹`–`LPT³`, `CONIN$` and `CONOUT$`, under any extension, in any letter case, and with trailing dots or spaces (`nul.md`, `Nul.Md.`, `nul .md`); a release that treats such a name with an extension as an ordinary file (reportedly Windows 11) opens, saves and exports it like any other file. Where Windows cannot be asked, the Windows 10 list decides. The notice says it is a Windows device name, not a file. Opening one reaches the device: `nul.md` read as an empty document with a backing path. A Save As to such a name is refused with the same reason ("Could not save the file"), and the document stays untitled. On Linux and macOS these are ordinary names
 - **And** a regular file within the limit whose bytes contain a NUL (a zero byte) is refused the same way once it has been read — the notice says it holds a NUL and is binary data rather than text, and the tab carries no backing path — because the editor cannot hold a NUL, and a document the editor could not take must never be one a save can write back: admitted, it opened an empty editor against the file's full text, a tab already marked unsaved, and a Save with nothing typed replaced the file with nothing. This holds for every route a document is read by: Open in any form, session restore, link navigation and crash recovery
 - **And** a file whose bytes are not UTF-8 at all is likewise not opened as text: the tab shows a notice that it could not be opened, again with no backing path
 
@@ -185,8 +185,9 @@
 ### 2.2·a11y Text views use a screen-reader-safe wrap mode (no AT-SPI abort)
 - **Given** the preview, under any GTK, with or without a screen reader (Orca/AT-SPI) reading it
 - **When** AT-SPI requests the text-run attributes of the preview view or a run under the inline-code tag
-- **Then** the app does **not** abort: on GTK **4.8 and later** the preview view and the CodeInline tag wrap at words and break within a word only when it cannot fit (`WordChar`); **below 4.8** they wrap at characters (`Char`), because GTK 4.6's AT-SPI path casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136)
-- **And** neither mode ever produces an over-wide line — never plain `Word`, which lets a long unbreakable token overflow — preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)
+- **Then** the app does **not** abort: no tag in the preview's table and not the view itself carries `WordChar` below GTK **4.7**, because GTK 4.6's AT-SPI path (`gtkatspitextbuffer.c`) casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136; the translation first appears in 4.7.0). On GTK **4.7 and later** the preview view and the CodeInline tag wrap at words and break within a word only when it cannot fit (`WordChar`)
+- **And** below 4.7 the view and the inline-code tag wrap at **words** (`Word`), never at characters, so prose breaks at the spaces between words. GTK takes one wrap mode per paragraph, from its first visible segment, so a paragraph holding a run with no Unicode line-break opportunity (as Pango reports them; a slash or hyphen is one, an underscore is not) longer than a limit derived from the narrowest preview pane (the 360 px window floor less the paragraph's margins, over the em at the render's zoom, times a heading's scale) carries the `wrap-char` tag over its first character and wraps by character. **The trade-off, stated plainly: only a paragraph that holds such a run breaks mid-word on GTK below 4.7.** Code blocks keep character wrapping; from 4.7 no paragraph carries `wrap-char`. A re-render, and a disclosure splice, decide each paragraph again, so a paragraph that gains or loses a long run changes mode
+- **And** no paragraph is over-wide in a pane at the window floor — never plain `Word` for a paragraph holding a long unbreakable token — preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on. A pane narrower than the floor (the outline open at the floor, a dragged split) can still be outrun by a run just under the limit; that is accepted, since a limit sized for it would switch nearly every paragraph (regression tests in `preview::render`, `preview::wrapchar_tests` and the splice tag tests)
 
 ### 2.2a Table header row is visually distinguished
 - **Given** a GFM table (the header row is the row above the `---` delimiter row)
@@ -1484,7 +1485,7 @@
 - **Then** it offers Insert Emoji (opening the emoji chooser at the cursor) and a Change Case submenu (UPPER / lower / Title / tOGGLE) acting on the selection — matching the editor's own context menu
 - **And given** preview mode (no editor)
 - **When** the user opens the Edit menu
-- **Then** those items are disabled (and Change Case also requires a selection)
+- **Then** those items are disabled (and Change Case also requires a selection), and the Change Case row itself is greyed with them — in the Edit menu and in the document context menu — rather than drawn enabled over four greyed items
 
 ### 9.15 Copy is enabled by a selection inside a table cell
 - **Given** the preview (or split preview) showing a table, with text selected inside one table cell
@@ -2930,6 +2931,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a selection anywhere in a scrolled view (near the top, middle, or bottom of the viewport), in either pane
 - **When** the comment card is raised
 - **Then** it appears centered on the selection and adjacent to it (just above, or below when there is no room above) — never pinned to a corner or drifting away from the selection on repeated use
+- **And** when the view is scrolled while the card is open, the card stays open and moves with the text it belongs to, re-placed by the same rule; scrolling does not close it
 
 ### 17.26 Adding or removing an annotation does not disturb the reading position
 - **Given** the preview is scrolled to a position partway through a document
@@ -3874,6 +3876,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** hiding one section and showing it again returns to the divider position the reader chose, rather than resetting the split
 - **And** with only one section shown there is no divider at all — that section fills the sidebar (20.9), and a window-height change is shared between the two rather than taken entirely from one
 - **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is out of range, restores to the even split rather than to a jammed divider
+- **And** only a divider the reader set is remembered: shrinking the window until a section reaches its minimum height moves the divider but does not overwrite the remembered split, and growing the window again brings the remembered ratio back
 
 ### 20.22 The annotations viewer's heading counts the annotations
 - **Given** a document with annotations
@@ -4044,6 +4047,7 @@ buffer holds the only copy.
 - **Given** an unclean exit that left recoverable documents
 - **When** the application restarts
 - **Then** each recovered tab shows a dismissible notice naming when the recovered changes were captured, and the window's status bar reports how many of its documents were recovered
+- **And** a recovered tab that is not in front shows its unsaved marker in the tab strip at once, not only when it is selected
 - **And** a window that recovered nothing shows neither — never "Recovered 0 documents"
 
 ### 22.9 Recovery is applied first and reversible second
@@ -4419,6 +4423,8 @@ up doing.
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
 - **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
 - **And** a bare highlight (17.67) is exported highlighted and listed by its claim alone: it has no comment, so it gets no aside or margin note and no empty paragraph in the summary
+- **And** inline code inside a claim is highlighted with the text around it, and a comment follows the whole claim, including a claim that ends in inline code
+- **And** a comment with no claim (`{>>a note<<}`) is exported where the preview puts its margin marker, as an aside or margin note with no highlight, and the HTML summary lists it by its comment alone, with no empty quote
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export
