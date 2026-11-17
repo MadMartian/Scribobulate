@@ -69,13 +69,10 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
-| BP | Any | Production | Typing over a selection takes two Ctrl+Z to undo | Low |
 | BQ | Any | Production | A recovered tab in the background shows no unsaved dot until it is opened | Low |
-| BS | Any | Production | Ctrl+T's new document holds the welcome text as editable document text | Low |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
 | BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
 | BV | Mac | Production | Opening and closing a second window (Cmd+N, Cmd+W) grows RSS by about 1.5 MB per cycle with no plateau over 90 cycles, while the window-cycle memory gate reads about 45 KB per cycle | Medium |
-| BW | Any | Production | In the preview, Edit's "Change Case" submenu row draws enabled while all four of its items are greyed | Low |
 | BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 | BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
@@ -93,6 +90,7 @@ reused, and run in a series of their own apart from the IDs above.
 | CLSD-04 | Mac | Upstream | In fullscreen, a click issued while the transition animation is still running is never delivered — AppKit blocks input for its own ~250-500ms window, in any Cocoa application. Not ours to fix, and not GTK's |
 | CLSD-05 | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141, informational): `syntect` reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml`; the data is never a user's file |
 | CLSD-06 | Windows | Upstream | After a native file dialog has been used, the process outlives Quit by about a second (network-dependent) while Windows tears down a shell thread blocked in network browsing; the app itself has exited |
+| CLSD-07 | Any | Upstream | Typing over a selection of two or more characters takes two Ctrl+Z to undo: GTK records the deletion and the insertion as separate steps by design |
 
 
 ## CLSD-01. Tables are selection islands
@@ -500,14 +498,6 @@ cancel. Not yet traced.
 **Next step**: trace on the Windows seat which source sets the scroll value after the
 click, before changing anything.
 
-## BP. Typing over a selection takes two undos
-
-**Severity**: Low (both steps undo correctly; it takes two presses).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): select text in the editor, type a
-character, Ctrl+Z → the deletion and the insertion are undone as two steps. Not checked
-on Linux or macOS; GtkSourceView's undo grouping is shared, so it is likely `Any`.
-
 ## BQ. A recovered background tab shows no unsaved dot until it is opened
 
 **Severity**: Low (the content is recovered and is saved or discarded as usual; only the
@@ -516,15 +506,6 @@ tab's indicator is late).
 **Observed** (2026-11-15, `windows` seat, ungraded): after crash recovery restores
 unsaved changes into a tab that is not the active one, its tab shows no unsaved dot until
 it is selected. `Any` because the tab indicator code is shared; found on Windows, not yet reproduced elsewhere.
-
-## BS. Ctrl+T opens a document holding the welcome text as editable text
-
-**Severity**: Low (the text can be selected and deleted; nothing is saved unless the
-reader saves it).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): Ctrl+T's new tab shows the welcome
-document as editable document text, rather than an empty document. `Any` because the code is shared; found on Windows, not yet reproduced
-elsewhere.
 
 ## BT. Device names with an extension are refused on every Windows
 
@@ -589,15 +570,6 @@ and the footprint does not, and not a surface released late.
 **Next step**: drive TDD 6.13's gate through the path the reader takes (a new window, then
 closing its last tab), confirm it fails on macOS CI, then find what the close-tab path
 keeps that `window.close()` does not.
-
-## BW. The preview's Change Case submenu row draws enabled over greyed items
-
-**Severity**: Low (cosmetic; the items themselves are correctly unavailable).
-
-**Observed** (2026-11-16, `mac` seat, MANUAL-TEST 9.14): with the preview focused, Edit ▸
-Change Case draws as an enabled row while its four items and Insert Emoji are greyed. A
-submenu row has no action of its own, so GTK draws it enabled whatever its items say. The
-menu model is shared, so every platform is affected.
 
 ## BX. Export is enabled with two refused documents open
 
@@ -837,3 +809,26 @@ throughout, so a relaunch never reaches the dying process. The only lever, stopp
 `IFileDialog` from enumerating the network, is not exposed by GTK's native chooser, and
 `FOS_HIDEPINNEDPLACES` would strip the whole navigation pane. Time an exit by waiting on
 the process handle: `GetExitCodeProcess` is set at `ExitProcess`, before thread teardown.
+
+## CLSD-07. Typing over a selection takes two undos
+
+**Status**: Closed (GTK's deliberate design; the operator ruled to leave it, 2026-11-17).
+
+**Platform**: Any. It was measured on Linux with GTK 4.6.9, and the code is GTK's own, shared by every
+backend.
+
+Select two or more characters in the editor and type one: Ctrl+Z restores the selection's
+deletion and the typed character as two steps. A plain `GtkTextView`, and a bare
+`GtkSourceView` buffer and view with none of the app's wiring, behave the same: one
+`buf.undo()` after the replacement leaves `" world\n"` where `"hello world\n"` was.
+`gtk_text_view_commit_text` (gtktextview.c, GTK 4.6.9) ends and reopens the user action
+after deleting a selection longer than one character. Its own comment says that is so
+there are two undo operations. The event trace is `begin, delete, end, begin, insert,
+end`. A one-character selection stays one step.
+
+**Why not fixed**: the only app-side route overrides GTK's design. It would open an undo
+group from a capture-phase key controller when a printable key arrives over a selection,
+and close it on an idle, holding the group open across a main-loop turn, and it would do
+nothing for input-method composition. Reopen only if GTK changes the behaviour, or if a
+route appears that also covers composition.
+

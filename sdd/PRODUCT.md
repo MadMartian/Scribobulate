@@ -114,7 +114,7 @@ editor with the resource footprint of a native desktop application.
 5a. If Scribobulate itself dies with unsaved edits open, reopen it: the affected
    documents come back as they were, still marked unsaved, each offering **Keep**
    or **Discard recovery**. Nothing was written to your files in the meantime.
-6. Open additional documents: File ▸ New Document (Ctrl+T) adds a blank tab to
+6. Open additional documents: File ▸ New Document (Ctrl+T) adds a tab holding the welcome page to
    the current window; opening a file from disk loads into a blank tab if one
    is available in the current window, or otherwise opens in a new window
    (View ▸ New Window opens one explicitly). Naming several files at once —
