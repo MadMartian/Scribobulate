@@ -66,19 +66,15 @@ both are retired — a group cannot be triaged or deleted one finding at a time.
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
-| BL | Any | Production | Shrinking a window until a sidebar section reaches its minimum height overwrites the remembered divider ratio for good, so the next restart restores the squeezed split | Low |
-| BM | Any | Production | In HTML and PDF export, inline code inside a highlighted claim is not highlighted | Low |
-| BN | Any | Production | In HTML and PDF export, a claim that ends in inline code puts its comment before the code rather than after it | Low |
-| BO | Any | Production | In HTML and PDF export, a comment attached to no highlighted text is missing from the exported body, and the HTML summary lists it with an empty quote | Low–Medium |
 | BP | Any | Production | Typing over a selection takes two Ctrl+Z to undo | Low |
 | BQ | Any | Production | A recovered tab in the background shows no unsaved dot until it is opened | Low |
-| BR | Any | Production | An open comment card follows its marker when the preview is scrolled, rather than closing | Low |
 | BS | Any | Production | Ctrl+T's new document holds the welcome text as editable document text | Low |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
 | BU | Linux | Test | `resizeflip_tests::a_resize_that_moves_the_word_up_flips_the_annotate_card_below_it` fails its precondition under full-suite load (word top 45 against a card height plus gap of about 45) and passes alone | Low |
 | BV | Mac | Production | Opening and closing a second window (Cmd+N, Cmd+W) grows RSS by about 1.5 MB per cycle with no plateau over 90 cycles, while the window-cycle memory gate reads about 45 KB per cycle | Medium |
 | BW | Any | Production | In the preview, Edit's "Change Case" submenu row draws enabled while all four of its items are greyed | Low |
 | BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
+| BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 
 ## Closed issues
 
@@ -500,56 +496,6 @@ cancel. Not yet traced.
 **Next step**: trace on the Windows seat which source sets the scroll value after the
 click, before changing anything.
 
-## BL. Shrinking a window overwrites the remembered sidebar split
-
-**Severity**: Low (only a window shrunk to a section's minimum height; the divider can be
-dragged back).
-
-**Observed** (2026-11-15, `windows` seat, MANUAL-TEST 20.21b): each window's divider
-survives a restart and holds its ratio as the window grows taller. Shrinking a window
-until a section reaches its minimum height rewrites `sidebar_split` in `session.toml` for
-good (0.235 → 0.376, 0.82 → 0.71).
-
-**Cause**: `window::chrome::track_sidebar_split` records the fraction on every
-`notify::position`, and GTK clamps the position when the window gets too short for a
-section, so the clamp is stored as if the reader had dragged it. The code is shared, so
-every platform is affected.
-
-**Fix direction**: record only a position the reader set (a drag), or ignore a position
-change that arrives with a height change, and re-apply the remembered fraction when the
-window grows again.
-
-## BM. Export does not highlight inline code inside a claim
-
-**Severity**: Low (the claim's text is highlighted around the code; the code itself is
-plain).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF):
-`{==see `code` here==}{>>c<<}` exports with `see` and `here` highlighted and `code` not.
-TDD 25.13 says the highlight covers exactly the annotated characters. The export builder is
-shared, so every platform is affected. Not yet reproduced in a unit test.
-
-## BN. Export puts a claim's comment before its closing inline code
-
-**Severity**: Low (the comment is present; only its position is wrong).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently, HTML and PDF): a
-claim that ends in inline code, `{==ends in `code`==}{>>c<<}`, exports with the comment's
-aside or margin note placed before `code` rather than after the claim. Likely the same
-place in the export builder as BM: the code span is emitted outside the claim. Not yet
-reproduced in a unit test.
-
-## BO. Export drops a comment attached to no highlighted text
-
-**Severity**: Low–Medium (the reader's comment is missing from the exported document; the
-source file is untouched).
-
-**Observed** (2026-11-15, `windows` seat, two chunks independently): a comment with no
-claim (`{>>a note<<}` on its own, not after a `{==…==}`) does not appear in the exported
-body, HTML or PDF, and the HTML Annotations summary lists it with an empty quote. The
-preview shows its marker. The export builder is shared, so every platform is affected.
-Not yet reproduced in a unit test.
-
 ## BP. Typing over a selection takes two undos
 
 **Severity**: Low (both steps undo correctly; it takes two presses).
@@ -566,16 +512,6 @@ tab's indicator is late).
 **Observed** (2026-11-15, `windows` seat, ungraded): after crash recovery restores
 unsaved changes into a tab that is not the active one, its tab shows no unsaved dot until
 it is selected. `Any` because the tab indicator code is shared; found on Windows, not yet reproduced elsewhere.
-
-## BR. An open comment card follows its marker on scroll
-
-**Severity**: Low (the card stays readable and re-pins to its marker; the question is only
-whether it should close).
-
-**Observed** (2026-11-15, `windows` seat, ungraded): with a comment card open, scrolling
-the preview carries the card along with its marker rather than closing it. No TDD rubric
-states what a scroll does to an open comment card, so this is a gap in the spec before it
-is a defect: decide the behaviour first, then fix or record it.
 
 ## BS. Ctrl+T opens a document holding the welcome text as editable text
 
@@ -669,6 +605,31 @@ refused document open (its refusal page shown, no backing file) the toolbar's Ex
 button is greyed; with two such tabs open it is enabled. Not traced; a sensitivity that
 follows the tab count rather than the active tab's backing fits the symptom. `Any` because the toolbar
 sensitivity code is shared; found on Windows, not yet reproduced elsewhere.
+
+## BY. The preview breaks prose mid-word on GTK below 4.8
+
+**Severity**: Medium (every paragraph that wraps is affected, on the platform most readers
+run; reading is slower, and no text is lost).
+
+**Observed** (2026-11-17, operator, 1.0.0): paragraph lines in the preview break in the
+middle of a word rather than at a space. The operator reported it before and believed it
+was fixed.
+
+**Cause (from the code, not yet re-measured)**: `tags::preview_wrap_mode` deliberately
+answers `Char` below GTK 4.8 and `WordChar` from 4.8. `WordChar` aborts the app on GTK
+4.6 when a screen reader reads the preview's text attributes (GTK4Rs/AP-136, fixed
+upstream in 4.8), and `Word` alone lets a long token (a URL, an identifier) overflow the
+pane. The earlier fix gave macOS and Windows word wrapping, because their bundled GTK is
+4.8 or later. Linux uses the distribution's GTK (4.6.9 on the build host), so it kept
+character wrapping. So on Linux this is the recorded trade-off, not a regression. Seen
+on macOS or Windows, it would be a regression. Which platform the operator saw it on is
+not yet confirmed.
+
+**Fix direction**: not yet chosen. Candidates: choose the mode per paragraph, `Word`
+unless the paragraph holds a token too wide for the pane; offer a break opportunity
+inside long tokens without changing the copied text; or avoid the attribute path that
+aborts. Any route must keep the no-overflow invariant and must not reopen the
+screen-reader abort.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

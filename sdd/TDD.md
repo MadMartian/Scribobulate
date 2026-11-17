@@ -2930,6 +2930,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a selection anywhere in a scrolled view (near the top, middle, or bottom of the viewport), in either pane
 - **When** the comment card is raised
 - **Then** it appears centered on the selection and adjacent to it (just above, or below when there is no room above) — never pinned to a corner or drifting away from the selection on repeated use
+- **And** when the view is scrolled while the card is open, the card stays open and moves with the text it belongs to, re-placed by the same rule; scrolling does not close it
 
 ### 17.26 Adding or removing an annotation does not disturb the reading position
 - **Given** the preview is scrolled to a position partway through a document
