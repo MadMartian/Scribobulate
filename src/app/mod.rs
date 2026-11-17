@@ -30,6 +30,8 @@ pub(crate) use menubar::{
     build_menubar, build_reading_theme_toolbar_menu, defer_live_menu_mutation,
     update_format_menu_labels,
 };
+#[cfg(target_os = "macos")]
+pub(crate) use menubar::{build_top_level_menus, TopLevelMenus};
 pub(crate) use mnemonics::{access_markup, access_shortcut, escape_mnemonic, mnem};
 pub(crate) use open::{
     attach_file_backing, dialog_dir_for, find_open_tab_for_path, focus_tab, remember_dialog_dir,

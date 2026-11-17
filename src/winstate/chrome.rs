@@ -257,21 +257,20 @@ pub(crate) struct WindowChrome {
     /// popovers on idle and `popdown()`s any still mapped (a latent
     /// GtkPopoverMenuBar behaviour, not our code).
     ///
-    /// `None` on macOS: the menus are rendered as a native `NSMenu` from
-    /// [`menu_model`](Self::menu_model) and there is no in-window bar at all, so
+    /// `None` on macOS: the menus are rendered as a native `NSMenu` (see
+    /// `platform::mac::menubar`) and there is no in-window bar at all, so
     /// the workaround above has nothing to walk and correctly does nothing.
     pub(crate) menubar: Option<gtk::PopoverMenuBar>,
-    /// This window's whole menu model — the File/Edit/Format/View/Help submenus
-    /// the in-window bar renders, kept so a platform that renders menus *outside*
-    /// the window can export the same model rather than assembling a second one.
-    /// Read by `platform::mac::menubar` each time this window becomes active, so
-    /// the system menu bar shows this window's `View ▸ Documents` list and its
-    /// own `Format ▸` Insert↔Edit labels.
+    /// This window's whole menu model — the File/Edit/Format/View/Help submenus the
+    /// in-window bar renders.
     ///
-    /// Stored unconditionally (like `menubar` above) so `build_chrome` needs no
-    /// platform branch of its own; only macOS's `platform::mac::menubar` seam
-    /// reads it, so a non-macOS build sees no call site at all.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// No product code reads it any more. `platform::mac::menubar` used to export it on
+    /// every activation, which made GTK's Quartz backend build, and never free, a whole
+    /// `NSMenu` tree per activation (~0.8 MB; BV); the system menu bar now has ONE model
+    /// for the process and copies in this window's `documents_menu` and
+    /// `format_insert_menu` instead. Kept for the memory gate's check that windows share
+    /// their File/Edit/Help submenus (`memgate::window`).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) menu_model: gtk::gio::Menu,
     /// Last edit-kind applied to [`format_insert_menu`](Self::format_insert_menu),
     /// to skip redundant remove/insert churn (was a process-global thread-local
