@@ -3874,6 +3874,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** hiding one section and showing it again returns to the divider position the reader chose, rather than resetting the split
 - **And** with only one section shown there is no divider at all — that section fills the sidebar (20.9), and a window-height change is shared between the two rather than taken entirely from one
 - **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is out of range, restores to the even split rather than to a jammed divider
+- **And** only a divider the reader set is remembered: shrinking the window until a section reaches its minimum height moves the divider but does not overwrite the remembered split, and growing the window again brings the remembered ratio back
 
 ### 20.22 The annotations viewer's heading counts the annotations
 - **Given** a document with annotations
