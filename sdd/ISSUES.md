@@ -70,7 +70,6 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
 | BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
-| BX | Any | Production | With two refused documents open (a NUL byte, a device name), the toolbar's Export button is enabled; with one it is greyed | Low |
 | BY | Linux | Production | The preview breaks prose lines mid-word on a Linux whose GTK is below 4.8 (4.6.9 on the build host), where it should break at the spaces between words | Medium |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
@@ -516,17 +515,6 @@ as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` 
 `COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
 matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
 directory, and the app must open it if the directory lists it and refuse it otherwise.
-
-## BX. Export is enabled with two refused documents open
-
-**Severity**: Low (an export of a refusal page is harmless; the button's state is merely
-inconsistent).
-
-**Observed** (2026-11-16, `windows` seat, ungraded, on the 1.0.0 installer): with one
-refused document open (its refusal page shown, no backing file) the toolbar's Export
-button is greyed; with two such tabs open it is enabled. Not traced; a sensitivity that
-follows the tab count rather than the active tab's backing fits the symptom. `Any` because the toolbar
-sensitivity code is shared; found on Windows, not yet reproduced elsewhere.
 
 ## BY. The preview breaks prose mid-word on GTK below 4.8
 
