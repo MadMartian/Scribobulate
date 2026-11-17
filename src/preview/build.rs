@@ -783,6 +783,9 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
             }
         }
     }
+    // Every margin and scale tag is on now, so a paragraph's real width is readable:
+    // the one place the paragraph-level wrap mode is decided for a full render.
+    r.mark_wide_runs(0, r.end_offset());
     let char_count = buf.char_count();
     let source_map = finalize_source_map(source_map, char_count, md_owned.len());
     let copymap = crate::copymap::build(md, &raw_evs, char_count, &r.scripts);

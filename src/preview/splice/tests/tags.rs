@@ -421,3 +421,46 @@ fn a_highlight_inside_a_body_survives_a_spliced_fold_and_expand() {
          over exactly the characters it covered before the fold"
     );
 }
+
+/// **A spliced region decides each paragraph's wrap mode the way a full render does**
+/// (TDD 2.2·a11y). Below GTK 4.7 a paragraph holding a run too wide to fit is switched to
+/// character wrapping by the `wrap-char` tag; expanding a block must give its paragraphs
+/// the same answer a fresh render gives them, and a body that gains a long run must flip
+/// from none to some.
+#[gtktest::test]
+fn a_spliced_expand_switches_exactly_the_paragraphs_a_full_render_does() {
+    let policy = crate::tags::wrap_policy();
+    let render = |body: &str| {
+        let md = format!(
+            "intro paragraph\n\n<details>\n<summary>label</summary>\n\n{body}\n\n</details>\n\ntail\n"
+        );
+        let key = crate::renderer::disclosure::scan_document(
+            &md,
+            crate::renderer::frontmatter::Show::AsDisclosure,
+        )[0]
+        .fold_key();
+        let mut opened = FoldState::default();
+        opened.toggle(key);
+        ranges_both_ways(&md, &FoldState::default(), &opened, "wrap-char")
+    };
+
+    let prose = render("an ordinary sentence of short words only");
+    assert_eq!(prose.spliced, prose.fresh);
+    assert!(
+        prose.spliced.is_empty(),
+        "a paragraph with no wide run must keep word wrapping: {:?}",
+        prose.spliced
+    );
+
+    let wide = render(&format!("before {} after", "b".repeat(200)));
+    assert_eq!(
+        wide.spliced, wide.fresh,
+        "the splice must mark the paragraph a full render marks"
+    );
+    assert_eq!(
+        !wide.spliced.is_empty(),
+        policy.char_for_wide_runs,
+        "a body gaining a 200-character run flips to Char below GTK 4.7, and from 4.7 \
+         stays untouched (policy {policy:?})"
+    );
+}

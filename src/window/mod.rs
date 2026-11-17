@@ -413,7 +413,7 @@ pub(crate) fn new_window_from_source(
 /// it is the reason no monitor-aware clamp is applied to this value: at 360 the
 /// floor is already below any display the app can be used on at all, so a clamp
 /// against monitor geometry could never fire and would only read as if it might.
-const MIN_WINDOW_WIDTH: i32 = 360;
+pub(crate) const MIN_WINDOW_WIDTH: i32 = 360;
 
 /// The shared window/first-tab construction every window goes through,
 /// regardless of whether its initial numbers came from `WindowInit::default()`
