@@ -4044,6 +4044,7 @@ buffer holds the only copy.
 - **Given** an unclean exit that left recoverable documents
 - **When** the application restarts
 - **Then** each recovered tab shows a dismissible notice naming when the recovered changes were captured, and the window's status bar reports how many of its documents were recovered
+- **And** a recovered tab that is not in front shows its unsaved marker in the tab strip at once, not only when it is selected
 - **And** a window that recovered nothing shows neither — never "Recovered 0 documents"
 
 ### 22.9 Recovery is applied first and reversible second

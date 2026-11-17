@@ -419,6 +419,11 @@ async fn apply_recovered_content(
         swap.header.written_at
     );
     refresh_dirty_status(window);
+    // `refresh_dirty_status` relabels the ACTIVE tab's strip entry only. A recovered tab
+    // that is not in front would keep its pre-recovery label, and so show no unsaved dot,
+    // until it was selected; badge this tab's own entry (a no-op for the active one,
+    // whose label is already current).
+    crate::window::badge_tab_label(tab);
     rerender_tab_preview_in_place(
         tab,
         tab.view_mode.get(),
