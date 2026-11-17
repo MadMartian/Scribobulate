@@ -77,8 +77,8 @@ pub(crate) enum FsRules {
     /// [`Self::Windows`] as the host it is running on applies it: which names are devices
     /// is asked of Windows ([`crate::platform::host_device_behind_name`]), with the name
     /// rule as the fallback where it cannot be asked. Windows 10 reserves `nul.md`; newer
-    /// releases reportedly do not, and there it is a file this application must open
-    /// (ISSUES BT). What [`host_rules`] returns on Windows.
+    /// releases reportedly do not, and there it is a file this application must open.
+    /// What [`host_rules`] returns on Windows.
     WindowsHost,
 }
 
@@ -118,7 +118,7 @@ const UNLISTED_DEVICE: &str = "This name";
 /// ([`crate::platform::host_device_behind_name`]). Split out so the decision is testable
 /// on every host with any answer.
 ///
-/// - Not asked, or the call failed (`None`): the name rule decides, as before ISSUES BT.
+/// - Not asked, or the call failed (`None`): the name rule decides, as it did before Windows was asked.
 /// - An ordinary file (`Some(None)`): no device, whatever the name rule says — on a
 ///   Windows that no longer reserves `nul.md`, that is a real file.
 /// - A device (`Some(Some(spelled))`): refused, named canonically — the name rule's
@@ -234,7 +234,7 @@ const WINDOWS_DEVICE_NAMES: &[&str] = &[
 /// A pure name rule: what [`FsRules::Windows`] applies, and the fallback of
 /// [`FsRules::WindowsHost`] where Windows cannot be asked. On a Windows host the app asks
 /// Windows instead, because newer releases reportedly stopped reserving a device name
-/// with an extension (ISSUES BT); measured on Windows 10, the two agree on every name
+/// with an extension; measured on Windows 10, the two agree on every name
 /// above and below.
 pub(crate) fn windows_device_name(name: &str) -> Option<&'static str> {
     let stem = name
@@ -824,8 +824,8 @@ mod tests {
         }
     }
 
-    /// **Windows's answer decides, the name rule only where Windows was not asked
-    /// (ISSUES BT).** A Windows that makes `nul.md` a file (reportedly 11) answers "a
+    /// **Windows's answer decides, the name rule only where Windows was not asked.**
+    /// A Windows that makes `nul.md` a file (reportedly 11) answers "a
     /// file", and the name is then usable; a Windows 10 answer of `\\.\nul` is the NUL
     /// device; a failed call falls back to the rule. Pure over the answer, so every
     /// host checks every case.

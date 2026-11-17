@@ -290,8 +290,8 @@ mod device_name_tests {
             for stem in ["nul", "nulbyte"] {
                 let name = format!("{stem}.{ext}");
                 // Refused exactly where the filesystem makes no file of the name
-                // (ISSUES BT): a device on Windows 10, a file off Windows and
-                // reportedly on Windows 11.
+                // (a device on Windows 10, a file off Windows and
+                // reportedly on Windows 11).
                 let probe = tempfile::tempdir().expect("temp dir");
                 let refused = !crate::docio::content::host_makes_a_file_of(
                     &probe.path().join(&name),

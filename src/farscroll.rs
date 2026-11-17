@@ -322,7 +322,7 @@ fn reissue_still_current(
 
 /// Where the reader was when a deferred scroll was issued: the caret, and the render the
 /// buffer held. Every deferred scroll checks it before it runs and stands down if it no
-/// longer holds (TDD 9.33, ISSUES BK).
+/// longer holds (TDD 9.33).
 ///
 /// **Why a deferred scroll needs it.** One deferred to an idle at `DEFAULT_IDLE` or
 /// later cannot run until GTK has laid the whole document out, and on a large document

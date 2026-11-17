@@ -132,7 +132,7 @@ pub(crate) fn screen_name(path: &Path, rules: FsRules) -> Result<(), Refusal> {
 }
 
 /// The filesystem's own answer to whether `path`'s name is a device on this host — the
-/// oracle the device tests decide by (ISSUES BT). It writes `contents` to `path`
+/// oracle the device tests decide by. It writes `contents` to `path`
 /// UNSCREENED and reports whether `path`'s directory, which must start empty, then lists
 /// anything: a device swallows the write and leaves nothing.
 ///

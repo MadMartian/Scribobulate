@@ -1023,7 +1023,7 @@ mod tests {
     /// with `screen_name` disabled, `nul.md` reads as `Loaded` (empty), and the write
     /// fails only as "Incorrect function.", which names no reason.
     ///
-    /// **The filesystem decides what is expected, not a name rule (ISSUES BT).** Each
+    /// **The filesystem decides what is expected, not a name rule.** Each
     /// name is first written unscreened ([`content::host_makes_a_file_of`]): where that
     /// made a file — Linux, macOS, and reportedly Windows 11 for a device name with an
     /// extension — the app must open it like any other file; where the write vanished

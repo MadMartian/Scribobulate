@@ -221,7 +221,7 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
     // And the reader stands every restore down: the idle below cannot run until GTK has
     // laid the whole document out — seconds, on a large one — and a reader who clicked
     // or pressed a key meanwhile is somewhere this restore must not drag them from
-    // (ISSUES BK: Ctrl+End, a click mid-document, then this restore's line 0).
+    // (Ctrl+End, a click mid-document, then this restore's line 0).
     let place = crate::farscroll::ReaderPlace::of(view);
     RESTORE_IN_FLIGHT.set(view, Some(line));
     let settle_or_drop = move |view: &TextView, landed: bool| {
@@ -570,7 +570,7 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
     let bmark = crate::saferizer::buffer_mark::BufferMark::new(mark, &buffer);
     // The reader stands it down too: it re-applies on every validation step for as long
     // as the layout takes, and a reader who clicks or presses a key meanwhile must not be
-    // dragged on to the line it was issued for (ISSUES BK).
+    // dragged on to the line it was issued for.
     let place = crate::farscroll::ReaderPlace::of(view);
 
     // `apply` tracks the target line's top-y DOWN as heights validate top→down;
@@ -883,7 +883,7 @@ mod gtk_integration_tests {
     }
 
     /// **A pending editor restore stands down once the reader has moved the caret
-    /// (ISSUES BK, TDD 9.33).**
+    /// (TDD 9.33).**
     ///
     /// The defect: switching to the editor on a large document issues a restore of the
     /// reader's place (the top, on a document just opened), and its idle runs at

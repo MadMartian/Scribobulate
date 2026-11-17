@@ -6,7 +6,7 @@
 //! Windows 11 and Windows Server 2025 reportedly stopped treating a device name WITH an
 //! extension as a device there, so the same name can be an ordinary file. The application's
 //! name rule (`docio::rename::windows_device_name`) is the Windows 10 answer, and applied
-//! on a newer host it refuses a real file (ISSUES BT).
+//! on a newer host it refuses a real file.
 //!
 //! **The question asked.** `GetFullPathNameW` is the conversion every Win32 file call makes
 //! on a DOS path before it opens anything, and it rewrites a name it treats as a device to
@@ -81,7 +81,7 @@ fn full_path_name(name: &str) -> Option<String> {
 mod tests {
     use super::device_behind_name;
 
-    /// **Windows answers for the device names the rule was measured against (ISSUES BT).**
+    /// **Windows answers for the device names the rule was measured against.**
     /// The names here are device names on every Windows release, with no extension, so the
     /// assertion holds on Windows 10 and on a release that stopped reserving `nul.md`.
     #[test]

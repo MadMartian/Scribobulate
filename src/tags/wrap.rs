@@ -4,7 +4,7 @@
 //!
 //! The mode the preview wants is `WordChar`: break at the spaces between words, and
 //! inside a word only when that word cannot fit, so a long URL or identifier never makes
-//! a line wider than the pane (the no-overflow invariant GTK4Rs/AP-22 and AP-23 depend
+//! a line wider than the pane (the no-overflow invariant GTK4Rs/AP-22 and GTK4Rs/AP-23 depend
 //! on). GTK before 4.7 cannot carry it. Its AT-SPI text-attribute path
 //! (`gtkatspitextbuffer.c`) casts a raw `GtkWrapMode` to `PangoWrapMode` with no
 //! translation, and the two enums disagree past the first value: `GtkWrapMode` is
