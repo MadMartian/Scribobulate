@@ -63,13 +63,12 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
+| D | Windows | Production | In the preview, Ctrl+End pressed before a large document has finished rendering stops short of the end (Section 33–47 of `large-doc.md`) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| BK | Windows | Production | In a large document, a click made while Ctrl+End's jump is still travelling puts the caret on the clicked line, then 1.5–2.5 s later the view snaps back to line 1 and leaves the caret off screen | Low–Medium |
-| BT | Windows | Production | A file whose name is a device name with an extension (`nul.md`, `con.md`) is refused on every Windows, though Windows 11 may treat such a name as an ordinary file | Low |
 | BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
 ## Closed issues
@@ -304,6 +303,20 @@ Windows have not been driven.
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
 
+## D. Preview Ctrl+End before the render settles stops short of the end
+
+**Severity**: Low (a second Ctrl+End, or waiting a moment, reaches the end).
+
+**Observed** (2026-11-17, `windows` seat, `large-doc.md`; 1.0.0 install 2 of 2, the 1.0.1
+build 1 of 1): click into the preview about 0.4 s after the window shows, then press
+Ctrl+End. The view stops partway (Section 47 and Section 33 on 1.0.0, Section 35 on 1.0.1)
+instead of at the last paragraph. Once the preview has rendered first, Ctrl+End reaches
+the end. Linux and macOS not yet checked; on Linux the render settles in well under
+0.4 s, so the window may be too short to hit there.
+
+**Cause**: not traced. It fits a Ctrl+End target computed against the layout GTK has
+validated so far, while the rest of the document is still being laid out on idles.
+
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
@@ -471,49 +484,6 @@ whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, unt
 critical fires and names the holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
-
-## BK. A click during Ctrl+End's travel snaps the view back to line 1 on Windows
-
-**Severity**: Low–Medium (the caret is where the reader clicked, but the view leaves it,
-and the reader has to find their place again).
-
-**Observed** (2026-11-15, `windows` seat, 1.0.0 release pass, MANUAL-TEST 9.33a, 2 of 2
-launches, and in two earlier rounds): `large-doc.md`, Ctrl+End, then a click mid-document
-while the jump is still travelling. The caret lands on the clicked line; 1.5–2.5 s later
-the view returns to line 1. The jump also logs two `Trying to snapshot GtkGizmo … without
-a current allocation` warnings. Linux 0 of 4: there the jump finishes in under 0.1 s, so
-there is nothing to click into. macOS not yet checked.
-
-**What is known**: the 1.0.0 fix that stops the travel where the reader clicks holds on
-Linux by construction and does not hold on Windows, so something else moves the view
-after the travel has stopped. The late return to the top fits a deferred scroll (an idle
-or a re-validation finishing the original Ctrl+End request) that the stop does not
-cancel. Not yet traced.
-
-**Next step**: trace on the Windows seat which source sets the scroll value after the
-click, before changing anything.
-
-## BT. Device names with an extension are refused on every Windows
-
-**Severity**: Low (a file named `nul.md` or `con.md` is rare, and the refusal names the
-reason).
-
-**Observed** (2026-11-16, `windows` seat): the app refuses a filename whose part before
-the first dot is a Windows device name (`docio::rename::windows_device_name`), because on
-Windows 10 `nul.md` opens the NUL device: a read returns nothing and a write disappears.
-Windows 11 and Windows Server 2025 reportedly stopped treating a device name with an
-extension as a device, so there such a name can be a real file, which the app then
-refuses to open, save, rename to or export to. Inferred, not yet checked on a Windows 11
-host.
-
-**Fix direction**: ask Windows whether the path is a device (for example,
-`GetFullPathNameW` returning a `\\.\` path) and refuse only then, keeping the name rule
-as the fallback. MEASURED on Windows 10 (19045, 2026-11-16): `GetFullPathNameW` maps
-`nul.md`, `NUL`, `nul .md`, `nul.tar.gz`, `con.md`, `COM1.md`, `com9.md.`, `lpt1.txt`,
-`aux`, `prn.md`, `conin$`, `CONOUT$.md` and `COM¹.md` to a `\\.\<device>` path, and
-`COM0.md` and `nulbyte.md` to ordinary paths, the only two a write created: the OS answer
-matches the name rule exactly there. The test oracle is the filesystem: write `nul.md` in a temporary
-directory, and the app must open it if the directory lists it and refuse it otherwise.
 
 ## BZ. The editor colours a task item's caption as link text when a link follows
 
