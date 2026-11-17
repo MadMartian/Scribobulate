@@ -1484,7 +1484,7 @@
 - **Then** it offers Insert Emoji (opening the emoji chooser at the cursor) and a Change Case submenu (UPPER / lower / Title / tOGGLE) acting on the selection — matching the editor's own context menu
 - **And given** preview mode (no editor)
 - **When** the user opens the Edit menu
-- **Then** those items are disabled (and Change Case also requires a selection)
+- **Then** those items are disabled (and Change Case also requires a selection), and the Change Case row itself is greyed with them — in the Edit menu and in the document context menu — rather than drawn enabled over four greyed items
 
 ### 9.15 Copy is enabled by a selection inside a table cell
 - **Given** the preview (or split preview) showing a table, with text selected inside one table cell

@@ -278,6 +278,13 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     );
     change_case_action.set_enabled(false);
     window.add_action(&change_case_action);
+    // The Change Case submenu ROW's own action. A `GMenu` submenu row has no action, so GTK
+    // draws it enabled over greyed items; the row names this one instead. No handler: a
+    // row that opens a submenu does nothing when activated. Kept equal to `change-case`'s
+    // enabled state by `update_edit_action_state`, its only writer.
+    let change_case_available = SimpleAction::new("change-case-available", None);
+    change_case_available.set_enabled(false);
+    window.add_action(&change_case_available);
 
     // Format — one parameterised action behind the Format menu, toolbar section,
     // and (Stage 2) the caret overlay.  The string target ("bold".."hr", "h1".."h6")

@@ -323,6 +323,8 @@ pub(crate) fn update_edit_action_state(window: &ApplicationWindow) {
     set_action_enabled(window, "delete", enabled);
     // Change Case also needs an editor selection to act on.
     set_action_enabled(window, "change-case", enabled);
+    // The submenu row's twin (see `editoractions`): the row greys with its items.
+    set_action_enabled(window, "change-case-available", enabled);
 }
 /// Apply the enabled state of every editor-only action for `mode`, in ONE place:
 /// Save, Insert Emoji and Paste (editor-visible), plus Cut/Delete/Change Case (editor +

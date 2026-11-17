@@ -411,6 +411,11 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         // GTK4Rs/AP-69. This row slides to that page (it never dismisses).
         let change_case_marked = format!("{} ▸", crate::app::mnem("Change Case"));
         let change_case_btn = keyed_btn(&change_case_marked, "", "main");
+        // Bound by name, like every other row, so it greys with its four variants and
+        // follows the action live: the row opens a page and has no action of its own, so
+        // it was left enabled over variants gated on `win.change-case`. Activating the
+        // twin does nothing (it has no handler); `clicked` slides to the page.
+        change_case_btn.set_action_name(Some("win.change-case-available"));
         // Weak, as every other capture of the stack here: the stack owns this row, so a
         // strong clone is the cycle `stack → page → row → closure → stack`, and the whole
         // menu body outlived every right-click (GTK4Rs/AP-63).
@@ -731,6 +736,46 @@ mod gtk_integration_tests {
                     .is_none()),
                 "the document menu's body outlived the menu: something it owns holds it"
             );
+            drop(view);
+            win.destroy();
+        });
+    }
+
+    /// **The document menu's Change Case row greys with its four variants.** The row
+    /// slides to a second stack page and has no action of its own, so it was left enabled
+    /// over variants gated on `win.change-case` (the same defect as the menu bar's row).
+    /// It now binds `win.change-case-available`, the no-parameter twin the menu bar's row
+    /// names, so both surfaces follow one action. In the preview (no selection, no
+    /// editor) the row is unavailable; enabling the action while the menu is open
+    /// enables the row, which a build-time snapshot would not.
+    ///
+    /// Mutation check: removing the row's `set_action_name` leaves it sensitive and fails
+    /// the first assertion.
+    #[gtktest::test]
+    fn the_document_menus_change_case_row_follows_the_change_case_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let (win, view) = document_window("docmenucase", "# H\n\ntext\n");
+            let menu = open_document_menu(&win, &view);
+            let row = || {
+                find_widget(menu.upcast_ref(), |w| {
+                    w.downcast_ref::<gtk::Label>()
+                        .is_some_and(|l| l.text().contains("Change Case"))
+                })
+                .and_then(|l| l.ancestor(gtk::Button::static_type()))
+                .expect("the menu has a Change Case row")
+            };
+            assert!(
+                !row().is_sensitive(),
+                "the Change Case row draws enabled over unavailable variants"
+            );
+            crate::window::set_action_enabled(&win, "change-case-available", true);
+            until(Clock::Frame, "the row to follow the action", || {
+                row().is_sensitive()
+            });
+            crate::window::set_action_enabled(&win, "change-case-available", false);
+            menu.popdown();
+            drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
             drop(view);
             win.destroy();
         });
