@@ -38,15 +38,34 @@ fn document() -> String {
         .collect()
 }
 
-/// One View > New Window and close of a whole window, ending with every reference of ours
-/// dropped and the main loop drained, so only a retention the application did not intend
-/// remains. The window is the one Ctrl+N opens: built from a source window.
-fn cycle(app: &gtk::Application, source: &gtk::ApplicationWindow, text: &str) {
-    let window = crate::window::new_window_from_source(app, "gate", text, None, Some(source));
+/// One View > New Window and Close Tab of a window, along the path the reader takes: the
+/// `win.new-window` action Ctrl+N fires, the window becoming the application's ACTIVE one
+/// (which on macOS re-points the system menu bar at that window's menu model), and the
+/// `win.close-tab` action Ctrl+W fires, which on a window's last tab closes the window. Ends
+/// with every reference of ours dropped and the main loop drained, so only a retention the
+/// application did not intend remains.
+///
+/// It used to build the window with `new_window_from_source` and close it with
+/// `window.close()`: the same window, but not the same application. The gate's app was a bare
+/// registered `GtkApplication`, so nothing re-pointed the menu bar on activation, and the
+/// reader's own cycle (MANUAL-TEST 8.6) kept ~1.5 MB of heap per cycle that this gate read as
+/// ~45 KB.
+fn cycle(app: &gtk::Application, source: &gtk::ApplicationWindow) {
+    let before = app.windows();
+    gtk::gio::prelude::ActionGroupExt::activate_action(source, "new-window", None);
+    let window = app
+        .windows()
+        .into_iter()
+        .find(|w| !before.contains(w))
+        .and_downcast::<gtk::ApplicationWindow>()
+        .expect("the new-window action opened a window");
     window.present();
     testpump::until(Clock::Idle, "the window to map", || window.is_mapped());
+    testpump::until(Clock::Idle, "the window to become the active one", || {
+        app.active_window().as_ref() == Some(window.upcast_ref())
+    });
     testpump::drain_for(Clock::Frame, Duration::from_millis(50));
-    window.close();
+    gtk::gio::prelude::ActionGroupExt::activate_action(&window, "close-tab", None);
     drop(window);
     testpump::drain_for(Clock::Frame, Duration::from_millis(50));
     settle_footprint();
@@ -94,12 +113,15 @@ fn window_open_close_cycles_do_not_grow_footprint_ttd_6_13() {
     let dir = tempfile::tempdir().unwrap();
     crate::session::with_state_home_for_test(dir.path(), || {
         let app = test_app_suffixed("memgate-window-cycles");
+        // As `app::setup::on_startup` does for the reader's application: the system menu
+        // bar follows the active window.
+        #[cfg(target_os = "macos")]
+        crate::platform::mac::menubar::track_active_window(&app);
         // The window kept open throughout, as the reader's own is.
         let source = crate::window::new_window(&app, "source", "# source\n", None);
-        let text = document();
         let mut samples = Vec::with_capacity(WINDOW_SAMPLES);
         for _ in 0..WINDOW_SAMPLES {
-            cycle(&app, &source, &text);
+            cycle(&app, &source);
             samples.push(current().expect("footprint"));
         }
         assert_bounded("6.13 window open/close", WINDOW_WARMUP, &samples);
@@ -159,7 +181,7 @@ fn window_widgets_are_finalized_after_close_ttd_6_13() {
         let source = crate::window::new_window(&app, "source", "# source\n", None);
         let text = document();
         // One cycle first: whatever a first window warms once is not a retention.
-        cycle(&app, &source, &text);
+        cycle(&app, &source);
 
         let window =
             crate::window::new_window_from_source(&app, "gate", &text, None, Some(&source));
