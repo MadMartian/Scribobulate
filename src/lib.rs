@@ -112,6 +112,7 @@ pub(crate) mod memgate;
 // gates a module whose every line is a platform's plumbing, and this module's decision
 // core is not.
 pub(crate) mod macwordnav;
+pub(crate) mod mdlanguage;
 pub(crate) mod mdtable;
 /// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
 /// acknowledgement listing, and gates the committed copy against it. Generator and gate

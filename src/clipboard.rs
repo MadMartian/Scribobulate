@@ -350,11 +350,7 @@ mod gtk_integration_tests {
 
     fn editor(md: &str) -> (sourceview::Buffer, sourceview::View) {
         let buf = crate::lineendings::new_editor_buffer();
-        buf.set_language(
-            sourceview::LanguageManager::default()
-                .language("markdown")
-                .as_ref(),
-        );
+        buf.set_language(crate::mdlanguage::markdown().as_ref());
         buf.set_enable_undo(true);
         buf.set_text(md);
         let view = sourceview::View::with_buffer(&buf);

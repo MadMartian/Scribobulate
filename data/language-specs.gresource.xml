@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The editor's corrected Markdown language definition (see the header of
+  language-specs/markdown.lang for what changed against GtkSourceView's copy).
+
+  A GResource of its own, not a section of resources.gresource.xml: the module
+  that puts this directory on GtkSourceView's language search path
+  (src/mdlanguage.rs) registers it itself, so every editor buffer gets the
+  corrected language whether or not application startup ran (GTK tests build
+  editors without it). Registering the icon resource a second time to get the
+  same effect would stack a duplicate overlay.
+
+  Compiled by build.rs (glib_build_tools::compile_resources) into the binary,
+  so it reaches the Linux, macOS and Windows artefacts with no packaging step.
+-->
+<gresources>
+  <gresource prefix="/com/extollit/scribobulate/language-specs">
+    <file>markdown.lang</file>
+  </gresource>
+</gresources>

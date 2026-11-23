@@ -788,6 +788,7 @@
 - **Given** the editor pane displaying Markdown source
 - **When** the document contains headings, emphasis, code, and links
 - **Then** the source text is syntax-highlighted as Markdown
+- **And** a link or image is highlighted as exactly itself: text before it on the same line — a task checkbox and its caption, or another bracketed word — is never highlighted as part of the link's text or the image's description
 
 ### 4.3 Saving to disk
 - **Given** unsaved edits in the editor

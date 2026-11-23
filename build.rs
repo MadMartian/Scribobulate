@@ -3,7 +3,9 @@
 //! is committed and always present) and re-runs only when it changes.  Also
 //! compiles `data/resources.gresource.xml` (the bundled icons — see that file's
 //! own header comment) into a GResource blob embedded
-//! in the binary via `gio::resources_register_include!` at startup.  When the
+//! in the binary via `gio::resources_register_include!` at startup, and
+//! `data/language-specs.gresource.xml` (the editor's corrected Markdown language,
+//! registered by `mdlanguage`) into a second one.  When the
 //! TARGET is Windows it additionally embeds a Win32 resource section so the shell
 //! can identify the executable — see `embed_windows_resources` below.
 
@@ -53,6 +55,11 @@ fn main() {
         &["data/icons"],
         "data/resources.gresource.xml",
         "scribobulate.gresource",
+    );
+    glib_build_tools::compile_resources(
+        &["data/language-specs"],
+        "data/language-specs.gresource.xml",
+        "language-specs.gresource",
     );
 
     // Gated on the TARGET, not the host. A build script is compiled for the host, so

@@ -228,6 +228,8 @@ pub(super) fn add_about_action(app: &Application) {
                     "licensed MIT, Apache-2.0, BSD-2-Clause and BSD-3-Clause",
                     "Every Rust crate statically linked into the program,",
                     "each with its own notice",
+                    "The editor's Markdown highlighting — a modified GtkSourceView",
+                    "markdown.lang, licensed LGPL-2.1-or-later",
                     "The GTK runtime bundled on macOS and Windows",
                     "(GLib, cairo, Pango, librsvg and more), one notice folder per library:",
                     "macOS: Scribobulate.app/Contents/Resources/licenses",

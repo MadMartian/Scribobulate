@@ -119,6 +119,7 @@ mod links;
 mod logging;
 mod logrepeat;
 mod macwordnav;
+mod mdlanguage;
 mod mdtable;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`.
 mod memgate;
