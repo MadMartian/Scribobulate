@@ -44,7 +44,11 @@ fn narrow_preview() -> (gtk::Window, CodePreviewView, String) {
     window.set_default_size(crate::window::MIN_WINDOW_WIDTH, 500);
     window.set_child(Some(&pane));
     window.present();
-    until(Clock::Frame, "the preview maps", || view.is_mapped());
+    // Allocated, not merely mapped: on macOS the first allocation lands after a 400 ms
+    // drain that starts at map, and an unallocated view has no width to wrap at.
+    until(Clock::Frame, "the preview is allocated", || {
+        view.width() > 0
+    });
     drain_for(Clock::Frame, Duration::from_millis(400));
     (window, view, wide)
 }
