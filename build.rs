@@ -160,6 +160,18 @@ fn generate_third_party_notices() {
 ///
 /// Falls back to `unknown` rather than failing: the crate must build from a release
 /// tarball, from a vendored copy, and inside a container with no `git` on PATH.
+/// Where git keeps `name` for this checkout (`git rev-parse --git-path`), if git is
+/// there to ask and the file exists.
+fn git_path(name: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let path = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+    std::path::Path::new(&path).exists().then_some(path)
+}
+
 fn emit_git_commit() {
     // MEASURED (QA round 5, L-3): `.git/HEAD` alone is NOT enough, and the comment
     // that used to sit here claiming it "covers a commit landing on the current
@@ -174,8 +186,17 @@ fn emit_git_commit() {
     // misses. Both are watched: `.git/HEAD` still catches a branch switch on a repo
     // with reflogs disabled, and a packed-refs-only repository re-resolves on the next
     // `cargo build` anyway.
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/logs/HEAD");
+    //
+    // MEASURED (windows seat): the paths are asked of git, never spelled `.git/...`. In a
+    // linked worktree `.git` is a FILE and HEAD lives under the common dir's
+    // `worktrees/<name>/`, so a literal path never exists and cargo, which treats a
+    // missing watched file as changed, rebuilt the crate on every invocation. With no
+    // git, nothing is watched: a path that cannot exist would do the same.
+    for name in ["HEAD", "logs/HEAD"] {
+        if let Some(path) = git_path(name) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 
     let commit = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
