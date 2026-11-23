@@ -31,7 +31,7 @@ pub(crate) use settle::after_scroll_settles;
 
 use gtk::glib;
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Run `f` against `view` exactly once, and only if it is still alive AND still
@@ -286,6 +286,69 @@ fn caret_still_at_requested_end(to_end: bool, iter_is_end: bool, iter_offset: i3
     }
 }
 
+/// What a buffer-ends key's re-issue scrolls to, once the layout is valid.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Reissue {
+    /// The caret: GTK moved it to the requested end.
+    Caret,
+    /// The buffer's requested end itself: the caret is hidden, GTK scrolled only the
+    /// viewport, and the reader has done nothing since.
+    BufferEnd,
+    /// Nothing: the reader has moved on.
+    StandDown,
+}
+
+/// The state a buffer-ends key's re-issue is decided from. `*_at_key` fields are
+/// read in the `move-cursor` handler, which runs BEFORE GTK's own (the signal is
+/// run-last), so they are what GTK's viewport travel was computed from.
+struct ReissueInputs {
+    to_end: bool,
+    caret_visible: bool,
+    caret_at_requested_end: bool,
+    caret_offset: i32,
+    caret_offset_at_key: i32,
+    value: f64,
+    value_at_key: f64,
+    /// The furthest down the viewport has been since a Ctrl+End (its high-water value).
+    furthest_since_key: f64,
+}
+
+/// Decide the re-issue (see [`wire_buffer_ends_scroll`]). The hidden-caret half is
+/// GTK4Rs/AP-396.
+///
+/// With the caret hidden — the markdown preview — and the `gtk-keynav-use-caret`
+/// setting off (GTK's default), `gtk_text_view_move_cursor` moves only the viewport on
+/// Ctrl+Home / Ctrl+End and leaves the insert mark where it was, so the caret cannot
+/// be the generation token there. The token becomes the
+/// caret NOT having moved (a click moves it) plus the viewport not having been
+/// scrolled back against the travel. For Ctrl+End that is a value short of the
+/// furthest the viewport has reached since the key: nothing GTK does while laying
+/// out moves the value up the document (lines above only gain height, and the
+/// re-anchor keeps the top paragraph in place), while GTK's own travel can be cut
+/// short anywhere, even at the top — so "short of where GTK's travel was aimed"
+/// would misread a cancelled travel as the reader. For Ctrl+Home, a value below
+/// where the key was pressed means the reader scrolled down. With the setting on, GTK moves the hidden caret like a shown one,
+/// and the caret branch applies. Both hold on every GTK from 4.6 (the setting dates
+/// from 2016). The 1 px slack is the adjustment's rounding, not a tolerance for movement.
+fn decide_reissue(i: &ReissueInputs) -> Reissue {
+    if i.caret_at_requested_end {
+        return Reissue::Caret;
+    }
+    if i.caret_visible || i.caret_offset != i.caret_offset_at_key {
+        return Reissue::StandDown;
+    }
+    let not_scrolled_back = if i.to_end {
+        i.value >= i.furthest_since_key - 1.0
+    } else {
+        i.value <= i.value_at_key + 1.0
+    };
+    if not_scrolled_back {
+        Reissue::BufferEnd
+    } else {
+        Reissue::StandDown
+    }
+}
+
 /// The generation of the render a buffer holds: how many times its text has been
 /// rebuilt in place (`preview::build::reset_buffer_for_render`).
 ///
@@ -380,6 +443,13 @@ fn viewport_is_real(page_size: Option<f64>) -> bool {
     page_size.is_some_and(|p| p > 0.0)
 }
 
+thread_local! {
+    /// Set while a re-issue presses a buffer-ends key itself ([`Reissue::BufferEnd`]),
+    /// so the handler does not take its own press for the reader's. The emission is
+    /// synchronous, so a flag around it is exact.
+    static REISSUING: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Make Ctrl+Home / Ctrl+End reach the real ends of a large document in `view`.
 ///
 /// Wire this once per text view, at the view's construction site. It observes
@@ -406,30 +476,89 @@ pub(crate) fn wire_buffer_ends_scroll(view: &gtk::TextView) {
     // The emitter is the handler's first argument — never captured, so this
     // closure closes no reference cycle over the view (GTK4Rs/AP-63).
     view.connect_move_cursor(|view, step, count, _extend_selection| {
-        if step != gtk::MovementStep::BufferEnds {
+        if step != gtk::MovementStep::BufferEnds || REISSUING.with(Cell::get) {
             // Every other step moves within or beside the viewport, which is
             // validated by definition — only the buffer ends can be beyond the
             // frontier.
             return;
         }
         let to_end = count > 0;
+        // Read before GTK's own handler runs (`move-cursor` is run-last): the caret and
+        // the range GTK's viewport travel is computed from.
+        let caret_offset_at_key = {
+            let buffer = view.buffer();
+            buffer.iter_at_mark(&buffer.get_insert()).offset()
+        };
+        let adjustment = view.vadjustment();
+        let value_at_key = adjustment.as_ref().map_or(0.0, |a| a.value());
+        // The high-water value since a Ctrl+End on a hidden caret ([`decide_reissue`]).
+        // One compare per emission (Hot-path CAM row 1); disconnected by the re-issue.
+        let furthest = Rc::new(Cell::new(value_at_key));
+        let watch = (to_end && !view.is_cursor_visible())
+            .then(|| adjustment.clone())
+            .flatten()
+            .map(|adjustment| {
+                let furthest = furthest.clone();
+                let id = adjustment.connect_value_changed(move |a| {
+                    if a.value() > furthest.get() {
+                        furthest.set(a.value());
+                    }
+                });
+                (adjustment, id)
+            });
         // A click during the travel must end it where the reader clicked; nothing in
         // GTK retires a scroll animation in flight when the caret moves.
         retire::arm(view, to_end);
         after_line_heights_validated(view, move |view| {
+            if let Some((adjustment, id)) = watch {
+                adjustment.disconnect(id);
+            }
+            if !has_viewport(view) {
+                return;
+            }
             let buffer = view.buffer();
             let insert = buffer.get_insert();
             let iter = buffer.iter_at_mark(&insert);
-            let still_there = caret_still_at_requested_end(to_end, iter.is_end(), iter.offset());
-            if !still_there || !has_viewport(view) {
-                return;
-            }
+            let decision = decide_reissue(&ReissueInputs {
+                to_end,
+                caret_visible: view.is_cursor_visible(),
+                caret_at_requested_end: caret_still_at_requested_end(
+                    to_end,
+                    iter.is_end(),
+                    iter.offset(),
+                ),
+                caret_offset: iter.offset(),
+                caret_offset_at_key,
+                value: view.vadjustment().map_or(0.0, |a| a.value()),
+                value_at_key,
+                furthest_since_key: furthest.get(),
+            });
             // `scroll_to_mark`, never `scroll_to_iter`: it schedules rather than
             // forcing validation from wherever it is called (GTK4Rs/AP-22). By now the
             // layout is valid, so it takes GTK's own immediate-flush fast path
             // (gtktextview.c:2790-2795) and GTK computes the destination itself.
-            #[expect(clippy::disallowed_methods)]
-            view.scroll_to_mark(&insert, 0.0, false, 0.0, 0.0);
+            match decision {
+                Reissue::StandDown => {}
+                Reissue::Caret => {
+                    #[expect(clippy::disallowed_methods)]
+                    view.scroll_to_mark(&insert, 0.0, false, 0.0, 0.0);
+                }
+                Reissue::BufferEnd => {
+                    // Press the key again, on GTK's behalf: with the caret hidden and
+                    // the layout now valid, GTK's own viewport travel aims at the true
+                    // `upper - page_size`, so the view rests exactly where a Ctrl+End on
+                    // a rendered document does, bottom margin included. A scroll to a
+                    // mark at the end would stop with the last line at the bottom edge,
+                    // short of that margin. The guard keeps this handler out of it.
+                    REISSUING.with(|r| r.set(true));
+                    view.emit_move_cursor(
+                        gtk::MovementStep::BufferEnds,
+                        if to_end { 1 } else { -1 },
+                        false,
+                    );
+                    REISSUING.with(|r| r.set(false));
+                }
+            }
         });
     });
 }
@@ -618,6 +747,102 @@ mod decision_tests {
     #[test]
     fn a_positive_page_size_is_a_real_viewport() {
         assert!(viewport_is_real(Some(600.0)));
+    }
+
+    // ---- decide_reissue ---------------------------------------------------------------
+
+    /// Ctrl+End pressed on a hidden caret at offset 40, from the top, with 9 000 px laid out.
+    fn hidden_end() -> ReissueInputs {
+        ReissueInputs {
+            to_end: true,
+            caret_visible: false,
+            caret_at_requested_end: false,
+            caret_offset: 40,
+            caret_offset_at_key: 40,
+            value: 9_000.0,
+            value_at_key: 0.0,
+            furthest_since_key: 9_000.0,
+        }
+    }
+
+    #[test]
+    fn a_caret_at_the_requested_end_is_scrolled_to_whether_shown_or_hidden() {
+        for caret_visible in [true, false] {
+            let i = ReissueInputs {
+                caret_visible,
+                caret_at_requested_end: true,
+                ..hidden_end()
+            };
+            assert_eq!(decide_reissue(&i), Reissue::Caret);
+        }
+    }
+
+    #[test]
+    fn a_shown_caret_moved_away_stands_down_however_still_the_viewport_is() {
+        let i = ReissueInputs {
+            caret_visible: true,
+            ..hidden_end()
+        };
+        assert_eq!(decide_reissue(&i), Reissue::StandDown);
+    }
+
+    #[test]
+    fn a_hidden_caret_left_alone_after_the_travel_scrolls_to_the_real_end() {
+        assert_eq!(decide_reissue(&hidden_end()), Reissue::BufferEnd);
+    }
+
+    #[test]
+    fn a_hidden_caret_moved_by_a_click_stands_down() {
+        let i = ReissueInputs {
+            caret_offset: 41,
+            ..hidden_end()
+        };
+        assert_eq!(decide_reissue(&i), Reissue::StandDown);
+    }
+
+    #[test]
+    fn a_reader_who_scrolled_back_up_after_ctrl_end_is_not_yanked_down() {
+        let i = ReissueInputs {
+            value: 8_000.0,
+            ..hidden_end()
+        };
+        assert_eq!(decide_reissue(&i), Reissue::StandDown);
+        let i = ReissueInputs {
+            value: 8_999.5,
+            ..hidden_end()
+        };
+        assert_eq!(
+            decide_reissue(&i),
+            Reissue::BufferEnd,
+            "rounding is not a scroll"
+        );
+    }
+
+    #[test]
+    fn a_travel_gtk_cut_short_at_the_top_is_not_mistaken_for_the_reader() {
+        // Measured: layout work ended GTK's own travel before it left the top.
+        let i = ReissueInputs {
+            value: 0.0,
+            furthest_since_key: 0.0,
+            ..hidden_end()
+        };
+        assert_eq!(decide_reissue(&i), Reissue::BufferEnd);
+    }
+
+    #[test]
+    fn a_reader_who_scrolled_back_down_after_ctrl_home_is_not_yanked_up() {
+        let home = ReissueInputs {
+            to_end: false,
+            value: 0.0,
+            value_at_key: 5_000.0,
+            ..hidden_end()
+        };
+        assert_eq!(decide_reissue(&home), Reissue::BufferEnd);
+        let i = ReissueInputs {
+            value: 6_000.0,
+            ..home
+        };
+        assert_eq!(decide_reissue(&i), Reissue::StandDown);
     }
 
     // ---- caret_still_at_requested_end ----------------------------------------------
@@ -946,6 +1171,90 @@ mod gtk_integration_tests {
         assert!(
             adjustment.value() >= bottom() - 1.0,
             "Ctrl+End in the preview must land on the last line: value {:.0}, bottom {:.0}",
+            adjustment.value(),
+            bottom()
+        );
+        window.destroy();
+    }
+
+    /// **Ctrl+End reaches the bottom of a view whose caret is hidden.**
+    ///
+    /// The markdown preview hides its caret (`preview/render.rs`). With the caret
+    /// hidden, GTK's buffer-ends binding scrolls the viewport and leaves the insert
+    /// mark where it was, so the re-issue cannot use the caret as its token: it
+    /// stood down every time, and the view stopped at the bottom of whatever GTK had
+    /// laid out at the keypress (measured on Windows: about a tenth of the document).
+    ///
+    /// The caret is placed at the top before the key: `set_text` leaves it at the end
+    /// (the insert mark has right gravity), which would make the caret look as if GTK
+    /// had moved it there.
+    #[gtktest::test]
+    fn ctrl_end_reaches_the_bottom_of_a_view_whose_caret_is_hidden() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
+        let view = gtk::TextView::new();
+        view.set_editable(false);
+        view.set_cursor_visible(false);
+        // The preview has padding below its last line; a re-issue that stops with the
+        // last line at the bottom edge would rest this far short of the true bottom.
+        view.set_bottom_margin(16);
+        view.set_wrap_mode(gtk::WrapMode::WordChar);
+        wire_buffer_ends_scroll(&view);
+        let body: String = (0..LINES)
+            .map(|i| format!("Line {i} — {}\n", "lorem ipsum dolor sit amet ".repeat(4)))
+            .collect();
+        view.buffer().set_text(&body);
+        view.buffer().place_cursor(&view.buffer().start_iter());
+        let scroller = gtk::ScrolledWindow::new();
+        scroller.set_child(Some(&view));
+        let window = gtk::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&scroller));
+        window.present();
+        let ctx = glib::MainContext::default();
+        for _ in 0..200 {
+            ctx.iteration(false);
+            if scroller.vadjustment().page_size() > 0.0 {
+                break;
+            }
+        }
+        let adjustment = scroller.vadjustment();
+        assert!(
+            adjustment.upper() < 20_000.0,
+            "precondition: the layout must still be unvalidated when the key is \
+             pressed — upper was already {:.0}",
+            adjustment.upper()
+        );
+
+        view.emit_move_cursor(gtk::MovementStep::BufferEnds, 1, false);
+
+        // With the caret hidden, GTK may animate to the bottom of the PARTIAL layout
+        // at once, so "at the bottom" alone can hold mid-validation. Require it to hold
+        // with `upper` unchanged for a full second of wall time.
+        let bottom = || (adjustment.upper() - adjustment.page_size()).max(0.0);
+        {
+            let adjustment = adjustment.clone();
+            let mut since: Option<(std::time::Instant, f64)> = None;
+            pump_until(
+                "the hidden-caret viewport to rest at the final bottom",
+                move || {
+                    let upper = adjustment.upper();
+                    let at_bottom =
+                        adjustment.value() >= (upper - adjustment.page_size()).max(0.0) - 1.0;
+                    match since {
+                        Some((t, u)) if at_bottom && u == upper => {
+                            t.elapsed() >= std::time::Duration::from_secs(1)
+                        }
+                        _ => {
+                            since = at_bottom.then(|| (std::time::Instant::now(), upper));
+                            false
+                        }
+                    }
+                },
+            );
+        }
+        assert!(
+            adjustment.value() >= bottom() - 1.0,
+            "Ctrl+End with the caret hidden must land on the last line: value {:.0}, bottom {:.0}",
             adjustment.value(),
             bottom()
         );

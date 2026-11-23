@@ -63,7 +63,6 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| D | Windows | Production | In the preview, Ctrl+End pressed before a large document has finished rendering stops short of the end (Section 33–47 of `large-doc.md`) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
@@ -302,20 +301,6 @@ Windows have not been driven.
 **Decision** (operator, 2026-10-24): accepted, no remedy scheduled. The reader can dismiss
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
-
-## D. Preview Ctrl+End before the render settles stops short of the end
-
-**Severity**: Low (a second Ctrl+End, or waiting a moment, reaches the end).
-
-**Observed** (2026-11-17, `windows` seat, `large-doc.md`; 1.0.0 install 2 of 2, the 1.0.1
-build 1 of 1): click into the preview about 0.4 s after the window shows, then press
-Ctrl+End. The view stops partway (Section 47 and Section 33 on 1.0.0, Section 35 on 1.0.1)
-instead of at the last paragraph. Once the preview has rendered first, Ctrl+End reaches
-the end. Linux and macOS not yet checked; on Linux the render settles in well under
-0.4 s, so the window may be too short to hit there.
-
-**Cause**: not traced. It fits a Ctrl+End target computed against the layout GTK has
-validated so far, while the rest of the document is still being laid out on idles.
 
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
