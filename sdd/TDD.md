@@ -1387,6 +1387,11 @@
 - **When** it is started from the desktop, and started again with a document
 - **Then** both reach the same named instance, its windows group under that launcher rather than under the default Scribobulate entry, and opening a Markdown file from the file manager still uses the default instance
 
+### 8.18 A file pattern is never taken for a file name
+- **Given** a launch naming a file pattern (`*`, `?` or `[...]`) that names no existing file — on Linux and macOS because the pattern matched nothing (bash passes it through), on Windows because its shells never expand
+- **When** the app starts, or a running instance receives the launch
+- **Then** the pattern opens every file it matches, sorted, in one window; a pattern that matches nothing opens no tab, and the window the launch opens or brings forward says `No files match <pattern>` — a launch naming only such patterns opens the window a launch naming nothing would, and a notice too long for the window shortens in the middle with "…" while the status bar keeps it whole; a file that exists under a name with those characters still opens as itself, and a missing name without them is still a new document
+
 ## 9. Menu bar, toolbar, and actions
 
 ### 9.1 File ▸ New Document opens a tab in the current window

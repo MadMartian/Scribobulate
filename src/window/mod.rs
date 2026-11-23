@@ -130,7 +130,9 @@ pub(crate) use tabs::update_window_title;
 #[cfg(test)]
 pub(crate) use tabs::TabMenuItem;
 pub(crate) use tabs::{host_window, window_of_content_box};
-pub(crate) use toast::{sync_backing_loss_toast, sync_recovery_toast};
+pub(crate) use toast::{
+    show_unmatched_patterns_notice, sync_backing_loss_toast, sync_recovery_toast,
+};
 pub(crate) use zoom::rerender_preview_from_live_edit;
 pub(crate) use zoom::rerender_preview_in_place;
 pub(crate) use zoom::rerender_tab_preview_in_place;

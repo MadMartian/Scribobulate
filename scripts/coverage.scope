@@ -59,6 +59,7 @@ src/annotate/scan.rs
 src/annotate/written.rs
 src/annotations.rs
 src/annotations_view.rs
+src/app/argglob.rs
 src/app/coldstart.rs
 src/app/commands.rs
 src/app/mnemonics.rs

@@ -22,6 +22,10 @@ pub(super) const TOAST_MARGIN_END: i32 = 20;
 
 /// How long an info notice stays up before auto-dismissing (TDD 5.4: "~2.5 s").
 const INFO_TOAST_TIME: Duration = Duration::from_millis(2500);
+/// The widest an info notice's text may be, in characters, before it shortens in the
+/// middle with "…".
+const INFO_TOAST_MAX_CHARS: i32 = 60;
+
 /// How long the matching status-bar announcement stays up. Deliberately longer than
 /// the visual toast: the toast is glanceable and its job is done once seen, while
 /// the status line is what a screen reader announces, and that wants a wider window.
@@ -271,6 +275,10 @@ pub(crate) fn sync_recovery_toast(window: &ApplicationWindow) {
 /// per notice by [`show_info_toast`]; it starts hidden and unlabelled.
 pub(super) fn make_info_toast() -> winstate::InfoToast {
     let (widget, icon, label) = build_toast_shell(Icon::ViewRefresh.name(), "");
+    // A long notice (a full path, say) shortens in the middle rather than spilling past
+    // the window's left edge with its icon cut off; the status bar keeps the whole text.
+    label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    label.set_max_width_chars(INFO_TOAST_MAX_CHARS);
     winstate::InfoToast::new(widget, icon, label)
 }
 
@@ -318,6 +326,21 @@ pub(super) fn show_swap_failure_toast(window: &ApplicationWindow) {
     );
 }
 
+/// File patterns on the command line matched nothing (TDD 8.18): say which, in the
+/// window the launch opened or brought forward. A timed notice, CAM Status-notice row 3.
+pub(crate) fn show_unmatched_patterns_notice(window: &ApplicationWindow, patterns: &[String]) {
+    if patterns.is_empty() {
+        return;
+    }
+    let list = patterns.join(", ");
+    show_info_toast(
+        window,
+        Icon::DialogWarning.name(),
+        &format!("No files match {list}."),
+        &format!("No files match {list}"),
+    );
+}
+
 /// A clean reload just replaced the content under the user — flag it (TDD 5.4).
 pub(super) fn show_reload_toast(window: &ApplicationWindow) {
     show_info_toast(
@@ -354,4 +377,32 @@ pub(super) fn show_export_toast(chrome: &std::rc::Rc<winstate::WindowChrome>, te
         .info_toast
         .show(Icon::DocumentSaveAs.name(), text, INFO_TOAST_TIME);
     chrome.push_timed_notice(text, INFO_STATUS_TIME);
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+
+    /// **A long info notice shortens instead of growing past the window.** Measured, not
+    /// read off its properties: past the cap a notice stops asking for more width, so a
+    /// 1000-character one asks for no more than a 300-character one and can never spill
+    /// past the window's left edge with its icon cut off. Mutation: without the
+    /// ellipsizing, the longer notice asks for about three times the width.
+    #[gtktest::test]
+    fn a_long_info_notice_stops_growing_at_the_cap() {
+        let toast = make_info_toast();
+        let natural = |text: &str| {
+            toast.show(Icon::DialogWarning.name(), text, Duration::from_secs(60));
+            toast.widget().measure(gtk::Orientation::Horizontal, -1).1
+        };
+        let short = natural("File saved.");
+        let long = natural(&"x".repeat(300));
+        let longer = natural(&"x".repeat(1000));
+        assert!(short < long, "precondition: a short notice is narrower");
+        assert_eq!(
+            longer, long,
+            "a notice past the cap must not keep growing: 300 chars {long} px, 1000 chars \
+             {longer} px"
+        );
+    }
 }

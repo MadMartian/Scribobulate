@@ -59,10 +59,19 @@ pub(super) fn on_open(app: &Application, files: &[gtk::gio::File], hint: &str) {
     // TDD 8.2/15.16 — scans every tab of every window, not just each
     // window's active one) and "needs opening".
     let mut to_open: Vec<gtk::gio::File> = Vec::new();
+    // File patterns no shell expanded that matched nothing (TDD 8.18): not files to
+    // create, but something the window says. Kept in argv by `argglob` for this.
+    let mut unmatched: Vec<String> = Vec::new();
+    let mut focused_any = false;
     for f in files {
         if let Some(p) = f.path() {
+            if super::argglob::is_unmatched_pattern(&p) {
+                unmatched.push(display_pattern(&p));
+                continue;
+            }
             if let Some((win, tab)) = find_open_tab_for_path(app, &p) {
                 focus_tab(&win, &tab);
+                focused_any = true;
                 continue;
             }
             // ...and against the files THIS invocation has already accepted. The check
@@ -86,6 +95,17 @@ pub(super) fn on_open(app: &Application, files: &[gtk::gio::File], hint: &str) {
         to_open.push(f.clone());
     }
     if to_open.is_empty() {
+        if !unmatched.is_empty() {
+            if focused_any {
+                report_unmatched(app, &unmatched);
+            } else {
+                // Every name was a pattern that matched nothing: what a launch naming
+                // nothing does, and then the notice.
+                super::setup::bare_launch(app, cold_start, move |app| {
+                    report_unmatched(app, &unmatched)
+                });
+            }
+        }
         return;
     }
 
@@ -113,9 +133,32 @@ pub(super) fn on_open(app: &Application, files: &[gtk::gio::File], hint: &str) {
         }
         drop(busy);
         build_opened_batch(&app, docs, &hint, cold_start).await;
+        report_unmatched(&app, &unmatched);
         #[cfg(test)]
         BATCHES_BUILT.with(|n| n.set(n.get() + 1));
     });
+}
+
+/// Say, in the window in front, which file patterns matched nothing (TDD 8.18).
+fn report_unmatched(app: &Application, patterns: &[String]) {
+    if patterns.is_empty() {
+        return;
+    }
+    let window = app
+        .active_window()
+        .or_else(|| app.windows().into_iter().next())
+        .and_then(|w| w.downcast::<gtk::ApplicationWindow>().ok());
+    if let Some(window) = window {
+        crate::window::show_unmatched_patterns_notice(&window, patterns);
+    }
+}
+
+/// A pattern as the notice names it: home spelled `~`, the rest as resolved.
+fn display_pattern(path: &std::path::Path) -> String {
+    match path.strip_prefix(gtk::glib::home_dir()) {
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 /// The `open` hint File ▸ Open passes, which marks a batch as the user acting from a window.
@@ -337,6 +380,77 @@ mod gtk_integration_tests {
                 "and retract when the read ends"
             );
             window.destroy();
+        });
+    }
+
+    /// **A file pattern that matched nothing is reported in the window, never opened as
+    /// a document (TDD 8.18)**, beside a real file that opens as usual. Mutation: without
+    /// `is_unmatched_pattern`'s branch the pattern opens as an empty tab and no notice shows.
+    #[gtktest::test]
+    fn an_unmatched_pattern_is_reported_and_the_real_file_beside_it_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let real = dir.path().join("INTERVIEW.md");
+            std::fs::write(&real, "real\n").unwrap();
+            let pattern = dir.path().join("sdd").join("*.md");
+            let app = crate::window::testkit::test_app_suffixed("openbatchglob");
+            let window = crate::window::new_window(&app, "IT", "start\n", None);
+            window.present();
+            assert!(crate::docio::settle(|| app.active_window().is_some()));
+            let files = [
+                gtk::gio::File::for_path(&real),
+                gtk::gio::File::for_path(&pattern),
+            ];
+            on_open(&app, &files, "");
+            assert!(
+                crate::docio::settle(|| find_open_tab_for_path(&app, &real).is_some()),
+                "the real file opens"
+            );
+            assert!(
+                crate::docio::settle(|| app.windows().iter().any(|w| {
+                    w.downcast_ref::<gtk::ApplicationWindow>()
+                        .and_then(crate::winstate::chrome)
+                        .is_some_and(|ch| {
+                            ch.status.borrow().label_text().contains("No files match")
+                        })
+                })),
+                "the unmatched pattern is reported"
+            );
+            assert!(
+                find_open_tab_for_path(&app, &pattern).is_none(),
+                "the pattern is never a tab"
+            );
+            for w in app.windows() {
+                w.destroy();
+            }
+        });
+    }
+
+    /// A launch whose only name was an unmatched pattern still opens a window — the one a
+    /// bare launch would — and reports it there.
+    #[gtktest::test]
+    fn a_launch_naming_only_an_unmatched_pattern_opens_a_window_that_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let pattern = dir.path().join("*.zz");
+            let app = crate::window::testkit::test_app_suffixed("openbatchglobonly");
+            let before = app.windows().len();
+            on_open(&app, &[gtk::gio::File::for_path(&pattern)], "");
+            assert!(
+                crate::docio::settle(|| app.windows().len() > before
+                    && app.windows().iter().any(|w| {
+                        w.downcast_ref::<gtk::ApplicationWindow>()
+                            .and_then(crate::winstate::chrome)
+                            .is_some_and(|ch| {
+                                ch.status.borrow().label_text().contains("No files match")
+                            })
+                    })),
+                "a window opens and reports the pattern"
+            );
+            assert!(find_open_tab_for_path(&app, &pattern).is_none());
+            for w in app.windows() {
+                w.destroy();
+            }
         });
     }
 

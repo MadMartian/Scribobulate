@@ -280,6 +280,12 @@ pub fn run() -> glib::ExitCode {
         println!("{}", app::version_line());
         return glib::ExitCode::SUCCESS;
     }
+    // A file pattern no shell expanded and that matches nothing (bash passes one through
+    // unchanged; Windows' shells never expand) is not a file to create. The window that
+    // opens says so (TDD 8.18, `app::argglob`); a terminal that launched it hears it too.
+    for pattern in app::unmatched_file_patterns(&argv) {
+        eprintln!("scribobulate: no files match {pattern}");
+    }
 
     // Point GTK at the data staged inside the .app, when running from one. Must precede
     // GTK init, and precedes the renderer pin only because both are env writes and this
