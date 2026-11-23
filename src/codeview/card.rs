@@ -494,7 +494,7 @@ impl AnnotationCard {
             #[weak(rename_to = card)]
             self,
             move |gesture, _, x, y| {
-                if !card.is_open() || card.press_is_ours(gesture, x, y) {
+                if !card.is_open() || card.press_is_ours(gesture, x, y) || card.holds_draft() {
                     return;
                 }
                 card.dismiss();
@@ -502,6 +502,31 @@ impl AnnotationCard {
         ));
         root.add_controller(click.clone());
         self.imp().outside.replace(Some((root, click)));
+    }
+
+    /// Is an Edit open on the card with a comment the reader has changed? Then an outside
+    /// click leaves it up: a draft closes only on Escape, ×, Cancel or a commit (TDD
+    /// 17.18). Only the shown page counts — a `GtkStack` keeps the hidden one parented.
+    fn holds_draft(&self) -> bool {
+        fn walk(w: &gtk::Widget) -> bool {
+            if let Some(field) = w.downcast_ref::<sourceview::View>() {
+                if field.has_css_class(crate::widgets::comment_entry::COMMENT_FIELD_CLASS)
+                    && field.is_mapped()
+                    && crate::widgets::comment_entry::holds_draft(field)
+                {
+                    return true;
+                }
+            }
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                if walk(&c) {
+                    return true;
+                }
+                child = c.next_sibling();
+            }
+            false
+        }
+        walk(self.upcast_ref())
     }
 
     fn disarm_outside_dismiss(&self) {
@@ -1017,6 +1042,51 @@ mod gtk_integration_tests {
             "teardown must also take the card off its pane"
         );
         crate::testpump::destroy_after_tooltip_delay(&win, || ());
+    }
+
+    /// **An outside click closes the card unless an Edit holds a draft (TDD 17.70).**
+    /// Unchanged Edit first (closes), then a changed one (stays). The press is emitted on
+    /// the toplevel gesture `arm_outside_dismiss` installs, at the window's far corner.
+    /// Mutation: without `holds_draft` in that handler, the draft card closes too.
+    #[gtktest::test]
+    fn an_outside_click_leaves_an_edit_holding_a_draft_open() {
+        use gtk::subclass::prelude::*;
+        let (win, view, card) = open_card();
+        view.set_annotation_sink(std::rc::Rc::new(|_| {}));
+        let press_outside = |card: &AnnotationCard| {
+            let click = card.imp().outside.borrow().as_ref().map(|(_, c)| c.clone());
+            let click = click.expect("the outside-dismiss gesture is armed");
+            let root = click.widget().expect("armed on the toplevel");
+            let (x, y) = (f64::from(root.width() - 2), f64::from(root.height() - 2));
+            assert!(
+                !card.press_is_ours(&click, x, y),
+                "precondition: the press is outside"
+            );
+            click.emit_by_name::<()>("pressed", &[&1i32 as &dyn ToValue, &x, &y]);
+        };
+        for typed in [false, true] {
+            card.dismiss();
+            assert!(view.open_stepped_marker_popover(0, Direction::Next));
+            settle("the card to reopen with Edit/Remove", || card.is_open());
+            let stack = find_descendant::<gtk::Stack>(&card).expect("the row hosts a GtkStack");
+            let entry = find_descendant::<sourceview::View>(&card).expect("the edit page");
+            find_button(&card, "Edit")
+                .expect("the card offers Edit")
+                .emit_clicked();
+            settle("Edit to put the card on the edit page", || {
+                stack.visible_child_name().as_deref() == Some("edit") && entry.is_mapped()
+            });
+            if typed {
+                crate::widgets::comment_entry::set_comment_text(&entry, "a changed comment");
+            }
+            press_outside(&card);
+            assert_eq!(
+                card.is_open(),
+                typed,
+                "typed={typed}: an outside click closes an unchanged Edit, never a draft"
+            );
+        }
+        crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
     }
 
     /// **Cancel aborts the edit; it does not close the card.**

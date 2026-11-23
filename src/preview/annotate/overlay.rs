@@ -674,7 +674,7 @@ pub(crate) fn wire_annotation_overlay(
                     })
                 };
                 pop.popdown();
-                crate::widgets::comment_entry::set_comment_text(&entry, "");
+                crate::widgets::comment_entry::open_comment(&entry, "");
                 entry_open.set(true);
                 bar.set_visible(true);
                 position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b);
@@ -742,7 +742,7 @@ pub(crate) fn wire_annotation_overlay(
                     crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
                 })
                 .unwrap_or_default();
-            crate::widgets::comment_entry::set_comment_text(&entry, &existing);
+            crate::widgets::comment_entry::open_comment(&entry, &existing);
             entry_open.set(true);
             // Show the card BEFORE positioning it. `position_card` centers the card on the
             // selection midpoint via `bar.preferred_size()`, but `gtk_widget_measure`
@@ -780,12 +780,19 @@ pub(crate) fn wire_annotation_overlay(
     // stays inside the bar subtree, so `leave` fires only for a genuine outside click /
     // focus move. On commit `hide_entry()` has already cleared `entry_open`, so the
     // ensuing leave from the hidden entry is a no-op (no double dismiss).
+    //
+    // Not while the card holds a draft: a comment the reader has typed or changed closes
+    // only when they say so (TDD 17.70).
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave({
         let hide_entry = hide_entry.clone();
         let entry_open = entry_open.clone();
+        let entry = entry.downgrade();
         move |_| {
-            if entry_open.get() {
+            let draft = entry
+                .upgrade()
+                .is_some_and(|e| crate::widgets::comment_entry::holds_draft(&e));
+            if entry_open.get() && !draft {
                 hide_entry();
             }
         }
@@ -818,6 +825,7 @@ pub(crate) fn wire_annotation_overlay(
         let anchor_sel = anchor_sel.clone();
         let anchor_gen = anchor_gen.clone();
         let pending_after_paint = pending_after_paint.clone();
+        let entry = entry.downgrade();
         move || {
             if let Some(id) = timer.borrow_mut().take() {
                 id.remove();
@@ -830,6 +838,7 @@ pub(crate) fn wire_annotation_overlay(
             let pop = pop.downgrade();
             let entry_open = entry_open.clone();
             let hide_entry = hide_entry.clone();
+            let entry = entry.clone();
             let timer_inner = timer.clone();
             let anchor_sel = anchor_sel.clone();
             let anchor_gen = anchor_gen.clone();
@@ -889,8 +898,13 @@ pub(crate) fn wire_annotation_overlay(
                     }
                     None => cell_sel.is_some() || buf_sel.is_some(),
                 };
-                if entry_open.get() && !superseded {
-                    // Noise. Return outright — falling through would also re-evaluate the
+                // A draft holds the card through a new selection too: only the reader's
+                // own cancel or commit closes a comment they have changed (TDD 17.70).
+                let draft = entry
+                    .upgrade()
+                    .is_some_and(|e| crate::widgets::comment_entry::holds_draft(&e));
+                if entry_open.get() && (!superseded || draft) {
+                    // Noise, or a draft. Return outright — falling through would also re-evaluate the
                     // action popover and pop it up ON TOP of the still-open card. The
                     // debt is settled all the same: the selection is still the one the
                     // card was opened over, so nothing new was selected, and a debt left
@@ -1378,14 +1392,14 @@ mod jjj_tests {
     /// The dismissal the card DOES owe: a selection change in the preview itself (the user
     /// went back to the document) still dismisses. The fix must not buy card stability
     /// by breaking the legitimate dismissal — nor by breaking the GTK4Rs/AP-28 table-cell
-    /// tracking the PRIMARY listener exists for.
+    /// tracking the PRIMARY listener exists for. A card holding a draft is the exception
+    /// (the next test).
     #[gtktest::test]
-    fn a_preview_selection_change_still_dismisses_the_card() {
+    fn a_preview_selection_change_still_dismisses_an_unchanged_card() {
         let win = gtk::Window::new();
         let (_pane, view, entry) = open_card(&win);
-        crate::widgets::comment_entry::set_comment_text(&entry, "draft");
 
-        // The user re-selects in the DOCUMENT, not the card.
+        // The user re-selects in the DOCUMENT, not the card, having typed nothing.
         let buf = view.buffer();
         let (a, b) = (buf.iter_at_offset(15), buf.iter_at_offset(25));
         buf.select_range(&a, &b);
@@ -1395,6 +1409,50 @@ mod jjj_tests {
             || !WidgetExt::is_visible(&entry),
         );
         win.destroy();
+    }
+
+    /// **A card holding a draft stays up through a new selection (TDD 17.70).** Only the
+    /// reader's Escape, ×, or a commit closes a comment they have typed. Mutation: without
+    /// the `draft` term in the `arm` debounce, the card closes and the draft is lost.
+    #[gtktest::test]
+    fn a_preview_selection_change_leaves_a_draft_open() {
+        let win = gtk::Window::new();
+        let (_pane, view, entry) = open_card(&win);
+        crate::widgets::comment_entry::set_comment_text(&entry, "draft");
+
+        let buf = view.buffer();
+        let (a, b) = (buf.iter_at_offset(15), buf.iter_at_offset(25));
+        buf.select_range(&a, &b);
+
+        let dismissed = drain(PAST_DISMISS_DEBOUNCE, || !WidgetExt::is_visible(&entry));
+        assert!(
+            !dismissed,
+            "a draft must survive a new selection in the document"
+        );
+        assert_eq!(crate::widgets::comment_entry::comment_text(&entry), "draft");
+        win.destroy();
+    }
+
+    /// **Focus leaving a card closes it only while it holds no draft (TDD 17.70).**
+    /// Mutation: without the `draft` term in the focus-leave controller, the draft card
+    /// closes too.
+    #[gtktest::test]
+    fn focus_leaving_the_card_closes_it_unless_it_holds_a_draft() {
+        for typed in [false, true] {
+            let win = gtk::Window::new();
+            let (_pane, view, entry) = open_card(&win);
+            if typed {
+                crate::widgets::comment_entry::set_comment_text(&entry, "draft");
+            }
+            // Focus to the document, outside the card.
+            view.grab_focus();
+            let dismissed = drain(PAST_DISMISS_DEBOUNCE, || !WidgetExt::is_visible(&entry));
+            assert_eq!(
+                dismissed, !typed,
+                "typed={typed}: an unchanged card closes on focus loss, a draft stays"
+            );
+            win.destroy();
+        }
     }
 
     /// The action card (`.annotation-overlay`) wired onto `view`, if any.

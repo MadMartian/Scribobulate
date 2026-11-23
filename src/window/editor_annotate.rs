@@ -189,7 +189,7 @@ pub(crate) fn wire_editor_annotate_card(
                     crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
                 })
                 .unwrap_or_default();
-            crate::widgets::comment_entry::set_comment_text(&entry, &existing);
+            crate::widgets::comment_entry::open_comment(&entry, &existing);
             entry_open.set(true);
             // Show BEFORE positioning — `position_card` measures the card, and a hidden
             // widget measures 0 (GTK4Rs/AP-85); a stale margin also inflates the re-measure
@@ -212,12 +212,18 @@ pub(crate) fn wire_editor_annotate_card(
     // Focus leaving the whole card (a genuine outside click / focus move — not the
     // entry↔Save hop, which stays inside the bar subtree) dismisses it. On commit `hide()`
     // has already cleared `entry_open`, so the ensuing leave is a no-op (no double hide).
+    // Not while the card holds a draft: a changed comment closes only when the reader
+    // says so (TDD 17.70).
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave({
         let hide = hide.clone();
         let entry_open = entry_open.clone();
+        let entry = entry.downgrade();
         move |_| {
-            if entry_open.get() {
+            let draft = entry
+                .upgrade()
+                .is_some_and(|e| crate::widgets::comment_entry::holds_draft(&e));
+            if entry_open.get() && !draft {
                 hide();
             }
         }
@@ -387,6 +393,40 @@ mod gtk_integration_tests {
             "caret at end → typing appends to the merged comment rather than replacing it"
         );
         win.destroy();
+    }
+
+    /// **Focus leaving the editor's card closes it only while it holds no draft (TDD
+    /// 17.18).** Mutation: without the `draft` term in the focus-leave controller, the
+    /// draft card closes too.
+    #[gtktest::test]
+    fn focus_leaving_the_card_closes_it_unless_it_holds_a_draft() {
+        for typed in [false, true] {
+            let (win, entry) = raise_card_over_mapped("the earth is flat", 4, 9);
+            assert!(entry.is_visible(), "precondition: the card is up");
+            if typed {
+                crate::widgets::comment_entry::set_comment_text(&entry, "draft");
+            }
+            // The window's overlay holds the editor (the comment field has an overlay of
+            // its own, so an ancestor search would find that one).
+            let editor = win
+                .child()
+                .and_then(|o| o.downcast::<gtk::Overlay>().ok())
+                .and_then(|o| o.child())
+                .expect("the editor under the card");
+            assert!(
+                editor.grab_focus(),
+                "precondition: focus moves to the editor"
+            );
+            for _ in 0..50 {
+                glib::MainContext::default().iteration(false);
+            }
+            assert_eq!(
+                entry.is_visible(),
+                typed,
+                "typed={typed}: an unchanged card closes on focus loss, a draft stays"
+            );
+            win.destroy();
+        }
     }
 
     /// The card's bar must carry `ANNOTATION_CARD_CLASS` — shared with the preview card
