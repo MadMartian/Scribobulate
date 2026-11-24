@@ -256,7 +256,7 @@ fn append_edit_remove_controls(
             let entry = entry.clone();
             let original = original.clone();
             glib::idle_add_local_once(move || {
-                crate::widgets::comment_entry::set_comment_text(&entry, &original);
+                crate::widgets::comment_entry::open_comment(&entry, &original);
                 stack.set_visible_child_name("read");
             });
         });

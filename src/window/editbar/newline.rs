@@ -211,11 +211,7 @@ mod gtk_integration_tests {
         // unit under test directly. The markdown language is required: it is what
         // produces the highlight tags that split a paste into runs.
         let buf = sourceview::Buffer::new(None);
-        buf.set_language(
-            sourceview::LanguageManager::default()
-                .language("markdown")
-                .as_ref(),
-        );
+        buf.set_language(crate::mdlanguage::markdown().as_ref());
         buf.set_enable_undo(true);
         buf.set_text(md);
         let view = sourceview::View::with_buffer(&buf);

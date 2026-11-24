@@ -83,6 +83,8 @@ impl CommentEntry {
         // word-navigation follow-ups a text field owes.
         let field = crate::widgets::textfield::named_text_area("Comment", initial);
         field.add_css_class(COMMENT_FIELD_CLASS);
+        // The pre-fill is the baseline a draft is measured from ([`holds_draft`]).
+        field.buffer().set_modified(false);
 
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
@@ -243,9 +245,34 @@ pub(crate) fn comment_text(field: &sourceview::View) -> String {
     flatten_comment(crate::saferizer::BufferText::of(&field.buffer()).as_str())
 }
 
-/// Replace the comment in `field` with `text`.
+/// Replace the comment in `field` with `text`, as the reader typing it would: the
+/// result is a draft ([`holds_draft`]). Tests use it to type; a card opens with
+/// [`open_comment`].
+///
+/// Not `set_text`: GTK records that as an irreversible step and leaves the buffer
+/// unmodified, so it would not be a draft. A plain delete and insert is what typing is.
+#[cfg(test)]
 pub(crate) fn set_comment_text(field: &sourceview::View, text: &str) {
-    field.buffer().set_text(text);
+    let buffer = field.buffer();
+    let (mut start, mut end) = buffer.bounds();
+    buffer.delete(&mut start, &mut end);
+    buffer.insert(&mut buffer.start_iter(), text);
+}
+
+/// Fill `field` with the comment a card opens on — `""` for a new annotation, the
+/// stored comment for an edit — and make that the baseline [`holds_draft`] measures from.
+pub(crate) fn open_comment(field: &sourceview::View, text: &str) {
+    let buffer = field.buffer();
+    buffer.set_text(text);
+    buffer.set_modified(false);
+}
+
+/// Has the reader changed the comment since the card opened on it? A card holding a
+/// draft closes only when the reader says so — Escape, the corner ×, Cancel, or a
+/// commit — never because focus or the selection moved elsewhere (TDD 17.70). The
+/// buffer's own modified flag is the record: [`open_comment`] clears it, an edit sets it.
+pub(crate) fn holds_draft(field: &sourceview::View) -> bool {
+    field.buffer().is_modified()
 }
 
 /// Focus `field` with the caret at the end, so typing APPENDS: a pre-filled field holds

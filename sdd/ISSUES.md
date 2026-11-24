@@ -63,13 +63,11 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| D | Windows | Production | In the preview, Ctrl+End pressed before a large document has finished rendering stops short of the end (Section 33–47 of `large-doc.md`) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| BZ | Any | Upstream | In the editor, text between a task box `[ ]` (or any `[`) and a later link on the same line is coloured as link text, because GtkSourceView's Markdown highlighting matches link text from the first `[` | Low–Medium |
 
 ## Closed issues
 
@@ -303,20 +301,6 @@ Windows have not been driven.
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
 
-## D. Preview Ctrl+End before the render settles stops short of the end
-
-**Severity**: Low (a second Ctrl+End, or waiting a moment, reaches the end).
-
-**Observed** (2026-11-17, `windows` seat, `large-doc.md`; 1.0.0 install 2 of 2, the 1.0.1
-build 1 of 1): click into the preview about 0.4 s after the window shows, then press
-Ctrl+End. The view stops partway (Section 47 and Section 33 on 1.0.0, Section 35 on 1.0.1)
-instead of at the last paragraph. Once the preview has rendered first, Ctrl+End reaches
-the end. Linux and macOS not yet checked; on Linux the render settles in well under
-0.4 s, so the window may be too short to hit there.
-
-**Cause**: not traced. It fits a Ctrl+End target computed against the layout GTK has
-validated so far, while the rest of the document is still being laid out on idles.
-
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
@@ -414,9 +398,17 @@ that lands in stages (GTK4Rs/AP-14, GTK4Rs/AP-115), and the helpers' settle may 
 slow runner before it has finished; the two failures in one thread may also mean one test left
 state behind for the next.
 
-**Next step**: have the Windows seat run the module in a loop under CPU load and log the
-editor's vadjustment value and upper across the park, as was done for the reading-position
-flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
+**Local soak, not reproduced** (2026-11-23, `windows` seat, GTK 4.24.1, debug, instrumented):
+20 module runs, 200 of 200 cases passed — 10 under two busy processes, 10 more with the
+suite pinned to one CPU (about a third of a core). The settle helper never timed out (420
+settles, slowest 1.09 s), and no split-mode settle ever saw the editor top below 100, the
+shape CI reports. The editor reaches its park in about 200 ms. Heavier local load is ruled
+out by the operator's cap on that machine.
+
+**Next step**: catch it on CI itself. When it next fails there, keep the run's log and add
+to the two tests a log line on failure of the editor's vadjustment value, upper and page
+size and the settle helper's outcome, so one CI failure says whether the park was never
+reached, was undone, or the settle gave up.
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
@@ -446,6 +438,14 @@ app the surface outlived the callback in every sample (10 ⌘W cycles under
 `MallocScribble=1`, one machine: 0 crashes), so no production crash has been seen, but it
 is not ruled out.
 
+**Upstream evidence** (checked 2026-11-23, GNOME GitLab API, by reading the source): GTK
+main's `-[GdkMacosWindow windowDidResize:]` (`gdk/macos/GdkMacosWindow.c`) still checks only
+`GDK_IS_MACOS_TOPLEVEL_SURFACE`, and `windowDidMove:` has no destroyed check either. No
+ticket or merge request matches; the nearest,
+[gtk!8493](https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/8493) ("macos: fix crash when
+unfullscreening windows", merged), guards only the toolbar update. A ticket is drafted for
+the operator to file.
+
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
@@ -468,7 +468,9 @@ then `FAILED (killed by signal 11)`. The test immediately before it in the same 
 notices fixes): `gtk_suite::window::livepreview::gtk_integration_tests::a_control_whose_identity_the_document_repeats_toggles_neither_block`,
 same critical, same signal, 798 others passed; green on re-run. Two unrelated tests, so
 the holder is not in either test — it is in what both exercise: a window built, driven
-and torn down inside one process that has already done the same ~400 times. The runner's
+and torn down inside one process that has already done the same for that module's earlier
+tests (`gtk_suite` runs each module in a child process of its own, so the history that
+matters is the module's, not the suite's). The runner's
 GTK is Homebrew 4.24.1, the same version the Mac seat's 0-of-43 was measured on.
 
 **What is known**: the same tree passed macOS in push run 42966560560 minutes earlier and in
@@ -479,37 +481,15 @@ four times) still holds a widget the previous trip finalised. Not reproduced any
 report from Linux or Windows CI.
 
 **Next step**: the Mac seat looped the `scrollsync` module ×40 and the `window::` group ×3
-under load with `G_DEBUG=fatal-criticals` and `MallocScribble=1`: 0 of 43. Next is the
-whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, until the
-critical fires and names the holder; if it points at a closure or idle captured across a
+under load with `G_DEBUG=fatal-criticals` and `MallocScribble=1`: 0 of 43; then the whole
+`gtk_suite` binary in CI's order under load with `MallocScribble=1` (2026-11-23, three
+passes, about 2.5 hours): 0 criticals, 0 crashes. A debugger attached to the suite sees only the parent, not
+the per-module children, so detection there is the critical's text in the log and the
+crash reports the children leave. Not reproducible locally, so next is CI itself: when it
+next fires there, keep the run's log and the child's crash report, which names the
+holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
-
-## BZ. The editor colours a task item's caption as link text when a link follows
-
-**Severity**: Low–Medium (colour only; the file and the preview are correct, but every task
-item that holds a link reads wrongly in the editor).
-
-**Observed** (2026-11-17, operator, 1.0.0): in the editor,
-`- [ ] This is an incorrectly colored caption preceding [a link that is here, that is correctly colored](http://www.example.com)`
-colours the caption as link text.
-
-**Cause** (ANALYSED from the language file, not yet measured in the app): the editor uses
-GtkSourceView's stock `markdown` language (`window::tabs::lifecycle`,
-`LanguageManager::default().language("markdown")`). Its `inline-link` context matches
-`\[(.*?)\]\(`, and a lazy `.*?` still starts at the FIRST `[` on the line, so the match runs
-from the task box `[ ]` through the link's `](`. Any earlier bracket on the line does the
-same. The rule is identical in GtkSourceView 5.4.1 (Linux build host) and in the GNOME 46
-runtime's copy, so newer GtkSourceView does not fix it, and the bundled Windows and macOS
-runtimes are presumed to carry it too.
-
-**Upstream evidence**: no ticket searched yet (2026-11-17). Search GtkSourceView's issue
-tracker for the `inline-link` rule and file one if none exists.
-
-**Fix direction**: ship a corrected `markdown` language definition that excludes brackets
-from the link text (`\[([^\[\]]*)\]`), and put its directory first in the
-LanguageManager's search path. That makes it a vendored copy of an LGPL file, with a
-licence notice and an obligation to follow upstream. Alternatively, patch upstream and wait.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

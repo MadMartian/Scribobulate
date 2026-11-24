@@ -112,6 +112,7 @@ pub(crate) mod memgate;
 // gates a module whose every line is a platform's plumbing, and this module's decision
 // core is not.
 pub(crate) mod macwordnav;
+pub(crate) mod mdlanguage;
 pub(crate) mod mdtable;
 /// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
 /// acknowledgement listing, and gates the committed copy against it. Generator and gate
@@ -278,6 +279,12 @@ pub fn run() -> glib::ExitCode {
     if app::is_version_request(&argv) {
         println!("{}", app::version_line());
         return glib::ExitCode::SUCCESS;
+    }
+    // A file pattern no shell expanded and that matches nothing (bash passes one through
+    // unchanged; Windows' shells never expand) is not a file to create. The window that
+    // opens says so (TDD 8.18, `app::argglob`); a terminal that launched it hears it too.
+    for pattern in app::unmatched_file_patterns(&argv) {
+        eprintln!("scribobulate: no files match {pattern}");
     }
 
     // Point GTK at the data staged inside the .app, when running from one. Must precede

@@ -7,6 +7,7 @@
 
 mod appactions;
 mod application;
+mod argglob;
 pub(crate) mod coldstart;
 mod commands;
 mod menubar;
@@ -124,7 +125,8 @@ pub(crate) fn end_of_options_argv(args: Vec<String>) -> Vec<String> {
 }
 
 /// The argv GLib parses: `instance::instance_argv`'s strip, then
-/// [`new_instance_argv`]'s, then [`end_of_options_argv`]. The one owner of that
+/// [`new_instance_argv`]'s, then [`end_of_options_argv`], then the file patterns no
+/// shell expanded (`argglob`). The one owner of that
 /// shaping. `run()` applies it before `run_with_args`, and
 /// `ScribobulateApplication`'s `local_command_line` applies it again to what GLib
 /// actually parses, which on Windows is the real command line rather than what
@@ -140,7 +142,18 @@ pub(crate) fn shape_argv(args: Vec<String>) -> Vec<String> {
         Err(_) => args,
     };
     let (_, args) = new_instance_argv(args);
-    end_of_options_argv(args)
+    argglob::expand_operands(end_of_options_argv(args)).0
+}
+
+/// The file patterns on this command line that match nothing (TDD 8.18). [`shape_argv`]
+/// keeps them, for the window to report; this is what the launch prints about them.
+pub(crate) fn unmatched_file_patterns(args: &[String]) -> Vec<String> {
+    let args = match crate::instance::instance_argv(args.to_vec()) {
+        Ok((_, rest)) => rest,
+        Err(_) => args.to_vec(),
+    };
+    let (_, args) = new_instance_argv(args);
+    argglob::expand_operands(end_of_options_argv(args)).1
 }
 
 /// Does argv carry an argument shaped like an option?

@@ -383,13 +383,24 @@ pub(crate) fn register_accelerators(app: &Application) {
 
 /// GApplication `activate`: a bare launch/re-activation with no file arguments.
 fn on_activate(app: &Application) {
+    bare_launch(app, super::coldstart::claim(), |_| {});
+}
+
+/// What a launch naming no file does, given whether it is the process's cold start:
+/// the saved session (or a blank window) cold, a blank document warm. `after` runs once
+/// the windows exist — an open whose every name was a pattern that matched nothing
+/// (TDD 8.18) is a bare launch that then says so.
+pub(super) fn bare_launch(
+    app: &Application,
+    cold_start: bool,
+    after: impl FnOnce(&Application) + 'static,
+) {
     // A bare re-activation of an ALREADY-running instance (single-instance
     // hand-off with no file args) — just open a fresh blank document rather
     // than replaying the saved session again. `restore_session` is only for the
     // very first activation of a brand-new process, and the claim below is what
     // says so: see `coldstart::claim` for why counting windows answered a
     // different question during the interval restore itself occupies.
-    let cold_start = super::coldstart::claim();
     if !cold_start {
         // A bare launch that lost the race to a file launch asked for the saved session
         // and is owed it (`coldstart::bare_launch_owed_restore`); any other re-activation
@@ -402,9 +413,11 @@ fn on_activate(app: &Application) {
                 if !crate::window::restore_session(&app).await {
                     new_window(&app, "Scribobulate", WELCOME, None);
                 }
+                after(&app);
             });
         } else {
             new_window(app, "Scribobulate", WELCOME, None);
+            after(app);
         }
         return;
     }
@@ -435,6 +448,7 @@ fn on_activate(app: &Application) {
         // `cold_start`, not a literal: the two must not be able to drift, and this
         // path is reached only when the claim succeeded.
         recover_if_cold_start(&app, cold_start).await;
+        after(&app);
     });
 }
 

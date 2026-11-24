@@ -161,7 +161,7 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // between them is the exposure, not a style question — see `new_editor_buffer`'s
     // rustdoc for what rests on no buffer in this process ever holding a lone `\r`.
     let sv_buffer = crate::lineendings::new_editor_buffer();
-    if let Some(lang) = sourceview::LanguageManager::default().language("markdown") {
+    if let Some(lang) = crate::mdlanguage::markdown() {
         sv_buffer.set_language(Some(&lang));
     }
     sv_buffer.set_enable_undo(true);

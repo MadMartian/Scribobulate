@@ -788,6 +788,7 @@
 - **Given** the editor pane displaying Markdown source
 - **When** the document contains headings, emphasis, code, and links
 - **Then** the source text is syntax-highlighted as Markdown
+- **And** a link or image is highlighted as exactly itself: text before it on the same line — a task checkbox and its caption, or another bracketed word — is never highlighted as part of the link's text or the image's description
 
 ### 4.3 Saving to disk
 - **Given** unsaved edits in the editor
@@ -1385,6 +1386,11 @@
 - **Given** an instance launcher installed for a name (Linux)
 - **When** it is started from the desktop, and started again with a document
 - **Then** both reach the same named instance, its windows group under that launcher rather than under the default Scribobulate entry, and opening a Markdown file from the file manager still uses the default instance
+
+### 8.18 A file pattern is never taken for a file name
+- **Given** a launch naming a file pattern (`*`, `?` or `[...]`) that names no existing file — on Linux and macOS because the pattern matched nothing (bash passes it through), on Windows because its shells never expand
+- **When** the app starts, or a running instance receives the launch
+- **Then** the pattern opens every file it matches, sorted, in one window; a pattern that matches nothing opens no tab, and the window the launch opens or brings forward says `No files match <pattern>` — a launch naming only such patterns opens the window a launch naming nothing would, and a notice too long for the window shortens in the middle with "…" while the status bar keeps it whole; a file that exists under a name with those characters still opens as itself, and a missing name without them is still a new document
 
 ## 9. Menu bar, toolbar, and actions
 
@@ -2884,7 +2890,8 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.16 Changing or clearing the selection dismisses the annotate overlay
 - **Given** the annotate overlay is showing for a selection — either its "Annotate" button or its open comment entry
 - **When** the reader changes the selection to different text, or clears it (clicks elsewhere)
-- **Then** the overlay (including any in-progress, unsaved comment entry) is dismissed; if a new selection was made, a fresh overlay appears for it, and if the selection cleared, nothing remains
+- **Then** the overlay (including an open comment entry the reader has not changed) is dismissed; if a new selection was made, a fresh overlay appears for it, and if the selection cleared, nothing remains
+- **But** a comment entry holding a draft stays open (17.70)
 
 ### 17.17 The comment entry is wide enough for its hint and a real comment
 - **Given** the reader opens the comment entry from the annotate overlay
@@ -3008,7 +3015,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.39 The card dismisses on a genuinely different selection, and on Escape
 - **Given** the comment card is open
 - **When** the reader selects different, non-empty text in the document
-- **Then** the card dismisses — the anchor it was raised over is superseded
+- **Then** the card dismisses — the anchor it was raised over is superseded — unless it holds a draft (17.70)
 - **And When** the reader presses Escape instead
 - **Then** the card dismisses and focus returns to the pane
 - **And When** the reader commits the comment instead, with Enter or Save
@@ -3084,6 +3091,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the card dismisses, and the click still reaches whatever it was aimed at
 - **And** clicking the card's own Edit, Remove, Save or Cancel controls activates that control instead, never dismissing the card out from under the click
 - **And** clicking a margin chip while a card is open leaves the reader with the card for that chip, rather than dismissing and losing an in-progress edit
+- **But** a card whose Edit holds a changed comment stays open (17.70)
 
 ### 17.50 Activating another annotation moves the card to it
 - **Given** an open annotation card, and a second annotation elsewhere in the document
@@ -3222,6 +3230,12 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** its margin card is opened, its row is read in the annotations viewer, or it is exported
 - **Then** each quotes `bold and a link and code` — the words the reader sees, with no asterisks, brackets, URL, backticks or tight-construct delimiters — and all three quote it identically
 - **And** the viewer's filter (20.24) matches and highlights within that same text
+
+### 17.70 A changed comment closes only when the reader says so
+- **Given** an annotation card with its comment field open — a new annotation from the preview or the editor, or an Edit of an existing one — and the reader has changed the text from what the card opened with (empty for a new one, the stored comment for an Edit)
+- **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
+- **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
+- **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
 
 ## 18. Preview reading themes
 
