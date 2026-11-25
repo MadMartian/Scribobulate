@@ -2823,6 +2823,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a rendered document with a highlighted claim that carries a comment
 - **When** the user clicks the marker in the preview's right margin beside that line
 - **Then** a popover opens showing the claim and its comment text
+- **And** when the preview is wider than its pane and scrolled sideways, the marker stays at the pane's right edge and a click on it still opens it
 
 ### 17.4 Several annotations on one line share one marker with a count
 - **Given** a single visual line carrying two or more commented annotations
