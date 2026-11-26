@@ -130,7 +130,7 @@ pub(crate) fn annotation_claim(t: &Theme) -> Span {
 
 /// One side of a suggested edit: its ink, its fill where the theme states one, and —
 /// for what it would remove — the strike line, in the strike colour where one is set
-/// (PLAN.suggested-edit-colours.md). The resolved `style` is the palette's, the same
+/// (TDD 17.71). The resolved `style` is the palette's, the same
 /// value the preview's body tag reads.
 pub(crate) fn suggestion(style: crate::palette::SuggestionStyle, struck: bool, t: &Theme) -> Span {
     let mut attrs = format!(

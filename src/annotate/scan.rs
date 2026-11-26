@@ -92,7 +92,7 @@ pub(crate) struct Annotation {
     /// `CleanedByteOffset` (N1-phase-2).
     pub(crate) cleaned_content: Range<CleanedByteOffset>,
     /// A `Substitution`'s OLD side as shown on the page, struck through just before its
-    /// new side (PLAN.suggested-edit-colours.md); `None` for every other kind.
+    /// new side (TDD 17.71); `None` for every other kind.
     pub(crate) cleaned_old: Option<Range<CleanedByteOffset>>,
     /// Comment-body byte range in the **original** source (drives Edit), if any.
     pub(crate) src_comment_body: Option<Range<usize>>,
@@ -138,7 +138,7 @@ impl Annotation {
     /// the one answer the body tags, the table cells and the export read. A highlight's
     /// claim is highlighted; what a suggested edit would add takes the addition style and
     /// what it would remove the deletion style, so a replacement is two runs, old then
-    /// new (PLAN.suggested-edit-colours.md). A point comment marks nothing.
+    /// new (TDD 17.71). A point comment marks nothing.
     pub(crate) fn styled_runs(&self) -> Vec<(Range<usize>, ClaimStyle)> {
         let raw = |r: &Range<CleanedByteOffset>| r.start.raw()..r.end.raw();
         let content = raw(&self.cleaned_content);
@@ -169,7 +169,7 @@ pub(crate) enum ClaimStyle {
 impl ClaimStyle {
     /// Whether text in this style is left out when the page is copied: what a suggested
     /// edit would remove is not part of the text as it would read once accepted
-    /// (PLAN.suggested-edit-colours.md, decision 2).
+    /// (TDD 17.77).
     pub(crate) fn copied(self) -> bool {
         self != ClaimStyle::Deletion
     }
@@ -650,7 +650,7 @@ mod tests {
     fn suggestions_keep_their_visible_text() {
         assert_eq!(extract("say {++hello++} there").cleaned, "say hello there");
         assert_eq!(extract("the {--old--} way").cleaned, "the old way");
-        // A replacement shows both sides, old then new (PLAN.suggested-edit-colours.md).
+        // A replacement shows both sides, old then new (TDD 17.71).
         assert_eq!(
             extract("go {~~left~>right~~} now").cleaned,
             "go leftright now"

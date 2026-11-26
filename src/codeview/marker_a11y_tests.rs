@@ -1242,7 +1242,7 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
 /// TDD 17.71 inside a table (Document Rendering CAM row 2): a suggested replacement in
 /// a cell shows both its sides in the cell — the old struck through in the deletion
 /// colours, the new in the addition colours, as in prose — and has its own margin marker,
-/// as a claim there does (PLAN.suggested-edit-colours.md).
+/// as a claim there does (TDD 17.71).
 #[gtktest::test]
 fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
     const SRC: &str = "| word |\n|---|\n| say {~~hi~>hello~~} there |\n";

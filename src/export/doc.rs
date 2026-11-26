@@ -83,7 +83,7 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         // rather than two that agree today.
         // Each run in its own style — a replacement's old side struck in the deletion
         // colours before its new side in the addition colours, as the page shows them
-        // (PLAN.suggested-edit-colours.md; CAM Document Rendering row 17).
+        // (TDD 17.71; CAM Document Rendering row 17).
         for (run, style) in ann.styled_runs() {
             for range in crate::annotate::map_cleaned_highlight_to_local(
                 cleaned,
@@ -1100,7 +1100,7 @@ mod export_doc_tests {
             panic!("{:?}", doc.blocks);
         };
         // Both sides, as the page shows them: the old struck in the deletion style, then
-        // the new in the addition style, which carries the note (PLAN.suggested-edit-colours.md).
+        // the new in the addition style, which carries the note (TDD 17.71).
         let runs: Vec<_> = v
             .iter()
             .filter_map(|i| match i {

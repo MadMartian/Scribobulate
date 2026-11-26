@@ -301,7 +301,7 @@ impl<'a> Prepared<'a> {
     }
 
     /// The cleaned ranges a copy from the page leaves out: what suggested edits would
-    /// remove (PLAN.suggested-edit-colours.md, decision 2).
+    /// remove (TDD 17.77).
     fn copy_omits(&self) -> Vec<std::ops::Range<usize>> {
         self.ann_highlights
             .iter()
@@ -2344,7 +2344,7 @@ mod gtk_integration_tests {
         );
     }
 
-    /// PLAN.suggested-edit-colours.md: each kind of suggested edit reads as the change
+    /// TDD 17.71: each kind of suggested edit reads as the change
     /// it proposes — what it would add in the addition colours, what it would remove
     /// struck through in the deletion colours, a replacement as both, old then new — and
     /// none of it carries the annotation highlight's wash. Its note is nowhere on the page.

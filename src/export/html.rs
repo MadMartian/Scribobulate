@@ -783,7 +783,7 @@ img {{ max-width: 100%; height: auto; }}
 }
 
 /// The class a run of annotated text takes: the claim highlight, or one side of a
-/// suggested edit (PLAN.suggested-edit-colours.md).
+/// suggested edit (TDD 17.71).
 fn claim_class(style: crate::annotate::ClaimStyle) -> &'static str {
     use crate::annotate::ClaimStyle;
     match style {

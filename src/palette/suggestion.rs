@@ -1,5 +1,5 @@
 //! A suggested edit's colours on one page: what it would add and what it would remove,
-//! each an ink and an optional fill (PLAN.suggested-edit-colours.md, decision 1).
+//! each an ink and an optional fill (TDD 18.64).
 //!
 //! The inks come from the theme (`addition_fg`, `deletion_fg`), which floors them at a
 //! conventional green and crimson. A floor is a literal and a page is not: the system

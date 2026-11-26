@@ -544,7 +544,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     add(TagName::AnnotationHighlight.name(), &move |t| {
         t.set_background_rgba(Some(&ann_hl));
     });
-    // A suggested edit's two sides (PLAN.suggested-edit-colours.md): the inks walked to
+    // A suggested edit's two sides (TDD 17.71): the inks walked to
     // the legibility floor on this page, a fill only where the theme states one, and the
     // removed side struck through with the strike line's own colour where one is set.
     // The SAME resolved values feed the table-cell path (`renderer::suggestion_open`).

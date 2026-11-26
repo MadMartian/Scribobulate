@@ -452,7 +452,7 @@ pub(crate) struct CopyTree {
     scripts: std::rc::Rc<BlockScripts>,
     /// Source byte ranges a copy leaves out: what a suggested edit would remove, which is
     /// on the page struck through but not part of the text as it would read once accepted
-    /// (PLAN.suggested-edit-colours.md, decision 2). Sorted, non-overlapping.
+    /// (TDD 17.77). Sorted, non-overlapping.
     omit: Vec<Range<usize>>,
 }
 
