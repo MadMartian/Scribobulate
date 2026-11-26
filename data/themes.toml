@@ -142,6 +142,8 @@ syntect_theme = "Solarized (light)"
 annotation_hl_color = "#d9a441_61"
 find_hl_all_color = "#d9c04a"
 find_hl_current_color = "#c86428"
+addition_fg     = "#4f7a28"      # suggested edit, added text — olive
+deletion_fg     = "#a33a1f"      # suggested edit, removed text — brick — warm inks for an old-paper page
 mark_bg         = "#d8a98a_66"   # warm tan-rose highlighter — distinct from the amber/yellow
                                  # find & annotation washes, and legible on the cream page
 
@@ -242,6 +244,8 @@ syntect_theme = "base16-eighties.dark"   # a literal 80s palette for fenced code
 annotation_hl_color = "#ff3caf_4d"   # translucent magenta wash (~30%)
 find_hl_all_color = "#ff3caf_66"   # magenta wash (~40%) — distinct from the gold headings and cyan links
 find_hl_current_color = "#ff2f92"      # hot pink — the current match inside a table cell
+addition_fg     = "#72f1b8"      # suggested edit, added text — mint
+deletion_fg     = "#fe4450"      # suggested edit, removed text — neon red — the Synthwave '84 pair; its usual green is the ==highlight==
 mark_bg         = "#39ff14_4d"   # RADIOACTIVE toxic-green wash (~30%) — the ==highlight== marker.
                                  # A neon hue deliberately outside the magenta/cyan/gold outrun
                                  # palette (operator's pick), distinct from the magenta annotation/find
@@ -589,6 +593,8 @@ find_hl_current_color = "#fb6f92"   # HOT PINK, undiluted. Deliberately BRIGHT r
                               # are both far too bright to carry body ink). Being bright is
                               # also what keeps it distinct from the DEEP pink header fill it
                               # necessarily sits beside — same hue, opposite value
+addition_fg     = "#7ee8a2"      # suggested edit, added text — spearmint
+deletion_fg     = "#ff6b8b"      # suggested edit, removed text — strawberry
 mark_bg         = "#5c5200"   # deep lemon — the ==highlight== marker. A shaded gold is the
                               # classic highlighter read, and it is the one overlay that
                               # must never be mistaken for the others (ink 7.9:1)
@@ -697,6 +703,8 @@ blockquote_bar_color = "#6c9fff"  # light-blue quote bar
 annotation_hl_color = "#ff55ff_40"   # ANSI 13 bright-magenta wash
 find_hl_all_color = "#5555ff_59"   # ANSI 12 bright-blue wash
 find_hl_current_color = "#55ffff"      # ANSI 14 bright cyan — current match in a cell
+addition_fg     = "#55ff55"      # suggested edit, added text — ANSI 10 bright green
+deletion_fg     = "#ff5555"      # suggested edit, removed text — ANSI 9 bright red
 mark_bg         = "#ffb000_4d"   # amber-phosphor wash — the ==highlight== marker; the OTHER classic
                                  # monochrome-monitor phosphor, distinct from the green body & markers
 
@@ -793,6 +801,8 @@ find_hl_all_color = "#2B3F55"   # steel blue — the one COOL hue on the page, s
                               # never be mistaken for an annotation (ink 6.0:1)
 find_hl_current_color = "#E0A040"   # bright amber, undiluted: the current match is a transient pointer,
                               # and every shipped theme treats it as one (5.7:1 on the page)
+addition_fg     = "#b8b46a"      # suggested edit, added text — khaki
+deletion_fg     = "#d98a8a"      # suggested edit, removed text — dusty rose — soft and low in blue; green is taken by ==highlight==
 mark_bg         = "#51634A"   # muted GREEN band for ==highlight== — the only overlay carrying a
                               # hue from outside the page's warm/steel families, chosen because a
                               # mark must not be mistaken for the violet selection band or the grey
@@ -1234,6 +1244,8 @@ disclosure_preview_fg  = "#ffd400"
 # follows: green wash for annotations, gold wash for ==marks==, pale lavender for
 # every find match, undiluted orange for the current one.
 annotation_hl_color = "#4fae6e_61"
+addition_fg     = "#006b00"      # suggested edit, added text — 8-bit green
+deletion_fg     = "#a80000"      # suggested edit, removed text — 8-bit red
 mark_bg         = "#ffd400_66"
 find_hl_all_color = "#d9c6f5"
 find_hl_current_color = "#ff6a3d"
