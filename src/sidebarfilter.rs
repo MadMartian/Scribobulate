@@ -169,6 +169,37 @@ pub(crate) fn highlight_markup(text: &str, ranges: &[Range<usize>]) -> String {
     out
 }
 
+/// The words a suggested replacement is quoted as, wherever it is quoted — the card, the
+/// annotations viewer's row (and so the text its filter searches) and the export:
+/// `old → new` (TDD 17.72, 20.2).
+pub(crate) fn suggestion_text(old: &str, new: &str) -> String {
+    format!("{old}{SUGGESTION_ARROW}{new}")
+}
+
+const SUGGESTION_ARROW: &str = " \u{2192} ";
+
+/// [`suggestion_text`] as Pango markup: the old side struck through, the new side in
+/// bold, so the change reads at a glance (TDD 17.72). `hits` are a filter's matches in
+/// [`suggestion_text`]'s own coordinates and are shown as [`highlight_markup`] shows
+/// them, cut where the two sides meet; a hit across the arrow is dropped rather than
+/// crossing a tag.
+pub(crate) fn suggestion_markup(old: &str, new: &str, hits: &[Range<usize>]) -> String {
+    let arrow_at = old.len();
+    let new_at = arrow_at + SUGGESTION_ARROW.len();
+    let within = |lo: usize, hi: usize| -> Vec<Range<usize>> {
+        hits.iter()
+            .filter(|r| r.start >= lo && r.end <= hi)
+            .map(|r| r.start - lo..r.end - lo)
+            .collect()
+    };
+    format!(
+        "<s>{}</s>{}<b>{}</b>",
+        highlight_markup(old, &within(0, arrow_at)),
+        gtk::glib::markup_escape_text(SUGGESTION_ARROW),
+        highlight_markup(new, &within(new_at, new_at + new.len())),
+    )
+}
+
 /// The filter bar's match count while its filter is active: `"3 of 40"` — how many rows
 /// match out of the pane's total.
 pub(crate) fn match_count(matched: usize, total: usize) -> String {
@@ -261,6 +292,22 @@ mod tests {
             .expect("each word occurs in one field or the other");
         assert_eq!(hit, vec![one(2..6), one(4..9)]);
         assert!(query.find_in_fields(&["a note here", "nothing"]).is_none());
+    }
+
+    #[test]
+    fn a_suggestion_strikes_its_old_side_and_keeps_filter_hits_on_each_side() {
+        assert_eq!(suggestion_text(",", ":"), ", \u{2192} :");
+        assert_eq!(
+            suggestion_markup("a&b", "c", &[]),
+            "<s>a&amp;b</s> \u{2192} <b>c</b>"
+        );
+        let text = suggestion_text("cat", "dog");
+        let hits = [q("a").find(&text).unwrap(), q("o").find(&text).unwrap()].concat();
+        assert_eq!(
+            suggestion_markup("cat", "dog", &hits),
+            "<s>c<span weight=\"bold\" underline=\"single\">a</span>t</s> \u{2192} \
+             <b>d<span weight=\"bold\" underline=\"single\">o</span>g</b>"
+        );
     }
 
     #[test]

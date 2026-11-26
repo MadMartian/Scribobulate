@@ -18,7 +18,7 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.69 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.74 |
 | 18 | Preview reading themes | 18.1 – 18.58 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
@@ -2817,7 +2817,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.2 Suggested-edit markup renders inert, without braces
 - **Given** a document containing `{++inserted++}`, `{--deleted--}`, and `{~~old~>new~~}`
 - **When** it is shown in the preview
-- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown (v1 applies no distinct styling to these kinds)
+- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown; insertions and deletions get no distinct styling, and a replacement's new text is highlighted as a suggested replacement (17.71)
 
 ### 17.3 A comment is reachable from a margin marker
 - **Given** a rendered document with a highlighted claim that carries a comment
@@ -3237,6 +3237,26 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
 - **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
+
+### 17.71 A suggested replacement is an annotation with a margin marker
+- **Given** a document containing a suggested replacement — `{~~old~>new~~}`, with or without a note `{>>note<<}` right after it, either side possibly empty
+- **When** it is shown in the preview
+- **Then** the page reads the new text, highlighted like a claim, and its line carries a margin marker that counts it like any other annotation (17.4)
+
+### 17.72 A suggested replacement's card shows the change and offers to accept it
+- **Given** the margin card of a suggested replacement is open
+- **When** the reader reads it
+- **Then** it shows the old text struck through, an arrow, then the new text marked as added, followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
+
+### 17.73 Accepting a suggested replacement applies it
+- **Given** a suggested replacement's card is open
+- **When** the reader chooses Accept edit
+- **Then** the whole construct, with its note, is replaced in the file by the new text alone, so the annotation and its marker are gone and the page reads the new text unhighlighted; nothing else in the document changes, and Undo restores the construct
+
+### 17.74 Removing a suggested replacement rejects it
+- **Given** a suggested replacement's card is open
+- **When** the reader chooses Remove
+- **Then** the whole construct, with its note, is replaced in the file by the old text alone, so the annotation and its marker are gone and the page reads the old text; nothing else in the document changes, and Undo restores the construct
 
 ## 18. Preview reading themes
 
@@ -3773,10 +3793,11 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** the annotations viewer is shown
 - **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only; a bare highlight shows the claim under an empty comment, 17.67)
 
-### 20.2 Inert kinds are not listed, and a bare highlight is
-- **Given** a document containing a bare `{==highlight==}` (no comment) and inert kinds (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`) alongside real annotations
+### 20.2 Inert kinds are not listed; a bare highlight and a suggested replacement are
+- **Given** a document containing a bare `{==highlight==}` (no comment), a suggested replacement (`{~~a~>b~~}`) and inert kinds (`{++ins++}`, `{--del--}`) alongside real annotations
 - **When** the viewer is shown
-- **Then** only highlights (commented or bare, 17.67) and point comments appear — the suggested-edit kinds have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **Then** only highlights (commented or bare, 17.67), point comments and suggested replacements appear — insertions and deletions have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **And** a suggested replacement's row quotes it as the old text struck through, an arrow, then the new text, with its note as the comment
 
 ### 20.3 An empty or annotation-less document shows a placeholder, not an error
 - **Given** a document with no annotations

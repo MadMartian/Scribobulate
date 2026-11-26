@@ -17,9 +17,12 @@
 //! - **Point comment** (no highlighted span, used for the cross-block fallback):
 //!   `{>>reviewer comment<<}`
 //!
-//! v1 renders only these two; the suggested-edit kinds (`{++ins++}`,
-//! `{--del--}`, `{~~a~>b~~}`) are recognised but styled inert (deferred, not
-//! designed out — see [`scan::AnnKind`]).
+//! - **Suggested replacement**: `{~~old~>new~~}`, optionally followed by
+//!   `{>>note<<}` — the page reads `new`; its card accepts it (keeps `new`) or removes
+//!   it (keeps `old`).
+//!
+//! Insertions and deletions (`{++ins++}`, `{--del--}`) are recognised but styled inert
+//! (deferred, not designed out — see [`scan::AnnKind`]).
 
 pub(crate) mod landing;
 pub(crate) mod mutate;
@@ -37,6 +40,42 @@ pub(crate) use scan::{
     chip_anchor, cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation,
 };
 pub(crate) use written::holds_block_break;
+
+use std::ops::Range;
+
+/// A suggested replacement as every surface quotes it — the card, the viewer's row and
+/// the export: both sides read as the page reads Markdown ([`plain_claim`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Suggestion {
+    pub(crate) old: String,
+    pub(crate) new: String,
+}
+
+impl Suggestion {
+    /// `ann`'s suggestion, read from the `original` source it was scanned from; `None`
+    /// for any other kind, or for ranges that are not a slice of `original`.
+    pub(crate) fn of(original: &str, ann: &Annotation) -> Option<Self> {
+        let (old, new) = suggestion_sides(ann)?;
+        Some(Self {
+            old: plain_claim(original.get(old)?),
+            new: plain_claim(original.get(new)?),
+        })
+    }
+}
+
+/// A suggested replacement's two sides as ORIGINAL-source byte ranges: what rejecting it
+/// keeps, and what accepting it keeps. The new side is kept verbatim, so it is as long in
+/// the original as in the cleaned text, and begins just past the old side's `~>`.
+pub(crate) fn suggestion_sides(ann: &Annotation) -> Option<(Range<usize>, Range<usize>)> {
+    let old = ann.src_old.clone()?;
+    let len = ann
+        .cleaned_content
+        .end
+        .raw()
+        .saturating_sub(ann.cleaned_content.start.raw());
+    let ns = old.end + scan::SUB_ARROW.len();
+    Some((old, ns..ns + len))
+}
 
 /// A claim's text as the page SHOWS it: the run of cleaned source the highlight covers
 /// with its Markdown read, not quoted. `**bold claim**` is `bold claim`, a link is its

@@ -51,8 +51,21 @@ pub(super) fn build_annotation_row(
     wheel: &cardscroll::RowWheel,
 ) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    if let Some(claim) = &m.claim {
-        let cl = gtk::Label::new(Some(&format!("\u{201c}{claim}\u{201d}")));
+    // A suggested replacement shows its change where a claim shows its words: the old
+    // side struck through, then the new (TDD 17.72).
+    let quote = match (&m.suggestion, &m.claim) {
+        (Some(s), _) => {
+            let l = gtk::Label::new(None);
+            l.set_markup(&format!(
+                "\u{201c}{}\u{201d}",
+                crate::sidebarfilter::suggestion_markup(&s.old, &s.new, &[])
+            ));
+            Some(l)
+        }
+        (None, Some(claim)) => Some(gtk::Label::new(Some(&format!("\u{201c}{claim}\u{201d}")))),
+        (None, None) => None,
+    };
+    if let Some(cl) = quote {
         cl.add_css_class("dim-label");
         cl.set_xalign(0.0);
         cl.set_wrap(true);
@@ -124,6 +137,15 @@ fn append_edit_remove_controls(
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class("destructive-action");
     btns.append(&edit);
+    // A suggested replacement can also be applied: Accept edit keeps its new side, as
+    // Remove keeps its old (TDD 17.73, 17.74). Both are removals that differ only in
+    // which side survives.
+    if m.suggestion.is_some() {
+        let accept = gtk::Button::with_label("Accept edit");
+        accept.add_css_class("suggested-action");
+        wire_removal(&accept, card, &sink, m, m.source.src_content.clone());
+        btns.append(&accept);
+    }
     btns.append(&remove);
 
     // The edit page, built NOW (not lazily on click) so the stack can measure it from the
@@ -187,37 +209,13 @@ fn append_edit_remove_controls(
     stack.set_visible_child_name("read");
     row.append(&stack);
 
-    {
-        let sink = sink.clone();
-        let construct = construct.clone();
-        // The claim to keep, relative to the construct (see the note above). A
-        // point comment has no kept content, which is `None` for a different
-        // reason than a failed `relative` — but both mean "keep nothing", so the
-        // flatten is faithful: a claim that could not be placed inside its own
-        // construct must not be spliced in from wherever it nominally pointed.
-        let keep_rel = m
-            .source
-            .src_content
-            .clone()
-            .map(|c| construct.relative(c))
-            .unwrap_or(None);
-        let card = card.clone();
-        remove.connect_clicked(move |_| {
-            card.dismiss();
-            // Defer the sink: it re-renders the preview (rebuilds the widget tree),
-            // which must not run inside this button's active press gesture or GTK
-            // reports "Broken accounting of active state" up the ancestor chain.
-            let sink = sink.clone();
-            let construct = construct.clone();
-            let keep_inner = keep_rel.clone();
-            glib::idle_add_local_once(move || {
-                sink(AnnotationEdit::Remove {
-                    construct,
-                    keep_inner,
-                });
-            });
-        });
-    }
+    // A highlight keeps its claim; a suggested replacement, rejected, keeps its old side;
+    // a point comment keeps nothing.
+    let kept = match &m.suggestion {
+        Some(_) => m.source.src_old.clone(),
+        None => m.source.src_content.clone(),
+    };
+    wire_removal(&remove, card, &sink, m, kept);
     {
         let stack = stack.clone();
         let entry = ce.field.clone();
@@ -261,4 +259,40 @@ fn append_edit_remove_controls(
             });
         });
     }
+}
+
+/// Wire `button` to remove `m`'s construct from the document, keeping the ORIGINAL-source
+/// range `kept` (`None` keeps nothing). Remove and Accept edit are this one mutation.
+fn wire_removal(
+    button: &gtk::Button,
+    card: &AnnotationCard,
+    sink: &AnnotationSink,
+    m: &MarkerData,
+    kept: Option<std::ops::Range<usize>>,
+) {
+    let sink = sink.clone();
+    let construct = m.source.construct.clone();
+    // The text to keep, relative to the construct, so the pair travels as one unit and
+    // cannot be resolved against different positions. A point comment has no kept
+    // content, which is `None` for a different reason than a failed `relative` — but
+    // both mean "keep nothing", so the flatten is faithful: text that could not be
+    // placed inside its own construct must not be spliced in from wherever it
+    // nominally pointed.
+    let keep_rel = kept.and_then(|c| construct.relative(c));
+    let card = card.clone();
+    button.connect_clicked(move |_| {
+        card.dismiss();
+        // Defer the sink: it re-renders the preview (rebuilds the widget tree), which
+        // must not run inside this button's active press gesture or GTK reports
+        // "Broken accounting of active state" up the ancestor chain (GTK4Rs/AP-30).
+        let sink = sink.clone();
+        let construct = construct.clone();
+        let keep_inner = keep_rel.clone();
+        glib::idle_add_local_once(move || {
+            sink(AnnotationEdit::Remove {
+                construct,
+                keep_inner,
+            });
+        });
+    });
 }

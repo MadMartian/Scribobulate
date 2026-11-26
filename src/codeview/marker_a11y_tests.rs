@@ -113,12 +113,22 @@ fn hitbox_count(view: &CodePreviewView) -> usize {
 /// test driving the real UI has no forwarded handle by design: walking is how it stays
 /// an honest end-to-end test of what the user's pointer actually reaches.
 fn find_descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {
+    find_descendant_where(root, |_: &T| true)
+}
+
+/// The first descendant `T` that `keep` accepts.
+fn find_descendant_where<T: IsA<gtk::Widget>>(
+    root: &impl IsA<gtk::Widget>,
+    keep: impl Fn(&T) -> bool + Copy,
+) -> Option<T> {
     let mut child = root.as_ref().first_child();
     while let Some(c) = child {
         if let Ok(t) = c.clone().downcast::<T>() {
-            return Some(t);
+            if keep(&t) {
+                return Some(t);
+            }
         }
-        if let Some(found) = find_descendant::<T>(&c) {
+        if let Some(found) = find_descendant_where(&c, keep) {
             return Some(found);
         }
         child = c.next_sibling();
@@ -1134,4 +1144,96 @@ fn a_chip_stays_under_its_click_zone_when_the_preview_is_scrolled_sideways() {
         "scrolled 150px sideways, the chip is no longer painted under its click zone"
     );
     crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
+}
+
+/// TDD 17.71–17.74: a suggested replacement's chip opens a card that shows the change —
+/// the old side struck through, then the new — and offers Accept edit beside Remove.
+/// Each button rewrites the document to one side, note and all, through the same path
+/// the window applies every card's edit by.
+#[gtktest::test]
+fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
+    use gtk::subclass::prelude::*;
+    const SRC: &str = "Dear sir{~~,~>:~~}{>>colon<<} hello.\n";
+    for (button, expected) in [
+        ("Accept edit", "Dear sir: hello.\n"),
+        ("Remove", "Dear sir, hello.\n"),
+    ] {
+        let pane = crate::preview::render(
+            None,
+            SRC,
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+        );
+        let view = view_of(pane.clone());
+        let win = gtk::Window::new();
+        win.set_default_size(700, 400);
+        win.set_child(Some(&pane));
+        win.present();
+        // precondition: the suggestion has a chip
+        settle("the suggestion's chip to paint", || {
+            hitbox_count(&view) == 1
+        });
+
+        let doc = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        doc.set_text(SRC);
+        view.set_annotation_sink({
+            let doc = doc.clone();
+            std::rc::Rc::new(move |e: AnnotationEdit| crate::window::apply_annotation_edit(&doc, e))
+        });
+        assert!(view.open_stepped_marker_popover(0, Direction::Next));
+        // precondition: the card opened
+        settle("the card to open", || view.has_open_marker_popover());
+        let card = view
+            .imp()
+            .marker_card
+            .borrow()
+            .clone()
+            .expect("the card exists once opened");
+
+        let quote = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
+            .expect("the card quotes the change with its old side struck through");
+        assert_eq!(quote.text(), "\u{201c}, \u{2192} :\u{201d}");
+        assert!(quote.uses_markup());
+        assert!(
+            find_button(&card, "Edit").is_some(),
+            "the note stays editable (17.72)"
+        );
+
+        find_button(&card, button)
+            .unwrap_or_else(|| panic!("the card offers {button}"))
+            .emit_clicked();
+        let text = || crate::saferizer::BufferText::of(&doc).into_string();
+        settle("the button to rewrite the document", || text() != SRC);
+        assert_eq!(text(), expected, "{button}");
+        crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
+    }
+}
+
+/// TDD 17.71 inside a table (Document Rendering CAM row 2): a suggested replacement in
+/// a cell has its new text highlighted in the cell and its own margin marker, as a claim
+/// there does.
+#[gtktest::test]
+fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
+    const SRC: &str = "| word |\n|---|\n| say {~~hi~>hello~~} there |\n";
+    let pane = crate::preview::render(
+        None,
+        SRC,
+        None,
+        1.0,
+        false,
+        &crate::fold::FoldState::default(),
+    );
+    let view = view_of(pane.clone());
+    let win = gtk::Window::new();
+    win.set_default_size(700, 400);
+    win.set_child(Some(&pane));
+    win.present();
+    settle("the cell's chip to paint", || hitbox_count(&view) == 1);
+    let open = crate::renderer::ann_hl_open(&crate::theme::active());
+    let cell = find_descendant_where::<gtk::Label>(&view, |l| l.label().contains(&open))
+        .expect("a cell carries the annotation highlight");
+    assert_eq!(cell.text(), "say hello there");
+    crate::testpump::destroy_after_tooltip_delay(&win, || ());
 }

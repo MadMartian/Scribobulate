@@ -950,6 +950,37 @@ mod tests {
     /// end-to-end test passes even with this floor removed. Each defense needs a
     /// guard that fails when THAT defense alone is taken away.
     #[test]
+    fn accepting_or_removing_a_suggestion_keeps_one_side_and_drops_its_note() {
+        // TDD 17.73 / 17.74: the whole construct, note included, becomes one side.
+        for src in [
+            "Dear sir{~~,~>:~~}{>>colon<<} hello",
+            "Dear sir{~~,~>:~~} hello",
+        ] {
+            let ex = super::super::extract(src);
+            let ann = &ex.annotations[0];
+            let (old, new) = super::super::suggestion_sides(ann).unwrap();
+            let span = ann.src_span.start.raw()..ann.src_span.end.raw();
+            assert_eq!(
+                remove_annotation(src, span.clone(), Some(new)).as_deref(),
+                Some("Dear sir: hello")
+            );
+            assert_eq!(
+                remove_annotation(src, span, Some(old)).as_deref(),
+                Some("Dear sir, hello")
+            );
+        }
+        // An empty side is kept as nothing, never as the whole construct's removal span.
+        let src = "a {~~gone~>~~} b";
+        let ann = &super::super::extract(src).annotations[0];
+        let (_, new) = super::super::suggestion_sides(ann).unwrap();
+        let span = ann.src_span.start.raw()..ann.src_span.end.raw();
+        assert_eq!(
+            remove_annotation(src, span, Some(new)).as_deref(),
+            Some("a  b")
+        );
+    }
+
+    #[test]
     fn remove_is_total_against_a_range_the_source_cannot_hold() {
         let src = "alpha {==beta==}";
         // Past the end.

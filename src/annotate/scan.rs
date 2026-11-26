@@ -31,7 +31,7 @@ const DEL_OPEN: &str = "{--";
 const DEL_CLOSE: &str = "--}";
 const SUB_OPEN: &str = "{~~";
 const SUB_CLOSE: &str = "~~}";
-const SUB_ARROW: &str = "~>";
+pub(super) const SUB_ARROW: &str = "~>";
 
 /// Every opener/closer pair the pass recognises, as ONE table.
 ///
@@ -55,10 +55,10 @@ const PAIRS: [(&str, &str); 5] = [
     (SUB_OPEN, SUB_CLOSE),
 ];
 
-/// Which CriticMarkup construct an [`Annotation`] is. v1 renders `Highlight` and
-/// `Comment`; the suggested-edit kinds are recognised and their visible text is
-/// kept, but no distinct styling is applied yet (deferred, not designed out —
-/// keeping the inert kinds is what makes enabling them later a styling-only change).
+/// Which CriticMarkup construct an [`Annotation`] is. `Highlight`, `Comment` and
+/// `Substitution` are annotations the reader meets (a chip, a row, a card); insertion and
+/// deletion are recognised and their visible text kept, but no distinct styling is
+/// applied yet (deferred, not designed out).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum AnnKind {
     /// `{==content==}` — optionally immediately followed by `{>>comment<<}`.
@@ -69,7 +69,9 @@ pub(crate) enum AnnKind {
     Insertion,
     /// `{--text--}` — deletion (v1 inert; text kept visible).
     Deletion,
-    /// `{~~old~>new~~}` — substitution (v1 inert; `new` kept visible).
+    /// `{~~old~>new~~}` — a suggested replacement, optionally immediately followed by
+    /// `{>>note<<}`. The page reads `new`, highlighted like a claim; its card offers to
+    /// accept it (keep `new`) or remove it (keep `old`) (TDD 17.71–17.74).
     Substitution,
 }
 
@@ -90,6 +92,10 @@ pub(crate) struct Annotation {
     pub(crate) src_comment_body: Option<Range<usize>>,
     /// The extracted comment text (delimiters stripped), if any.
     pub(crate) comment: Option<String>,
+    /// A `Substitution`'s OLD side — the text between `{~~` and `~>` — as a byte range
+    /// in the **original** source; `None` for every other kind. Its new side is the
+    /// kept content, at the same place `cleaned_content` maps to.
+    pub(crate) src_old: Option<Range<usize>>,
 }
 
 impl Annotation {
@@ -102,16 +108,24 @@ impl Annotation {
     /// could have no row (TDD 20.2).
     ///
     /// True for every `Highlight` — `{==claim==}{>>comment<<}` and the bare
-    /// `{==claim==}`, which carries no comment yet (TDD 17.67) — and for a point
-    /// `Comment` (`{>>comment<<}`). False for the v1-inert suggested-edit kinds
-    /// (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`), which have no chip and no defined
-    /// presentation (deferred, not designed out).
+    /// `{==claim==}`, which carries no comment yet (TDD 17.67) — for every suggested
+    /// replacement (`{~~a~>b~~}`, with or without a note, TDD 17.71), and for a point
+    /// `Comment` (`{>>comment<<}`). False for insertions and deletions (`{++ins++}`,
+    /// `{--del--}`), which have no chip and no defined presentation (deferred, not
+    /// designed out).
     pub(crate) fn is_listed(&self) -> bool {
         match self.kind {
-            AnnKind::Highlight => true,
+            AnnKind::Highlight | AnnKind::Substitution => true,
             AnnKind::Comment => self.comment.is_some() && self.src_comment_body.is_some(),
             _ => false,
         }
+    }
+
+    /// Whether the page draws this annotation's kept text highlighted, as a claim: a
+    /// highlight's claim and a suggested replacement's new text. The one answer the body
+    /// tags, the table cells and the export all take.
+    pub(crate) fn highlights_text(&self) -> bool {
+        matches!(self.kind, AnnKind::Highlight | AnnKind::Substitution)
     }
 }
 
@@ -238,6 +252,8 @@ struct Parsed {
     /// `(comment-body original range, extracted text)`, if the construct carries a
     /// comment.
     comment: Option<(Range<usize>, String)>,
+    /// A substitution's old side (original range); `None` for every other kind.
+    old: Option<Range<usize>>,
 }
 
 /// Every fixed string [`extract`] has to locate, indexed ONCE per pass.
@@ -412,6 +428,7 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
             span: i..end,
             keep: Some(content),
             comment,
+            old: None,
         });
     }
 
@@ -422,6 +439,7 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
             span: i..end,
             keep: None,
             comment: Some((body.clone(), source[body].to_string())),
+            old: None,
         });
     }
 
@@ -432,6 +450,7 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
             span: i..end,
             keep: Some(content),
             comment: None,
+            old: None,
         });
     }
 
@@ -442,12 +461,13 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
             span: i..end,
             keep: Some(content),
             comment: None,
+            old: None,
         });
     }
 
     if rest.starts_with(SUB_OPEN) {
-        let (content, end) = match_pair(source, idx, i, SUB_OPEN, SUB_CLOSE)?;
-        // Substitution requires `~>`; keep only the "new" side visible in v1.
+        let (content, mut end) = match_pair(source, idx, i, SUB_OPEN, SUB_CLOSE)?;
+        // Substitution requires `~>`; the page keeps only the "new" side.
         //
         // Indexed, not `source[content].find(SUB_ARROW)`. The `?` on a MISSING
         // arrow is what made the scan quadratic: the construct is rejected, the
@@ -457,11 +477,20 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
         // main thread, as the closers' scan-to-EOF (QA round 3 D-2, R3).
         let arrow_at = idx.next_within(SUB_ARROW, &content)?;
         let new_range = arrow_at + SUB_ARROW.len()..content.end;
+        // An immediately-adjacent {>>…<<} is the suggestion's note, as for a highlight.
+        let mut comment = None;
+        if source[end..].starts_with(COMMENT_OPEN) {
+            if let Some((body, cend)) = match_pair(source, idx, end, COMMENT_OPEN, COMMENT_CLOSE) {
+                comment = Some((body.clone(), source[body].to_string()));
+                end = cend;
+            }
+        }
         return Some(Parsed {
             kind: AnnKind::Substitution,
             span: i..end,
             keep: Some(new_range),
-            comment: None,
+            comment,
+            old: Some(content.start..arrow_at),
         });
     }
 
@@ -520,6 +549,7 @@ pub(crate) fn extract(source: &str) -> Extraction {
             cleaned_content,
             src_comment_body: p.comment.as_ref().map(|(r, _)| r.clone()),
             comment: p.comment.map(|(_, t)| t),
+            src_old: p.old,
         });
         cursor = p.span.end;
     }
@@ -565,6 +595,45 @@ mod tests {
     }
 
     // ---- annotation metadata ---------------------------------------------
+
+    #[test]
+    fn a_suggested_replacement_binds_its_note_and_records_its_old_side() {
+        // TDD 17.71: the note after a suggestion is its note, not a point comment of its
+        // own, and the old side is located for Remove to keep.
+        let src = "a {~~,~>:~~}{>>colon<<} b";
+        let e = extract(src);
+        assert_eq!(e.cleaned, "a : b");
+        assert_eq!(e.annotations.len(), 1, "{:?}", e.annotations);
+        let s = &e.annotations[0];
+        assert_eq!(s.kind, AnnKind::Substitution);
+        assert_eq!(s.comment.as_deref(), Some("colon"));
+        assert_eq!(
+            &src[s.src_span.start.raw()..s.src_span.end.raw()],
+            "{~~,~>:~~}{>>colon<<}"
+        );
+        assert_eq!(&src[s.src_old.clone().unwrap()], ",");
+        assert_eq!(&src[s.src_comment_body.clone().unwrap()], "colon");
+        let (old, new) = crate::annotate::suggestion_sides(s).unwrap();
+        assert_eq!((&src[old], &src[new]), (",", ":"));
+        // Either side may be empty.
+        let src = "x {~~gone~>~~} y {~~~>added~~} z";
+        let sides: Vec<_> = extract(src)
+            .annotations
+            .iter()
+            .map(|a| {
+                let (o, n) = crate::annotate::suggestion_sides(a).unwrap();
+                (src[o].to_string(), src[n].to_string())
+            })
+            .collect();
+        assert_eq!(
+            sides,
+            [
+                ("gone".into(), String::new()),
+                (String::new(), "added".into())
+            ]
+        );
+        assert!(extract(src).annotations.iter().all(Annotation::is_listed));
+    }
 
     #[test]
     fn highlight_records_kind_span_and_comment() {

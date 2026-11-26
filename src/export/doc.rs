@@ -92,7 +92,12 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
-            claim: claim_text(cleaned, hs, he),
+            // A suggested replacement is quoted as its change, as the card and the
+            // viewer's row quote it.
+            claim: match crate::annotate::Suggestion::of(normalised.as_str(), ann) {
+                Some(s) => crate::sidebarfilter::suggestion_text(&s.old, &s.new),
+                None => claim_text(cleaned, hs, he),
+            },
         });
     }
     doc
@@ -1058,6 +1063,27 @@ mod export_doc_tests {
             matches!(v.last(), Some(Inline::Claim { tail: true, .. })),
             "the tail fragment must close the claim: {v:?}"
         );
+    }
+
+    #[test]
+    fn a_suggested_replacement_exports_its_new_text_claimed_and_its_change_listed() {
+        // TDD 17.71 / CAM Document Rendering row 17: the page's new text is the claim,
+        // and the summary quotes the change as every other surface does.
+        let doc = doc_of("Dear sir{~~,~>:~~}{>>colon<<} hello\n");
+        assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
+        assert_eq!(doc.annotations[0].comment, "colon");
+        assert_eq!(doc.annotations[0].claim, ", \u{2192} :");
+        let Some(Block::Paragraph(v)) = doc.blocks.first() else {
+            panic!("{:?}", doc.blocks);
+        };
+        let claimed: String = v
+            .iter()
+            .filter_map(|i| match i {
+                Inline::Claim { inner, .. } => Some(crate::export::plain_text(inner)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(claimed, ":", "{v:?}");
     }
 
     #[test]

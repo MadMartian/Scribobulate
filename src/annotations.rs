@@ -25,15 +25,20 @@ pub(crate) struct AnnotationEntry {
     /// Typed [`OriginalByteOffset`] so it can never be confused with a buffer char
     /// offset or a cleaned-source byte (the source of past displacement bugs).
     pub(crate) src_span: Range<OriginalByteOffset>,
-    /// Which CriticMarkup construct this is (a `Highlight`, with or without a comment, or
-    /// a point `Comment`) — the only two kinds `is_listed` admits.
+    /// Which CriticMarkup construct this is (a `Highlight`, with or without a comment, a
+    /// suggested replacement, or a point `Comment`) — the kinds `is_listed` admits.
     pub(crate) kind: AnnKind,
     /// The comment body text. Empty for a bare highlight, which has no comment yet
     /// (TDD 17.67); non-empty for every other listed annotation.
     pub(crate) comment: String,
     /// The highlighted claim snippet (shown dimmed as secondary text) for a
-    /// `Highlight`; `None` for a point comment, which annotates a position, not a span.
+    /// `Highlight`; for a suggested replacement, its change as the words `old → new`
+    /// (what the filter searches); `None` for a point comment, which annotates a
+    /// position, not a span.
     pub(crate) claim: Option<String>,
+    /// A suggested replacement's two sides, for the row to strike the old one through
+    /// (TDD 20.2); `None` for every other kind.
+    pub(crate) suggestion: Option<crate::annotate::Suggestion>,
 }
 
 /// Extract the document's annotations, in document order.
@@ -65,8 +70,11 @@ pub(crate) fn extract_entries(source: &str) -> Vec<AnnotationEntry> {
                 AnnKind::Highlight => Some(crate::annotate::plain_claim(
                     &ex.cleaned[a.cleaned_content.start.raw()..a.cleaned_content.end.raw()],
                 )),
+                AnnKind::Substitution => crate::annotate::Suggestion::of(source, a)
+                    .map(|s| crate::sidebarfilter::suggestion_text(&s.old, &s.new)),
                 _ => None,
             },
+            suggestion: crate::annotate::Suggestion::of(source, a),
         })
         .collect()
 }
@@ -463,9 +471,29 @@ mod tests {
 
     #[test]
     fn inert_kinds_are_not_listed() {
-        // Insertion / deletion / substitution have no chip and no viewer row (TDD 20.2).
-        let md = "a {++ins++} b {--del--} c {~~old~>new~~} d";
+        // Insertion and deletion have no chip and no viewer row (TDD 20.2).
+        let md = "a {++ins++} b {--del--} d";
         assert!(extract_entries(md).is_empty());
+    }
+
+    #[test]
+    fn a_suggested_replacement_is_listed_as_its_change_with_its_note() {
+        // TDD 20.2: a row per suggestion, quoted `old → new`, its note as the comment —
+        // with or without a note, and with the sides read as the page reads them.
+        let md = "a {~~,~>:~~}{>>colon<<} b {~~**old**~>new~~} c";
+        let es = extract_entries(md);
+        assert_eq!(es.len(), 2, "{es:?}");
+        assert_eq!(es[0].kind, AnnKind::Substitution);
+        assert_eq!(es[0].comment, "colon");
+        assert_eq!(es[0].claim.as_deref(), Some(", \u{2192} :"));
+        assert_eq!(es[1].comment, "");
+        assert_eq!(
+            es[1].suggestion,
+            Some(crate::annotate::Suggestion {
+                old: "old".into(),
+                new: "new".into()
+            })
+        );
     }
 
     #[test]

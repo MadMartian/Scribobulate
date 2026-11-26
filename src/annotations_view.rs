@@ -70,7 +70,13 @@ impl AnnotationObject {
             *imp.comment_markup.borrow_mut() =
                 Some(highlight_markup(&entry.comment, &row.comment_hits));
         }
-        if !row.claim_hits.is_empty() {
+        if let Some(s) = &entry.suggestion {
+            // Always markup: the old side is struck through whether or not a filter is
+            // matching (TDD 20.2).
+            *imp.claim_markup.borrow_mut() = Some(quoted(
+                &crate::sidebarfilter::suggestion_markup(&s.old, &s.new, &row.claim_hits),
+            ));
+        } else if !row.claim_hits.is_empty() {
             *imp.claim_markup.borrow_mut() =
                 Some(quoted(&highlight_markup(&claim, &row.claim_hits)));
         }

@@ -163,6 +163,10 @@ pub(crate) fn announce_annotation_refused(widget: &impl IsA<gtk::Widget>) {
 
 pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit) {
     let old = crate::saferizer::BufferText::of(buf).into_string();
+    // Whether the page reads the same words after the edit, so no fold key moves. True
+    // of every arm but one: rejecting a suggested replacement, which swaps the new text
+    // the page showed for the old (TDD 17.74).
+    let mut page_text_kept = true;
     let new = match edit {
         // Both anchored mutations RE-LOCATE their construct in the live source
         // before touching it. The card that issued this edit was built against an
@@ -195,6 +199,11 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 return;
             };
             let keep = keep_inner.map(|r| crate::docref::AnchoredSpan::absolute(&at, &r));
+            let shown = old
+                .get(at.clone())
+                .map(|c| crate::annotate::extract(c).cleaned);
+            let kept = keep.clone().and_then(|k| old.get(k)).unwrap_or_default();
+            page_text_kept = shown.as_deref() == Some(kept);
             match crate::annotate::remove_annotation(&old, at, keep) {
                 Some(new) => new,
                 None => return,
@@ -246,8 +255,13 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
     }
     // Every arm above differs from `old` only in CriticMarkup or by a same-length
     // substitution, so no fold key moves: say so, or the split-mode `changed` handler
-    // clears the reader's collapsed blocks as if they had typed (TDD 2.26m).
-    crate::fold::with_keys_unmoved(|| splice_minimal(buf, &old, &new));
+    // clears the reader's collapsed blocks as if they had typed (TDD 2.26m). A rejected
+    // suggestion changes the words, so it is an edit like typing and says nothing.
+    if page_text_kept {
+        crate::fold::with_keys_unmoved(|| splice_minimal(buf, &old, &new));
+    } else {
+        splice_minimal(buf, &old, &new);
+    }
 }
 
 /// Re-render the preview so a just-applied annotation (create / edit / remove)

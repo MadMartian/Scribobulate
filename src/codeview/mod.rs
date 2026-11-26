@@ -1769,12 +1769,14 @@ mod gtk_integration_tests {
             anchor: 5,
             comment: "a note".to_string(),
             claim: Some("annotated".to_string()),
+            suggestion: None,
             source: MarkerSource {
                 construct: crate::docref::AnchoredSpan::capture(src, 0..src.len())
                     .expect("the fixture span is a valid slice"),
                 src_content: Some(0..3),
                 src_comment_body: 0..3,
                 cleaned_content: 0..3,
+                src_old: None,
             },
             cell_widget: None,
             cell_table_anchor: None,
