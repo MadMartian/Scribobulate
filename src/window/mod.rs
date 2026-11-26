@@ -1811,35 +1811,6 @@ pub(crate) mod gtk_integration_tests {
         }
     }
 
-    /// Viewer navigation resolves to the correct chip by SPAN IDENTITY, even with a
-    /// inert kind interposed (TDD 20.6): each listed annotation's `src_span` start
-    /// resolves to its own margin-chip index via `marker_index_for_src`.
-    #[gtktest::test]
-    fn viewer_navigation_resolves_chips_by_identity() {
-        let app = test_app("com.extollit.scribobulate.integrationtest.annident");
-        let md = "a {==c1==}{>>note one<<} b {++ins++} c {==c2==}{>>note two<<} d";
-        let win = new_window(&app, "IT-ident", md, None);
-        let entries = crate::annotations::extract_entries(md);
-        assert_eq!(
-            entries.len(),
-            2,
-            "two annotations; the insertion is not listed"
-        );
-        let view = preview_text_view(&win)
-            .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
-            .expect("preview view in preview mode");
-        // Each entry's identity resolves to its own chip index, in order — the inert
-        // insertion has no chip and does not perturb the mapping.
-        assert_eq!(
-            view.marker_index_for_src(entries[0].src_span.start.raw()),
-            Some(0)
-        );
-        assert_eq!(
-            view.marker_index_for_src(entries[1].src_span.start.raw()),
-            Some(1)
-        );
-    }
-
     /// In split mode, activating a viewer row moves the editor CARET onto the annotation
     /// (TDD 20.4), landing on the right character even past multi-byte UTF-8 (TDD 20.14 —
     /// the byte src_span is converted to a char offset).

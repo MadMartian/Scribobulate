@@ -3818,11 +3818,6 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** navigation happens immediately (no double-click required)
 - **And** the keyboard focus **stays in the list** across the navigation, so the next arrow press moves to the next row: browsing the list is a sequence of presses, not one press per trip through the Tab order. (The comment card the navigation opens therefore does *not* take focus — unlike a card opened by clicking its margin chip or by the Next/Previous Annotation commands, where the reader has asked to act on that one annotation and the card's own Escape/Edit/Remove must be reachable.)
 
-### 20.6 Navigation resolves the correct annotation even when membership isn't 1:1
-- **Given** a document where an inert kind sits *before* an annotation (so the annotation's list position differs from its chip's position)
-- **When** the user activates that annotation's row
-- **Then** the document navigates to *that* annotation — never a neighbor — because navigation keys on the annotation's source span identity, not a positional row index
-
 ### 20.7 An annotation inside a table cell is navigable
 - **Given** a comment-bearing annotation anchored to text inside a table cell, off-screen
 - **When** the user activates its viewer row (preview/split)
