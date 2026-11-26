@@ -1374,3 +1374,102 @@ fn saving_an_edit_leaves_the_card_open_on_the_saved_comment() {
         view.popdown_marker_popover()
     });
 }
+
+/// TDD 17.75 / 17.76 in a real window: a bare highlight offers no Add Follow-up until its
+/// first comment is saved, then offers it on the card that save left open; Cancel on the
+/// follow-up form writes nothing and brings the card back; Save writes the follow-up
+/// right after the comment it answers and the card comes back listing it beneath.
+#[gtktest::test]
+fn add_follow_up_appears_once_there_is_a_comment_and_writes_a_reply_beneath_it() {
+    use gtk::subclass::prelude::*;
+    let app =
+        crate::window::testkit::test_app("com.extollit.scribobulate.integrationtest.followup");
+    let win = crate::window::new_window(&app, "IT-followup", "A {==claim==} here.\n", None);
+    let view = find_descendant::<CodePreviewView>(&win).expect("the preview view");
+    let source = || crate::window::document_source(&win).unwrap_or_default();
+    let card = || {
+        view.imp()
+            .marker_card
+            .borrow()
+            .clone()
+            .expect("the card exists once opened")
+    };
+    let field_of = |what: &str| {
+        let mut found = None;
+        settle(what, || {
+            found = find_descendant_where::<sourceview::View>(&card(), |f| f.is_mapped());
+            found.is_some()
+        });
+        found.unwrap()
+    };
+    settle("the chip to paint", || hitbox_count(&view) == 1);
+    assert!(view.open_stepped_marker_popover(0, Direction::Next));
+    settle("the card to open", || view.has_open_marker_popover());
+    assert!(
+        find_button(&card(), "Add Follow-up").is_none(),
+        "a bare highlight has no comment to follow up"
+    );
+
+    // Its first comment, through Edit: the card stays open and now offers Add Follow-up.
+    find_button(&card(), "Edit").unwrap().emit_clicked();
+    let field = field_of("the edit field");
+    crate::widgets::comment_entry::set_comment_text(&field, "first");
+    crate::widgets::comment_entry::press_key(&field, gtk::gdk::Key::Return);
+    settle("the card to offer Add Follow-up after the save", || {
+        view.has_open_marker_popover() && find_button(&card(), "Add Follow-up").is_some()
+    });
+    assert_eq!(source(), "A {==claim==}{>>first<<} here.\n");
+
+    // Cancel writes nothing and brings the card back.
+    find_button(&card(), "Add Follow-up")
+        .unwrap()
+        .emit_clicked();
+    let field = field_of("the follow-up field");
+    crate::widgets::comment_entry::set_comment_text(&field, "dropped");
+    find_button(&card(), "Cancel").unwrap().emit_clicked();
+    settle("the card to come back", || {
+        view.has_open_marker_popover() && find_button(&card(), "Add Follow-up").is_some()
+    });
+    assert_eq!(source(), "A {==claim==}{>>first<<} here.\n");
+
+    // Save writes the reply right after the comment, and the card lists it beneath.
+    find_button(&card(), "Add Follow-up")
+        .unwrap()
+        .emit_clicked();
+    let field = field_of("the follow-up field");
+    crate::widgets::comment_entry::set_comment_text(&field, "second");
+    crate::widgets::comment_entry::press_key(&field, gtk::gdk::Key::Return);
+    settle("the follow-up to reach the document", || {
+        source() == "A {==claim==}{>>first<<}{>>second<<} here.\n"
+    });
+    let label = |text: &'static str| {
+        find_descendant_where::<gtk::Label>(&card(), move |l| l.text() == text)
+    };
+    settle("the card to list the follow-up", || {
+        view.has_open_marker_popover() && label("first").is_some() && label("second").is_some()
+    });
+    let (first, second) = (label("first").unwrap(), label("second").unwrap());
+    settle("the card to lay out its rows", || {
+        first.height() > 0 && second.height() > 0
+    });
+    let below = second
+        .compute_point(&first, &gtk::graphene::Point::new(0.0, 0.0))
+        .unwrap();
+    assert!(
+        below.y() >= first.height() as f32,
+        "the follow-up is listed beneath the comment it answers: {below:?}"
+    );
+    assert_eq!(hitbox_count(&view), 1, "both share one margin marker");
+
+    // One Undo takes the follow-up back out.
+    view.popdown_marker_popover();
+    gtk::gio::prelude::ActionMapExt::lookup_action(&win, "undo")
+        .expect("the window has an undo action")
+        .activate(None);
+    settle("Undo to remove the follow-up", || {
+        source() == "A {==claim==}{>>first<<} here.\n"
+    });
+    crate::testpump::destroy_after_tooltip_delay(win.upcast_ref(), || {
+        view.popdown_marker_popover()
+    });
+}

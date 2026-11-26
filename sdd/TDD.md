@@ -18,7 +18,7 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.74 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.76 |
 | 18 | Preview reading themes | 18.1 – 18.58 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
@@ -3259,6 +3259,18 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a suggested edit's card is open
 - **When** the reader chooses Remove
 - **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone; nothing else in the document changes, and Undo restores the construct
+
+### 17.75 An annotation with a comment offers Add Follow-up
+- **Given** an annotation card is open
+- **When** the reader reads an annotation in it
+- **Then** each annotation that carries a comment — a highlight with one, a point comment, a suggested edit with a note — offers Add Follow-up; a bare highlight or a suggested edit with no note does not, since Edit writes its first comment
+- **And** once Edit saves that first comment, the card left open (17.7) offers Add Follow-up without being reopened
+
+### 17.76 Add Follow-up writes a point comment straight after the annotation it answers
+- **Given** an annotation card offering Add Follow-up
+- **When** the reader chooses it, types a follow-up and saves
+- **Then** the card turns into a new-comment form quoting the comment being answered; on Save the file gains the follow-up as a point comment directly after that annotation and its comment (after an earlier follow-up only when that is the one being answered), the margin marker counts one more, and the card comes back listing the follow-up directly beneath the annotation it answers; one Undo removes it
+- **And** Cancel, or a Save with nothing typed, writes nothing and brings the card back as it was; Escape or the corner × closes the card and writes nothing; a typed follow-up keeps the card up against an outside click, as any typed comment does (17.70)
 
 ## 18. Preview reading themes
 

@@ -152,6 +152,30 @@ fn append_edit_remove_controls(
         btns.append(&accept);
     }
     btns.append(&remove);
+    // A follow-up answers a comment, so only an annotation that has one offers it. A bare
+    // highlight's or note-less suggestion's comment "body" is the empty point just past
+    // the construct, and a `{>>…<<}` written there would become its first comment —
+    // Edit's job (TDD 17.75).
+    if m.source.src_comment_body.end != m.source.construct.captured_at().end {
+        let follow_up = gtk::Button::with_label("Add Follow-up");
+        let card = card.clone();
+        let sink = sink.clone();
+        let construct = m.source.construct.clone();
+        let comment = m.comment.clone();
+        follow_up.connect_clicked(move |_| {
+            // Deferred off the press gesture: the card's content is replaced (GTK4Rs/AP-30).
+            let (card, sink, construct, comment) = (
+                card.clone(),
+                sink.clone(),
+                construct.clone(),
+                comment.clone(),
+            );
+            glib::idle_add_local_once(move || {
+                show_follow_up_form(&card, sink, construct, &comment);
+            });
+        });
+        btns.append(&follow_up);
+    }
 
     // The edit page, built NOW (not lazily on click) so the stack can measure it from the
     // start. The shared `CommentEntry` wires the commit to Enter AND Save — hand-rolling it
@@ -312,4 +336,85 @@ fn wire_removal(
             });
         });
     });
+}
+
+/// Turn the card over to a new-comment form for a follow-up to `comment`, the comment of
+/// the annotation `construct` (TDD 17.76). Save writes the follow-up straight after that
+/// annotation and brings the card back with it listed beneath; Cancel, or a Save with
+/// nothing typed, brings the card back as it was; Escape and the corner × close the card,
+/// as they do on an Edit. A typed draft keeps the card up against an outside click, as any
+/// comment field in it does (TDD 17.70).
+fn show_follow_up_form(
+    card: &AnnotationCard,
+    sink: AnnotationSink,
+    construct: crate::docref::AnchoredSpan,
+    comment: &str,
+) {
+    let Some(view) = card.view() else { return };
+    // The annotation answered keeps its place in the document, so its start names it in
+    // whatever render the follow-up produces.
+    let start = construct.captured_at().start;
+    let back = {
+        let card = card.clone();
+        let view = view.clone();
+        move || {
+            card.dismiss();
+            view.reopen_marker_card_on(start);
+        }
+    };
+    let ce = CommentEntry::new("", {
+        let card = card.clone();
+        let back = back.clone();
+        move |text: &str| {
+            if text.trim().is_empty() {
+                back();
+                return;
+            }
+            let text = text.to_string();
+            card.dismiss();
+            let (sink, construct, view) = (sink.clone(), construct.clone(), view.clone());
+            // Deferred off the commit's key or press (GTK4Rs/AP-30): the sink re-renders.
+            glib::idle_add_local_once(move || {
+                sink(AnnotationEdit::FollowUp { construct, text });
+                view.reopen_marker_card_on(start);
+            });
+        }
+    });
+    ce.style_as_card();
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.connect_clicked(move |_| {
+        let back = back.clone();
+        glib::idle_add_local_once(back);
+    });
+
+    let heading = gtk::Label::new(Some("Follow-up to"));
+    heading.add_css_class("heading");
+    heading.set_xalign(0.0);
+    let quoted = gtk::Label::new(Some(&format!("\u{201c}{comment}\u{201d}")));
+    quoted.add_css_class("dim-label");
+    quoted.set_xalign(0.0);
+    quoted.set_wrap(true);
+    quoted.set_max_width_chars(34);
+    quoted.set_lines(cardscroll::CLAIM_MAX_LINES);
+    quoted.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let btns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    btns.append(&ce.save);
+    btns.append(&cancel);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    vbox.set_margin_top(2);
+    vbox.set_margin_bottom(8);
+    vbox.set_margin_start(8);
+    vbox.set_margin_end(8);
+    vbox.set_width_request(280);
+    vbox.append(&card_close_button(card));
+    vbox.append(&heading);
+    vbox.append(&quoted);
+    vbox.append(&ce.area);
+    vbox.append(&btns);
+    crate::widgets::floating_card::FloatingCardExt::set_child(card, Some(&vbox));
+    // Re-presented so the card re-derives its place for its new size.
+    card.present();
+    let field = ce.field.clone();
+    glib::idle_add_local_once(move || crate::widgets::comment_entry::focus_at_end(&field));
 }

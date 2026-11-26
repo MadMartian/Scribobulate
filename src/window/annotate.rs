@@ -210,6 +210,16 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 None => return,
             }
         }
+        AnnotationEdit::FollowUp { construct, text } => {
+            // Re-located in the live source first, as Edit and Remove are.
+            let Some(at) = construct.resolve(&old) else {
+                return;
+            };
+            match crate::annotate::insert_follow_up(&old, at, &text) {
+                Some(new) => new,
+                None => return,
+            }
+        }
         AnnotationEdit::Create(CreateAnnotation::Highlight { target, comment }) => {
             // Re-located in the live source first, exactly as the two mutations above
             // are: the card was raised against an earlier state of the document and has

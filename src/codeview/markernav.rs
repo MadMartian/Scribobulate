@@ -206,13 +206,41 @@ impl CodePreviewView {
         true
     }
 
-    /// Open the card on the annotation whose construct begins at source byte `start`, in
-    /// this render's markers, taking focus — the card a just-saved edit reopens on (TDD
-    /// 17.7). Nothing happens when no marker begins there any more.
+    /// Open the card on the annotation whose construct begins at source byte `start`,
+    /// taking focus — the card a just-saved edit or follow-up reopens on (TDD 17.7,
+    /// 17.76). Nothing happens when no marker begins there any more.
+    ///
+    /// **After the next paint, not now.** A card opens on its chip's line group, and the
+    /// groups are the hit-boxes the last paint drew. The render the edit just made has not
+    /// painted yet, so they still describe the document before it: a follow-up, which adds
+    /// an annotation to the line, would be missing from the card. The paint draws the new
+    /// groups; the card opens on them in the same frame's `after-paint`.
     pub(crate) fn reopen_marker_card_on(&self, start: usize) {
-        if let Some(index) = self.marker_index_for_src(start) {
-            self.open_marker_popover_at(index, CardFocus::Take);
-        }
+        let open = move |view: &Self| {
+            if let Some(index) = view.marker_index_for_src(start) {
+                view.open_marker_popover_at(index, CardFocus::Take);
+            }
+        };
+        let Some(clock) = self.frame_clock() else {
+            open(self);
+            return;
+        };
+        let handler = std::rc::Rc::new(std::cell::Cell::new(None::<glib::SignalHandlerId>));
+        // Weak, so a view closed before the paint is not kept alive by it (GTK4Rs/AP-63).
+        let weak = self.downgrade();
+        let id = clock.connect_after_paint({
+            let handler = handler.clone();
+            move |clock| {
+                if let Some(id) = handler.take() {
+                    clock.disconnect(id);
+                }
+                if let Some(view) = weak.upgrade() {
+                    open(&view);
+                }
+            }
+        });
+        handler.set(Some(id));
+        self.queue_draw();
     }
 
     /// The **identity** (`src_span.start`) of the annotation one step from buffer char
