@@ -282,6 +282,16 @@ fn place_entry_card(
     );
     bar.set_margin_start(x);
     bar.set_margin_top(y);
+    reveal_card(bar, true);
+}
+
+/// Show or conceal a placed comment card without closing it. A card whose text has
+/// scrolled out of view is concealed rather than hidden: it stays open, keeps its
+/// draft and keeps keyboard focus, and only stops painting and taking clicks — so it
+/// never sits over text it does not belong to (TDD 17.25). Placing it again reveals it.
+fn reveal_card(bar: &gtk::Widget, on: bool) {
+    bar.set_opacity(if on { 1.0 } else { 0.0 });
+    bar.set_can_target(on);
 }
 
 /// Point `pop`'s arrow at the horizontal midpoint of the preview selection — the same
@@ -412,13 +422,22 @@ pub(crate) fn position_card_at(
 /// read straight from `value-changed` it lags the scroll and the card trails its text.
 /// One handler at a time per card — a newer scroll replaces a pending one — and it
 /// disconnects itself on its first fire. `place` returns `false` when the anchor has
-/// scrolled out of view; the card then stays where it last was, open: scrolling never
-/// closes a card the reader is writing in.
+/// scrolled out of view; the card is then concealed, still open, until a later scroll
+/// places it again: scrolling never closes a card the reader is writing in.
 pub(crate) fn follow_scroll_after_paint(
     view: &gtk::Widget,
+    bar: &gtk::Widget,
     slot: &AfterPaintSlot,
     place: impl Fn() -> bool + 'static,
 ) {
+    let bar = bar.downgrade();
+    let place = move || {
+        if !place() {
+            if let Some(bar) = bar.upgrade() {
+                reveal_card(&bar, false);
+            }
+        }
+    };
     if let Some((clk, id)) = slot.borrow_mut().take() {
         clk.disconnect(id);
     }
@@ -1242,21 +1261,27 @@ pub(crate) fn wire_annotation_overlay(
                 };
                 let anchor_sel = anchor_sel.clone();
                 let (vw, ow, bw) = (v.downgrade(), ov.downgrade(), bar.downgrade());
-                follow_scroll_after_paint(v.upcast_ref(), &card_slot, move || {
-                    let (Some(v), Some(ov), Some(bar)) = (vw.upgrade(), ow.upgrade(), bw.upgrade())
-                    else {
-                        return false;
-                    };
-                    match anchor_sel.borrow().clone() {
-                        Some(AnchorSel::Body(a, b)) => {
-                            position_card_at(&v, &ov, bar.upcast_ref(), (a, b))
+                follow_scroll_after_paint(
+                    v.upcast_ref(),
+                    bar.upcast_ref(),
+                    &card_slot,
+                    move || {
+                        let (Some(v), Some(ov), Some(bar)) =
+                            (vw.upgrade(), ow.upgrade(), bw.upgrade())
+                        else {
+                            return false;
+                        };
+                        match anchor_sel.borrow().clone() {
+                            Some(AnchorSel::Body(a, b)) => {
+                                position_card_at(&v, &ov, bar.upcast_ref(), (a, b))
+                            }
+                            Some(AnchorSel::Cell(label, a, b)) => {
+                                position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b)
+                            }
+                            None => false,
                         }
-                        Some(AnchorSel::Cell(label, a, b)) => {
-                            position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b)
-                        }
-                        None => false,
-                    }
-                });
+                    },
+                );
             }
         };
         let card = bar.downgrade();
