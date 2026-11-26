@@ -200,6 +200,29 @@ pub(crate) fn suggestion_markup(old: &str, new: &str, hits: &[Range<usize>]) -> 
     )
 }
 
+/// A suggested replacement as its margin card spells it out — the drill-down beside the
+/// one-line [`suggestion_markup`] the viewer's row uses:
+///
+/// **Replace:** ~~old~~
+/// **With:** *new*
+///
+/// An empty side reads "(nothing)", so a pure deletion or insertion still says what it
+/// does (TDD 17.72).
+pub(crate) fn suggestion_card_markup(old: &str, new: &str) -> String {
+    let side = |text: &str, tag: &str| {
+        if text.is_empty() {
+            "(nothing)".to_string()
+        } else {
+            format!("<{tag}>{}</{tag}>", gtk::glib::markup_escape_text(text))
+        }
+    };
+    format!(
+        "<b>Replace:</b> {}\n<b>With:</b> {}",
+        side(old, "s"),
+        side(new, "i")
+    )
+}
+
 /// The filter bar's match count while its filter is active: `"3 of 40"` — how many rows
 /// match out of the pane's total.
 pub(crate) fn match_count(matched: usize, total: usize) -> String {
@@ -307,6 +330,18 @@ mod tests {
             suggestion_markup("cat", "dog", &hits),
             "<s>c<span weight=\"bold\" underline=\"single\">a</span>t</s> \u{2192} \
              <b>d<span weight=\"bold\" underline=\"single\">o</span>g</b>"
+        );
+    }
+
+    #[test]
+    fn a_suggestion_card_names_what_it_replaces_and_with_what() {
+        assert_eq!(
+            suggestion_card_markup("a&b", "c"),
+            "<b>Replace:</b> <s>a&amp;b</s>\n<b>With:</b> <i>c</i>"
+        );
+        assert_eq!(
+            suggestion_card_markup("gone", ""),
+            "<b>Replace:</b> <s>gone</s>\n<b>With:</b> (nothing)"
         );
     }
 

@@ -51,22 +51,25 @@ pub(super) fn build_annotation_row(
     wheel: &cardscroll::RowWheel,
 ) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    // A suggested replacement shows its change where a claim shows its words: the old
-    // side struck through, then the new (TDD 17.72).
+    // A suggested replacement shows its change where a claim shows its words, in the
+    // card's fuller form: what it replaces, struck through, and what with (TDD 17.72).
+    // It is the card's subject rather than context for a comment, so it is not dimmed.
     let quote = match (&m.suggestion, &m.claim) {
         (Some(s), _) => {
             let l = gtk::Label::new(None);
-            l.set_markup(&format!(
-                "\u{201c}{}\u{201d}",
-                crate::sidebarfilter::suggestion_markup(&s.old, &s.new, &[])
+            l.set_markup(&crate::sidebarfilter::suggestion_card_markup(
+                &s.old, &s.new,
             ));
             Some(l)
         }
-        (None, Some(claim)) => Some(gtk::Label::new(Some(&format!("\u{201c}{claim}\u{201d}")))),
+        (None, Some(claim)) => {
+            let l = gtk::Label::new(Some(&format!("\u{201c}{claim}\u{201d}")));
+            l.add_css_class("dim-label");
+            Some(l)
+        }
         (None, None) => None,
     };
     if let Some(cl) = quote {
-        cl.add_css_class("dim-label");
         cl.set_xalign(0.0);
         cl.set_wrap(true);
         cl.set_max_width_chars(34);
