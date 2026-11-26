@@ -1194,7 +1194,10 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
 
         let quote = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
             .expect("the card spells out the change with its old side struck through");
-        assert_eq!(quote.text(), "Replace: ,\nWith: :");
+        assert_eq!(
+            quote.text(),
+            "Replace: \u{201c},\u{201d}\nWith: \u{201c}:\u{201d}"
+        );
         assert!(quote.uses_markup());
         assert!(
             find_button(&card, "Edit").is_some(),
