@@ -247,6 +247,9 @@ pub(crate) enum Inline {
     /// and makes the aside's own back-link ambiguous (F-AP-B-204).
     Claim {
         idx: usize,
+        /// How the run is marked: the claim highlight, or a suggested edit's addition
+        /// or deletion colours (PLAN.suggested-edit-colours.md).
+        style: crate::annotate::ClaimStyle,
         tail: bool,
         inner: Vec<Inline>,
     },

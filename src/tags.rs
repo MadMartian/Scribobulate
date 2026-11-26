@@ -189,6 +189,11 @@ pub(crate) enum TagName {
     H5,
     /// The translucent CriticMarkup claim highlight (raised to top priority).
     AnnotationHighlight,
+    /// What a suggested edit would add: the theme's addition ink and optional fill.
+    SuggestionAddition,
+    /// What a suggested edit would remove: struck through, in the deletion ink and
+    /// optional fill.
+    SuggestionDeletion,
     Bold,
     Italic,
     Strike,
@@ -267,6 +272,16 @@ impl TagName {
     ///
     /// `depth` for [`TagName::ListItem`] must be `1..=`[`MAX_LIST_DEPTH`]; callers
     /// clamp before constructing the variant.
+    /// The tag that marks a run of annotated text in `style`.
+    pub(crate) fn for_claim(style: crate::annotate::ClaimStyle) -> Self {
+        use crate::annotate::ClaimStyle;
+        match style {
+            ClaimStyle::Highlight => TagName::AnnotationHighlight,
+            ClaimStyle::Addition => TagName::SuggestionAddition,
+            ClaimStyle::Deletion => TagName::SuggestionDeletion,
+        }
+    }
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             TagName::BlockquoteInk => "blockquote-ink",
@@ -278,6 +293,8 @@ impl TagName {
             TagName::H4 => "h4",
             TagName::H5 => "h5",
             TagName::AnnotationHighlight => "annotation-highlight",
+            TagName::SuggestionAddition => "suggestion-addition",
+            TagName::SuggestionDeletion => "suggestion-deletion",
             TagName::Bold => "bold",
             TagName::Italic => "italic",
             TagName::Strike => "strike",
@@ -526,6 +543,28 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let ann_hl = theme.annotation_hl_color.rgba();
     add(TagName::AnnotationHighlight.name(), &move |t| {
         t.set_background_rgba(Some(&ann_hl));
+    });
+    // A suggested edit's two sides (PLAN.suggested-edit-colours.md): the inks walked to
+    // the legibility floor on this page, a fill only where the theme states one, and the
+    // removed side struck through with the strike line's own colour where one is set.
+    // The SAME resolved values feed the table-cell path (`renderer::suggestion_open`).
+    let inks = palette.suggestion_inks;
+    let style = |t: &TextTag, s: crate::palette::SuggestionStyle| {
+        t.set_foreground_rgba(Some(&s.fg));
+        if let Some(bg) = s.bg {
+            t.set_background_rgba(Some(&bg));
+        }
+    };
+    add(TagName::SuggestionAddition.name(), &|t| {
+        style(t, inks.addition)
+    });
+    let strike = theme.strikethrough_color;
+    add(TagName::SuggestionDeletion.name(), &|t| {
+        style(t, inks.deletion);
+        t.set_strikethrough(true);
+        if let Some(c) = strike {
+            t.set_strikethrough_rgba(Some(&c));
+        }
     });
     let bold_weight = typo.bold_weight;
     add(TagName::Bold.name(), &move |t| t.set_weight(bold_weight));
@@ -803,8 +842,17 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // user overlay that must never be hidden by the content it marks, so it takes
     // top priority among all tags. (Priorities are 0..=size-1; size-1 is highest.)
     let table = buf.tag_table();
-    if let Some(hl) = table.lookup(TagName::AnnotationHighlight.name()) {
-        hl.set_priority(table.size() - 1);
+    // A suggested edit's colours ride above the content they mark for the same reason —
+    // a link or code run inside a suggestion still reads as added or removed — and the
+    // annotation highlight, raised last, stays above everything.
+    for name in [
+        TagName::SuggestionAddition,
+        TagName::SuggestionDeletion,
+        TagName::AnnotationHighlight,
+    ] {
+        if let Some(tag) = table.lookup(name.name()) {
+            tag.set_priority(table.size() - 1);
+        }
     }
 }
 

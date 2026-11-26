@@ -577,6 +577,7 @@ mod code_block_per_line_tests {
             buf.clone(),
             theme.clone(),
             crate::palette::Palette::for_theme(&theme).code_chips,
+            crate::palette::Palette::for_theme(&theme).suggestion_inks,
             "InspiredGitHub".to_string(),
             None,
             false,

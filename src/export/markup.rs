@@ -86,12 +86,16 @@ fn emit_markup(
             Inline::Highlight(v) => span(out, &crate::pangospan::mark(theme), v, doc, theme, chip),
             Inline::Claim {
                 idx,
+                style,
                 tail,
                 inner: v,
             } => {
+                // The claim highlight, or a suggested edit's colours on paper — the ONE
+                // builder the preview's table cell also reads.
+                let inks = crate::palette::SuggestionInks::for_paper(theme);
                 span(
                     out,
-                    &crate::pangospan::annotation_claim(theme),
+                    &crate::pangospan::claim(*style, theme, inks),
                     v,
                     doc,
                     theme,

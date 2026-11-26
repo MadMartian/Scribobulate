@@ -18,15 +18,15 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.74 |
-| 18 | Preview reading themes | 18.1 – 18.58 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.77 |
+| 18 | Preview reading themes | 18.1 – 18.64 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
 | 21 | Crash forensics | 21.1 – 21.12 |
 | 22 | Crash recovery (swap files) | 22.1 – 22.18 |
 | 23 | Back / Forward navigation history | 23.1 – 23.15 |
 | 24 | Renaming an open document | 24.1 – 24.14 |
-| 25 | Exporting a document | 25.1 – 25.24 |
+| 25 | Exporting a document | 25.1 – 25.26 |
 | 26 | Self-contained macOS bundle | 26.1 – 26.11 |
 | 27 | Animated images | 27.1 – 27.9 |
 
@@ -2817,7 +2817,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.2 Suggested-edit markup renders without braces
 - **Given** a document containing `{++inserted++}`, `{--deleted--}`, and `{~~old~>new~~}`
 - **When** it is shown in the preview
-- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown, each highlighted as a suggested edit (17.71)
+- **Then** the visible text reads "inserted", "deleted", and "oldnew" respectively, with no CriticMarkup delimiters shown, each marked as the change it proposes (17.71)
 
 ### 17.3 A comment is reachable from a margin marker
 - **Given** a rendered document with a highlighted claim that carries a comment
@@ -3241,7 +3241,8 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.71 A suggested edit is an annotation with a margin marker
 - **Given** a document containing a suggested edit — a replacement `{~~old~>new~~}` (either side possibly empty), an addition `{++text++}` or a deletion `{--text--}` — with or without a note `{>>note<<}` right after it
 - **When** it is shown in the preview
-- **Then** the page reads a replacement's new text, or an addition's or deletion's text, highlighted like a claim (a deletion's text stays, so the reader sees what would go), and its line carries a margin marker that counts it like any other annotation (17.4)
+- **Then** the page reads as the change it proposes: an addition's text in the theme's addition colours; a deletion's text struck through in the theme's deletion colours; a replacement's old text struck through in the deletion colours, then its new text in the addition colours — none of them under the annotation highlight's wash — and its line carries a margin marker that counts it like any other annotation (17.4)
+- **And** the same holds inside a table cell
 
 ### 17.72 A suggested edit's card shows the change and offers to accept it
 - **Given** the margin card of a suggested edit is open
@@ -3252,12 +3253,17 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.73 Accepting a suggested edit applies it
 - **Given** a suggested edit's card is open
 - **When** the reader chooses Accept edit
-- **Then** the whole construct, with its note, is replaced in the file by what the edit leaves — a replacement's new text, an addition's text, nothing for a deletion — so the annotation and its marker are gone and the page reads the result unhighlighted; nothing else in the document changes, and Undo restores the construct
+- **Then** the whole construct, with its note, is replaced in the file by what the edit leaves — a replacement's new text, an addition's text, nothing for a deletion — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
 
 ### 17.74 Removing a suggested edit rejects it
 - **Given** a suggested edit's card is open
 - **When** the reader chooses Remove
-- **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone; nothing else in the document changes, and Undo restores the construct
+- **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
+
+### 17.77 Copying a suggested edit copies it as accepted
+- **Given** a selection on the page that covers suggested edits, or a whole-document copy
+- **When** the reader copies it
+- **Then** the clipboard holds the text as it would read once every covered edit were accepted: added and new text in, deleted and old text out
 
 ## 18. Preview reading themes
 
@@ -3701,6 +3707,11 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** omitted, every surface draws exactly what it drew before (TDD 18.2)
 - **Rationale:** a tick changes what the box holds, not the box, so it is a key of its own rather than another `list_task_checked_glyph`: that key replaces the box, which loses the box's ink, its hover border and its likeness to the unchecked state
 
+
+### 18.64 A theme sets each suggested-edit colour, and an unset fill is absent
+- **Given** a reading theme
+- **When** it defines an addition or deletion fill, or leaves either out
+- **Then** a defined fill is drawn behind that kind's text and an undefined one draws nothing behind it; the inks come from the theme, and on every built-in theme — and on the System page, light or dark — both are legible on the page they are drawn on
 
 ## 19. Local document-link navigation
 
@@ -4551,6 +4562,11 @@ up doing.
 - **When** the export is published on Windows
 - **Then** it reports a **named** failure telling the reader to close the file, never a generic write error, since the remedy is the reader's and a generic message describes neither the cause nor it
 - **And** the same export on Linux and macOS succeeds — the check targets **local disk**, the stricter case, a network destination succeeding where local NTFS does not
+
+### 25.26 An export shows suggested edits as the page does
+- **Given** a document with suggested edits
+- **When** it is exported to HTML or PDF
+- **Then** each reads as it does on the page: in the theme's addition and deletion colours, the removed text struck through, with its note beside it as any annotation's
 
 ## 26. Self-contained macOS bundle
 

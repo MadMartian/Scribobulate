@@ -821,6 +821,14 @@ keys! {
     // The overlay washes: no surface to inherit from, so each walks to a literal.
     ANNOTATION_HL_COLOR    = "annotation_hl_color"     : Color  | color("#FFD133_61");
     ANNOTATION_CHIP_BG     = "annotation_chip_bg"      : Color;
+    // A suggested edit's colours: what it would add, and what it would remove (struck
+    // through). The inks floor at a conventional green and crimson, which the palette
+    // walks to the legibility floor on the page they land on; the fills have no floor,
+    // so a theme that does not state one draws no fill at all.
+    ADDITION_FG            = "addition_fg"             : Color  | color("#1a7f37");
+    ADDITION_BG            = "addition_bg"             : Color;
+    DELETION_FG            = "deletion_fg"             : Color  | color("#c8102e");
+    DELETION_BG            = "deletion_bg"             : Color;
     ANNOTATION_CHIP_FG     = "annotation_chip_fg"      : Color;
     // NOT ON PAPER, and this key CLAIMED to be until the sink sweep started covering
     // sprite keys (2026-09-09). The sink and SCHEMA already agreed — `export::markup`

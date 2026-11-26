@@ -450,6 +450,10 @@ pub(crate) struct CopyTree {
     /// of the tree below — it is two half-delimited branches with the nested markup
     /// between them, so the tree alone cannot answer "what is the whole of this".
     scripts: std::rc::Rc<BlockScripts>,
+    /// Source byte ranges a copy leaves out: what a suggested edit would remove, which is
+    /// on the page struck through but not part of the text as it would read once accepted
+    /// (PLAN.suggested-edit-colours.md, decision 2). Sorted, non-overlapping.
+    omit: Vec<Range<usize>>,
 }
 
 impl Default for CopyTree {
@@ -469,6 +473,7 @@ impl Default for CopyTree {
             },
             char_count: 0,
             scripts: std::rc::Rc::new(BlockScripts::default()),
+            omit: Vec::new(),
         }
     }
 }
@@ -476,6 +481,13 @@ impl Default for CopyTree {
 // ── building ──────────────────────────────────────────────────────────────────
 
 impl CopyTree {
+    /// Leave `ranges` (source bytes) out of every copy resolved through this map.
+    pub(crate) fn omit(&mut self, mut ranges: Vec<Range<usize>>) {
+        ranges.retain(|r| r.start < r.end);
+        ranges.sort_by_key(|r| r.start);
+        self.omit = ranges;
+    }
+
     /// The buffer char count this map was built against.
     ///
     /// Exposed for the one release-safe invariant the fold splice can afford: a spliced
@@ -514,6 +526,7 @@ pub(crate) fn build(
         root,
         char_count,
         scripts: std::rc::Rc::clone(scripts),
+        omit: Vec::new(),
     }
 }
 
@@ -1290,10 +1303,11 @@ fn escaped_at(md: &str, pos: usize) -> bool {
 pub(crate) fn resolve(tree: &CopyTree, md: &str, a: i32, b: i32) -> String {
     // Whole-buffer selection = Copy Document (constraint B): return all source,
     // exactly (guarantees byte-identical leading/trailing source).
+    let src = Kept::new(md, &tree.omit);
     if a <= 0 && b >= tree.char_count {
-        return md.to_string();
+        return src.slice(0..md.len()).into_owned();
     }
-    resolve_node(md, &tree.root, a, b, true)
+    resolve_node(&src, &tree.root, a, b, true)
 }
 
 /// Resolve a selection within a single table cell's copymap (`a`/`b` are char
@@ -1301,7 +1315,41 @@ pub(crate) fn resolve(tree: &CopyTree, md: &str, a: i32, b: i32) -> String {
 /// whole-buffer = Copy-Document special case — a cell has no "whole document", so
 /// a whole-cell selection reconstructs the cell's own Markdown (with delimiters).
 pub(crate) fn resolve_cell(tree: &CopyTree, md: &str, a: i32, b: i32) -> String {
-    resolve_node(md, &tree.root, a, b, true)
+    resolve_node(&Kept::new(md, &tree.omit), &tree.root, a, b, true)
+}
+
+/// The source a copy reads: `md` with the ranges a copy leaves out cut from every slice
+/// of it. Offsets stay those of `md` — the cut happens as each slice is taken — so the
+/// tree's ranges and the buffer's character counts still line up.
+struct Kept<'a> {
+    md: &'a str,
+    omit: &'a [Range<usize>],
+}
+
+impl<'a> Kept<'a> {
+    fn new(md: &'a str, omit: &'a [Range<usize>]) -> Self {
+        Self { md, omit }
+    }
+
+    /// `md[r]` with every omitted byte left out; borrowed when nothing in it is.
+    fn slice(&self, r: Range<usize>) -> std::borrow::Cow<'a, str> {
+        let whole = sl(self.md, r.clone());
+        if !self.omit.iter().any(|o| o.start < r.end && r.start < o.end) {
+            return std::borrow::Cow::Borrowed(whole);
+        }
+        let mut out = String::with_capacity(whole.len());
+        let mut at = r.start;
+        for o in self
+            .omit
+            .iter()
+            .filter(|o| o.start < r.end && r.start < o.end)
+        {
+            out.push_str(sl(self.md, at..o.start.max(at)));
+            at = at.max(o.end);
+        }
+        out.push_str(sl(self.md, at.min(r.end)..r.end));
+        std::borrow::Cow::Owned(out)
+    }
 }
 
 /// The number of rendered (plain-text) characters a classified cell event
@@ -1512,7 +1560,7 @@ pub(crate) fn balance_source_span(
 /// leading-marker block (`line_marker`) forces it to its OWN crossing state for
 /// its whole subtree: suppress the per-line markers when the selection stays
 /// within (constraint A), emit them when it crosses out.
-fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> String {
+fn resolve_node(md: &Kept, node: &Node, a: i32, b: i32, emit_gaps: bool) -> String {
     let BufSpan { start: c0, end: c1 } = node.buf();
     if a.max(c0) >= b.min(c1) {
         return String::new(); // no overlap
@@ -1524,18 +1572,23 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
             one_to_one,
         } => {
             if *one_to_one {
-                let chars: Vec<char> = sl(md, src.clone()).chars().collect();
-                let s = (a.max(c0) - buf.start) as usize;
-                let e = (b.min(c1) - buf.start) as usize;
-                chars
-                    .get(s..e)
-                    .map(|c| c.iter().collect())
-                    .unwrap_or_default()
+                // The selected characters' byte sub-range, counted on the whole run
+                // (the buffer shows every character of it), then read through the cut.
+                let content = sl(md.md, src.clone());
+                let byte_of = |n: usize| {
+                    content
+                        .char_indices()
+                        .nth(n)
+                        .map_or(content.len(), |(i, _)| i)
+                };
+                let s = byte_of((a.max(c0) - buf.start) as usize);
+                let e = byte_of((b.min(c1) - buf.start) as usize);
+                md.slice(src.start + s..src.start + e).into_owned()
             } else {
-                sl(md, src.clone()).to_string() // atomic: whole run on any overlap
+                md.slice(src.clone()).into_owned() // atomic: whole run on any overlap
             }
         }
-        Node::Opaque { src, .. } => sl(md, src.clone()).to_string(),
+        Node::Opaque { src, .. } => md.slice(src.clone()).into_owned(),
         Node::Branch {
             open,
             close,
@@ -1564,9 +1617,9 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
             // block) emitting it would append a spurious trailing newline
             // (`a\n  - nested\n`).
             let close_s = if !kind.paired() && !cross_end {
-                ""
+                std::borrow::Cow::Borrowed("")
             } else {
-                sl(md, close.clone())
+                md.slice(close.clone())
             };
             // A closing FENCE closes nothing unless it begins a line: a selection
             // that stops mid-line would otherwise paste ```` let a``` ````, which
@@ -1589,9 +1642,9 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
             // (the gap-spliced continuation `> `/indent), so the leading one is
             // redundant. Drop it, keeping the user's selected newline (`\n> b`).
             let open_s = if kind.line_marker() && inner.starts_with('\n') {
-                ""
+                std::borrow::Cow::Borrowed("")
             } else {
-                sl(md, open.clone())
+                md.slice(open.clone())
             };
             format!("{open_s}{inner}{close_s}")
         }
@@ -1602,7 +1655,7 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
 /// `emit_gaps`, splice the inter-sibling source (block separators, list-item
 /// newlines, per-line `> `/indent markers) between two consecutive overlapped
 /// children so structure survives even when the buffer has no gap between them.
-fn reconstruct(md: &str, children: &[Node], a: i32, b: i32, emit_gaps: bool) -> String {
+fn reconstruct(md: &Kept, children: &[Node], a: i32, b: i32, emit_gaps: bool) -> String {
     let mut out = String::new();
     let mut prev_end: Option<usize> = None;
     for child in children {
@@ -1613,13 +1666,13 @@ fn reconstruct(md: &str, children: &[Node], a: i32, b: i32, emit_gaps: bool) -> 
         if let Some(prev_end) = prev_end {
             let gap = prev_end..child.src_start();
             if gap.start < gap.end {
-                let g = sl(md, gap);
+                let g = md.slice(gap);
                 if emit_gaps || emits_leading_marker(child, a, b) {
                     // Full inter-sibling source: block separators, and the per-line
                     // `> `/`- `/indent markers a crossed (or marker-fronting) block
                     // needs — the nested item's marker requires its indent lead-in,
                     // or it would abut the previous line's text (`a- nested`).
-                    out.push_str(g);
+                    out.push_str(&g);
                 } else {
                     // Within an un-crossed leading-marker block the markers/indent
                     // are suppressed (constraint A), but the gap's structural

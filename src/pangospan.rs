@@ -128,6 +128,52 @@ pub(crate) fn annotation_claim(t: &Theme) -> Span {
     ))
 }
 
+/// One side of a suggested edit: its ink, its fill where the theme states one, and —
+/// for what it would remove — the strike line, in the strike colour where one is set
+/// (PLAN.suggested-edit-colours.md). The resolved `style` is the palette's, the same
+/// value the preview's body tag reads.
+pub(crate) fn suggestion(style: crate::palette::SuggestionStyle, struck: bool, t: &Theme) -> Span {
+    let mut attrs = format!(
+        " foreground=\"{}\"",
+        crate::palette::to_hex_opaque(style.fg)
+    );
+    if let Some(bg) = style.bg {
+        // Colour and alpha apart, as `annotation_claim` writes them, for Pango robustness.
+        let _ = write!(
+            attrs,
+            " background=\"{}\" bgalpha=\"{}%\"",
+            crate::palette::to_hex_opaque(bg),
+            (bg.alpha() * 100.0).round() as i32
+        );
+    }
+    if struck {
+        attrs.push_str(" strikethrough=\"true\"");
+        if let Some(c) = t.strikethrough_color {
+            let _ = write!(
+                attrs,
+                " strikethrough_color=\"{}\"",
+                crate::palette::to_hex_opaque(c)
+            );
+        }
+    }
+    Span::attrs(&attrs)
+}
+
+/// The span for a run of annotated text in `style`: the claim highlight, or a suggested
+/// edit's addition or deletion colours.
+pub(crate) fn claim(
+    style: crate::annotate::ClaimStyle,
+    t: &Theme,
+    inks: crate::palette::SuggestionInks,
+) -> Span {
+    use crate::annotate::ClaimStyle;
+    match style {
+        ClaimStyle::Highlight => annotation_claim(t),
+        ClaimStyle::Addition => suggestion(inks.addition, false, t),
+        ClaimStyle::Deletion => suggestion(inks.deletion, true, t),
+    }
+}
+
 /// `**bold**` at the theme's own weight (TDD 18.18).
 pub(crate) fn bold(t: &Theme) -> Span {
     Span::attrs(&t.typography.bold_attr())

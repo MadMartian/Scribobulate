@@ -1040,6 +1040,7 @@ fn a_code_block_flush_that_does_not_reconcile_degrades_to_opaque() {
             scripts: std::rc::Rc::new(crate::renderer::BlockScripts::default()),
             root: code_block_node(md, &start, &end, &texts, true),
             char_count: flushed_chars,
+            omit: Vec::new(),
         }
     };
     // Aligned (11 body chars flushed): char-precise, as every other test asserts.
@@ -1068,6 +1069,7 @@ fn a_code_block_with_an_unmodelled_interior_event_degrades_to_opaque() {
         scripts: std::rc::Rc::new(crate::renderer::BlockScripts::default()),
         root: code_block_node(md, &start, &end, &texts, false),
         char_count: 11,
+        omit: Vec::new(),
     };
     assert_eq!(resolve(&tree, md, 6, 10), "```\nalpha\nbeta\n```");
 }

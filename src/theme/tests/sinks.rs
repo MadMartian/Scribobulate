@@ -137,6 +137,7 @@ Hidden body text.
 </details>
 
 Text with {==an annotated claim==}{>>a comment<<} in it.
+Suggested edits: {~~old~>new~~}{>>why<<}, {++added++} and {--removed--}.
 ";
 
 /// A palette built the way production builds one: the theme's own page, ink and accent

@@ -52,6 +52,9 @@ find_hl_current_color = "#ff7800"      # the current find match, inside a table 
                                  # buffer selection; a cell label cannot, ScrAP-36)
 mark_bg         = "#fff59d_88"   # ==highlight== (mark) — a neutral pale-yellow highlighter
                                  # wash (matches the engine's last-resort floor)
+addition_fg     = "#1a7f37"      # what a suggested edit would add — green, walked to the
+                                 # legibility floor on the page it lands on
+deletion_fg     = "#c8102e"      # what it would remove, struck through — crimson, walked alike
 
 # Typography that is literal in the source today.
 heading_scale_h1 = 2.2   # h1..h5 (h6-and-deeper renders as h5, so there is no _h6)

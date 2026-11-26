@@ -119,7 +119,18 @@ The sub-sections after the four mechanisms cover the places where they meet: the
 ### Mechanism A — `GtkTextTag`
 
 **Covers:** headings, bold/italic/strike, links, inline code, sub/superscript, list
-indents, the annotation highlight, find-all.
+indents, the annotation highlight, a suggested edit's addition and deletion colours,
+find-all.
+
+#### A suggested edit's colours
+
+`addition_fg`/`deletion_fg` are inks with a conventional floor (green, crimson), and a
+floor is a literal while the System page is the desktop's, light or dark. So the palette
+walks each ink to the legibility floor against what it is drawn on — its fill over the
+page, or the page — with the same walk the derived link colour takes
+(`palette::SuggestionInks`). The fills (`addition_bg`/`deletion_bg`) have no floor: unset
+means no fill. One resolved value feeds the body tags, the table-cell span (`pangospan`),
+the PDF on paper and the HTML sheet.
 
 **How:** Pango attributes, not CSS nodes. **GTK cannot style a `GtkTextTag` with
 CSS**, which is why themes are TOML and not a stylesheet.

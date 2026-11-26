@@ -420,6 +420,15 @@ pub(crate) struct Theme {
     /// body foreground, which is what every theme did before this key existed.
     pub mark_fg: Option<gdk::RGBA>,
     pub annotation_hl_color: ThemeColor,
+    /// Ink for what a suggested edit would add (`addition_fg`), before the palette walks it
+    /// to the legibility floor on its page ([`crate::palette::SuggestionInks`]).
+    pub addition_fg: gdk::RGBA,
+    /// Fill behind what a suggested edit would add; `None` ⇒ no fill at all.
+    pub addition_bg: Option<gdk::RGBA>,
+    /// Ink for what a suggested edit would remove (`deletion_fg`), walked as `addition_fg`.
+    pub deletion_fg: gdk::RGBA,
+    /// Fill behind what a suggested edit would remove; `None` ⇒ no fill at all.
+    pub deletion_bg: Option<gdk::RGBA>,
     pub find_hl_all_color: ThemeColor,
     pub find_hl_current_color: ThemeColor,
     pub mark_bg: ThemeColor,

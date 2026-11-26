@@ -163,10 +163,11 @@ pub(super) struct RenderProducts {
     /// `cell_maps`). Used after widgets exist to attach `cell_widget` on markers
     /// whose claim lives in a table cell (cell-marker pairing).
     pub(super) cell_src_spans: Vec<std::ops::Range<usize>>,
-    /// Buffer char ranges carrying the `annotation-highlight` tag — the same tags
+    /// Buffer runs carrying a claim style's tag (the annotation highlight, or a suggested
+    /// edit's addition or deletion colours) — the same tags
     /// `buf` already has, exposed so the incremental annotation refresh can re-tag an
     /// EXISTING (structurally identical) buffer without rebuilding it at all.
-    pub(super) highlight_ranges: Vec<crate::span::BufferSpan>,
+    pub(super) highlight_ranges: Vec<ClaimSpan>,
 }
 
 /// Empty a buffer so a render can fill it again: drop its text (which also drops
@@ -243,7 +244,7 @@ pub(super) struct Prepared<'a> {
     /// The cleaned byte ranges of the annotations that are HIGHLIGHTS, which is the
     /// subset the renderer tags. Derived once here — the filter used to be written out
     /// at each preamble.
-    ann_highlights: Vec<(usize, usize)>,
+    ann_highlights: Vec<(std::ops::Range<usize>, crate::annotate::ClaimStyle)>,
     palette: Palette,
     theme: std::rc::Rc<crate::theme::Theme>,
     doc_dir: Option<std::path::PathBuf>,
@@ -275,8 +276,7 @@ impl<'a> Prepared<'a> {
         let ann_highlights = extraction
             .annotations
             .iter()
-            .filter(|a| a.highlights_text())
-            .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
+            .flat_map(|a| a.styled_runs())
             .collect();
         let palette = Palette::for_theme(&theme);
         Self {
@@ -300,6 +300,16 @@ impl<'a> Prepared<'a> {
         self.extraction.cleaned.as_str()
     }
 
+    /// The cleaned ranges a copy from the page leaves out: what suggested edits would
+    /// remove (PLAN.suggested-edit-colours.md, decision 2).
+    fn copy_omits(&self) -> Vec<std::ops::Range<usize>> {
+        self.ann_highlights
+            .iter()
+            .filter(|(_, style)| !style.copied())
+            .map(|(run, _)| run.clone())
+            .collect()
+    }
+
     /// A [`Renderer`] over `buf` carrying exactly these inputs — the only constructor
     /// either render route calls, so a tenth `Renderer::new` argument cannot reach one
     /// route and miss the other.
@@ -309,6 +319,7 @@ impl<'a> Prepared<'a> {
             buf,
             self.theme.clone(),
             self.palette.code_chips,
+            self.palette.suggestion_inks,
             self.palette.syntect_theme.clone(),
             self.doc_dir.clone(),
             self.allow_unsafe_images,
@@ -653,7 +664,9 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
                     cell_off = 0;
                 }
                 Event::End(TagEnd::TableCell) => {
-                    cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off, &r.scripts));
+                    let mut cell_map = crate::copymap::build(md, &cell_evs, cell_off, &r.scripts);
+                    cell_map.omit(prepared.copy_omits());
+                    cell_maps.push(cell_map);
                     let span = if cell_evs.is_empty() {
                         0..0
                     } else {
@@ -788,7 +801,8 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
     r.mark_wide_runs(0, r.end_offset());
     let char_count = buf.char_count();
     let source_map = finalize_source_map(source_map, char_count, md_owned.len());
-    let copymap = crate::copymap::build(md, &raw_evs, char_count, &r.scripts);
+    let mut copymap = crate::copymap::build(md, &raw_evs, char_count, &r.scripts);
+    copymap.omit(prepared.copy_omits());
     attach_cell_copymaps(&r.anchored, &cell_maps);
     // Build-time drift guard (debug only): assert the copymap's 1:1 leaves match
     // the buffer the renderer just filled (copy-as-Markdown consistency guard).
@@ -998,53 +1012,93 @@ fn cleaned_offset_to_buf(x: usize, cleaned: &str, hl_evs: &[(usize, usize, i32, 
     best
 }
 
-/// Apply the `annotation-highlight` tag over every `Highlight` annotation's
-/// claim. `hl_evs` holds each text-emitting event's `(cleaned_src_start,
-/// cleaned_src_end, buf_before, buf_after)`; for each highlight's cleaned byte
-/// range we tag the overlapping slice of each event. A 1:1 event (buffer chars ==
-/// source chars) is tagged char-precisely even when the highlight starts/ends
-/// mid-event; a synthesised run (smart-punct/entity, where the lengths differ) is
-/// tagged whole — never a partial glyph.
+/// A run of annotated buffer text and the style it is marked in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClaimSpan {
+    pub(crate) span: crate::span::BufferSpan,
+    pub(crate) style: crate::annotate::ClaimStyle,
+}
+
+/// Mark every annotation's runs on a fresh buffer: the annotation highlight over a
+/// claim, the addition or deletion colours over a suggested edit's sides. `hl_evs`
+/// holds each text-emitting event's `(cleaned_src_start, cleaned_src_end, buf_before,
+/// buf_after)`; each run's cleaned byte range is tagged over the overlapping slice of
+/// each event. A 1:1 event (buffer chars == source chars) is tagged char-precisely even
+/// when the run starts/ends mid-event; a synthesised run (smart-punct/entity, where the
+/// lengths differ) is tagged whole — never a partial glyph.
 fn apply_highlight_tags(
     buf: &TextBuffer,
     cleaned: &str,
     scripts: &crate::renderer::BlockScripts,
     annotations: &[crate::annotate::Annotation],
     hl_evs: &[(usize, usize, i32, i32)],
-) -> Vec<crate::span::BufferSpan> {
+) -> Vec<ClaimSpan> {
     let ranges = collect_highlight_ranges(cleaned, scripts, annotations, hl_evs);
-    if let Some(tag) = buf.tag_table().lookup("annotation-highlight") {
-        for &span in &ranges {
-            let (from, to) = (span.start, span.end);
-            buf.apply_tag(&tag, &buf.iter_at_offset(from), &buf.iter_at_offset(to));
-        }
-    }
+    let whole = crate::span::BufferSpan::new(0, buf.char_count());
+    retag_claims(buf, &ranges, whole);
     ranges
 }
 
-/// The buffer char ranges every `Highlight` annotation's claim should carry the
-/// `annotation-highlight` tag — the data behind [`apply_highlight_tags`], returned
-/// so the **incremental** annotation refresh (`preview::render::refresh_annotations_in_place`)
-/// can re-tag the EXISTING buffer without a `set_buffer` swap (the rendered text is
-/// invariant under an annotation add/remove, so only the tags/markers change).
+/// Re-mark `region` of `buf` with `ranges`: every claim style's tag is cleared from the
+/// region first, then each range's part inside it gets its style's tag — so the result
+/// is exactly `ranges`, whatever the buffer carried there before. The one tagger for a
+/// fresh render, the in-place annotation refresh and the fold splice. Table-cell runs are
+/// Pango markup the cell labels already carry, never buffer tags.
+pub(crate) fn retag_claims(
+    buf: &TextBuffer,
+    ranges: &[ClaimSpan],
+    region: crate::span::BufferSpan,
+) {
+    use crate::annotate::ClaimStyle;
+    let table = buf.tag_table();
+    for style in [
+        ClaimStyle::Highlight,
+        ClaimStyle::Addition,
+        ClaimStyle::Deletion,
+    ] {
+        let Some(tag) = table.lookup(crate::tags::TagName::for_claim(style).name()) else {
+            continue;
+        };
+        buf.remove_tag(
+            &tag,
+            &buf.iter_at_offset(region.start),
+            &buf.iter_at_offset(region.end),
+        );
+        let spans: Vec<_> = ranges
+            .iter()
+            .filter(|run| run.style == style)
+            .map(|run| run.span)
+            .collect();
+        for span in super::splice::clip_to_region(&spans, region) {
+            buf.apply_tag(
+                &tag,
+                &buf.iter_at_offset(span.start),
+                &buf.iter_at_offset(span.end),
+            );
+        }
+    }
+}
+
+/// The buffer runs every annotation marks, each with its style — the data behind
+/// [`apply_highlight_tags`], returned so the **incremental** annotation refresh
+/// (`preview::render::refresh_annotations_in_place`) can re-tag the EXISTING buffer
+/// without a `set_buffer` swap (the rendered text is invariant under an annotation
+/// add/remove, so only the tags/markers change).
 fn collect_highlight_ranges(
     cleaned: &str,
     scripts: &crate::renderer::BlockScripts,
     annotations: &[crate::annotate::Annotation],
     hl_evs: &[(usize, usize, i32, i32)],
-) -> Vec<crate::span::BufferSpan> {
+) -> Vec<ClaimSpan> {
     let mut ranges = Vec::new();
     for ann in annotations {
-        if !ann.highlights_text() {
-            continue;
+        for (run, style) in ann.styled_runs() {
+            ranges.extend(
+                highlight_tag_ranges(cleaned, run.start, run.end, hl_evs, scripts)
+                    .into_iter()
+                    .map(|span| ClaimSpan { span, style }),
+            );
         }
-        ranges.extend(highlight_tag_ranges(
-            cleaned,
-            ann.cleaned_content.start.raw(),
-            ann.cleaned_content.end.raw(),
-            hl_evs,
-            scripts,
-        ));
     }
     ranges
 }
@@ -1251,12 +1305,12 @@ mod pure_tests {
         // for Accept edit (new) and Remove (old).
         let original = "Dear sir{~~,~>:~~}{>>colon<<} hi {~~a~>b~~}";
         let ex = crate::annotate::extract(original);
-        assert_eq!(ex.cleaned, "Dear sir: hi b");
+        assert_eq!(ex.cleaned, "Dear sir,: hi ab");
         let evs = [(0usize, ex.cleaned.len(), 0i32, ex.cleaned.len() as i32)];
         let markers = build_markers(original, &ex.cleaned, &ex.annotations, &evs);
         assert_eq!(markers.len(), 2);
         let m = &markers[0];
-        assert_eq!(m.anchor, 9, "beside the end of the new text");
+        assert_eq!(m.anchor, 10, "beside the end of the new text");
         assert_eq!(m.comment, "colon");
         assert_eq!(m.claim, None);
         assert_eq!(
@@ -1291,6 +1345,7 @@ mod pure_tests {
             src_comment_body: Some(16..20),
             comment: Some("note".into()),
             src_old: None,
+            cleaned_old: None,
         };
         let evs = [(0usize, 22usize, 0i32, 22i32)];
         let markers = build_markers(original, cleaned, std::slice::from_ref(&ann), &evs);
@@ -2289,72 +2344,73 @@ mod gtk_integration_tests {
         );
     }
 
-    /// TDD 17.71: a suggested replacement reads its new text, highlighted exactly like a
-    /// claim; its old side and its note are nowhere on the page.
+    /// PLAN.suggested-edit-colours.md: each kind of suggested edit reads as the change
+    /// it proposes — what it would add in the addition colours, what it would remove
+    /// struck through in the deletion colours, a replacement as both, old then new — and
+    /// none of it carries the annotation highlight's wash. Its note is nowhere on the page.
     #[gtktest::test]
-    fn a_suggested_replacement_highlights_its_new_text_only() {
-        let md = "the earth is {~~flat~>round~~}{>>fixed<<} ok";
+    fn a_suggested_edit_reads_as_the_change_it_proposes() {
+        let md = "A {~~flat~>round~~}{>>fixed<<} x {++new++} y {--gone--} z {==c==}{>>n<<}";
         let products = build_render_products(md, None, 1.0, false);
         let buf = &products.buf;
         let text = buffer_slice(buf);
-        assert_eq!(text, "the earth is round ok", "cleaned buffer text");
-        let tag = buf
-            .tag_table()
-            .lookup("annotation-highlight")
-            .expect("highlight tag exists");
-        let at = char_off(&text, "round");
-        let tagged: Vec<bool> = (at - 1..at + 6)
-            .map(|off| buf.iter_at_offset(off).has_tag(&tag))
-            .collect();
-        assert_eq!(tagged, [false, true, true, true, true, true, false]);
-        assert_eq!(products.markers.len(), 1, "one margin marker");
+        assert_eq!(text, "A flatround x new y gone z c", "cleaned buffer text");
+        let tag = |name: crate::tags::TagName| {
+            buf.tag_table()
+                .lookup(name.name())
+                .unwrap_or_else(|| panic!("{} exists", name.name()))
+        };
+        use crate::tags::TagName;
+        let (add, del, hl) = (
+            tag(TagName::SuggestionAddition),
+            tag(TagName::SuggestionDeletion),
+            tag(TagName::AnnotationHighlight),
+        );
+        // Which of the three each character of `word` carries, and its neighbours none.
+        let styles_of = |word: &str| {
+            let at = char_off(&text, word);
+            (at - 1..at + word.chars().count() as i32 + 1)
+                .map(|off| {
+                    let it = buf.iter_at_offset(off);
+                    (it.has_tag(&add), it.has_tag(&del), it.has_tag(&hl))
+                })
+                .collect::<Vec<_>>()
+        };
+        let none = (false, false, false);
+        let (a, d, h) = (
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        );
+        assert_eq!(styles_of("flat"), [none, d, d, d, d, a]);
+        assert_eq!(styles_of("round"), [d, a, a, a, a, a, none]);
+        assert_eq!(styles_of("new"), [none, a, a, a, none]);
+        assert_eq!(styles_of("gone"), [none, d, d, d, d, none]);
+        assert_eq!(styles_of("c"), [none, h, none]);
+        assert!(
+            del.is_strikethrough_set() && del.is_strikethrough(),
+            "removed text is struck"
+        );
+        assert!(!add.is_strikethrough(), "added text is not");
+        assert_eq!(products.markers.len(), 4, "one margin marker each");
     }
 
-    /// The same "exactly the claim" contract on a run whose rendered length DIFFERS
-    /// from its source length because the crate's own scanner stripped construct
-    /// markers (`==mark==` → `mark`). The mapper used to give up on any such run and
-    /// tag the whole event, so an annotation *anywhere* on the line washed all of
-    /// `a mark b` — including, as here, one on a plain word nowhere near the
-    /// construct. Live-observed on KDE/X11 before the fix; the markers' positions are
-    /// known exactly, so the run is mappable.
+    /// Decision 2: a copy from the page holds the text as it would read accepted —
+    /// added and new text in, removed and old text out — for a whole-document copy and
+    /// for a selection across a replacement.
     #[gtktest::test]
-    fn criticmarkup_highlight_is_exact_on_a_marker_stripped_run() {
-        for (md, want) in [
-            // Claim on a plain word, construct elsewhere on the line. The claim word is
-            // `z` so `char_off` cannot match a letter of the construct's own content
-            // (`b` collides with the `b` in `sub`, which is a test bug, not a defect).
-            ("a ==mark== {==z==}{>>far<<}", "z"),
-            // Claim covering the whole construct: only its CONTENT is in the buffer.
-            ("a {====mark====}{>>note<<} b", "mark"),
-            // Same for the other three scanned kinds.
-            ("a ~~strike~~ {==z==}{>>far<<}", "z"),
-            ("a ^sup^ {==z==}{>>far<<}", "z"),
-            ("a ~sub~ {==z==}{>>far<<}", "z"),
-        ] {
-            let products = build_render_products(md, None, 1.0, false);
-            let buf = &products.buf;
-            let text = buffer_slice(buf);
-            let tag = buf
-                .tag_table()
-                .lookup("annotation-highlight")
-                .expect("highlight tag exists");
-            let at = char_off(&text, want);
-            let n = want.chars().count() as i32;
-            for off in at..at + n {
-                assert!(
-                    buf.iter_at_offset(off).has_tag(&tag),
-                    "{md:?}: char {off} of the claim {want:?} must be highlighted (text {text:?})"
-                );
-            }
-            assert!(
-                at == 0 || !buf.iter_at_offset(at - 1).has_tag(&tag),
-                "{md:?}: the char BEFORE the claim must not be highlighted (text {text:?})"
-            );
-            assert!(
-                at + n >= text.chars().count() as i32 || !buf.iter_at_offset(at + n).has_tag(&tag),
-                "{md:?}: the char AFTER the claim must not be highlighted (text {text:?})"
-            );
-        }
+    fn copying_suggested_edits_copies_them_as_accepted() {
+        let md = "Dear sir{~~,~>:~~} hello {--old --}world{++ again++}.";
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        assert_eq!(text, "Dear sir,: hello old world again.");
+        let cleaned = &products.maps.md_owned;
+        let copy = |a: i32, b: i32| crate::copymap::resolve(&products.maps.copymap, cleaned, a, b);
+        let n = products.buf.char_count();
+        assert_eq!(copy(0, n), "Dear sir: hello world again.");
+        let at = char_off(&text, "sir");
+        // Six characters on the page, `sir,: `, less the struck comma.
+        assert_eq!(copy(at, at + 6), "sir: ", "across the replacement");
     }
 
     /// MANUAL-TEST 10.10b: a claim over a `~~` fence that WRAPS other inline markup —
@@ -2370,7 +2426,7 @@ mod gtk_integration_tests {
         let tagged: String = products
             .highlight_ranges
             .iter()
-            .flat_map(|span| chars[span.start as usize..span.end as usize].iter())
+            .flat_map(|run| chars[run.span.start as usize..run.span.end as usize].iter())
             .collect();
         assert_eq!(tagged, "a bold b", "buffer {text:?}");
         let at = char_off(&text, "a bold b");
@@ -4651,6 +4707,7 @@ mod gtk_integration_tests {
             buf.clone(),
             theme.clone(),
             crate::palette::Palette::for_theme(&theme).code_chips,
+            crate::palette::Palette::for_theme(&theme).suggestion_inks,
             "InspiredGitHub".into(),
             None,
             false,

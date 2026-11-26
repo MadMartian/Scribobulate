@@ -1240,8 +1240,9 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
 }
 
 /// TDD 17.71 inside a table (Document Rendering CAM row 2): a suggested replacement in
-/// a cell has its new text highlighted in the cell and its own margin marker, as a claim
-/// there does.
+/// a cell shows both its sides in the cell — the old struck through in the deletion
+/// colours, the new in the addition colours, as in prose — and has its own margin marker,
+/// as a claim there does (PLAN.suggested-edit-colours.md).
 #[gtktest::test]
 fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
     const SRC: &str = "| word |\n|---|\n| say {~~hi~>hello~~} there |\n";
@@ -1259,10 +1260,21 @@ fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
     win.set_child(Some(&pane));
     win.present();
     settle("the cell's chip to paint", || hitbox_count(&view) == 1);
-    let open = crate::renderer::ann_hl_open(&crate::theme::active());
-    let cell = find_descendant_where::<gtk::Label>(&view, |l| l.label().contains(&open))
-        .expect("a cell carries the annotation highlight");
-    assert_eq!(cell.text(), "say hello there");
+    let theme = crate::theme::active();
+    let inks = crate::palette::Palette::for_theme(&theme).suggestion_inks;
+    let (old, new) = (
+        crate::pangospan::claim(crate::annotate::ClaimStyle::Deletion, &theme, inks).open,
+        crate::pangospan::claim(crate::annotate::ClaimStyle::Addition, &theme, inks).open,
+    );
+    let cell = find_descendant_where::<gtk::Label>(&view, |l| l.label().contains(&new))
+        .expect("a cell carries the addition colours");
+    assert_eq!(cell.text(), "say hihello there");
+    let markup = cell.label();
+    assert!(
+        markup.contains(&format!("{old}hi</span>"))
+            && markup.contains(&format!("{new}hello</span>")),
+        "{markup}"
+    );
     crate::testpump::destroy_after_tooltip_delay(&win, || ());
 }
 

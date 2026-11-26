@@ -83,3 +83,30 @@ Approach 1. Decisions taken with the operator:
 - **Given** a document with suggested edits
 - **When** it is exported to HTML or PDF
 - **Then** each reads as it does on the page: coloured, the removed text struck through
+
+## Technical details preserved
+
+The shape of approach 1 in this tree, so the build does not have to re-derive it:
+
+- **Theme keys** follow `mark_bg`/`mark_fg` end to end (`theme::keys`, `theme::model`,
+  `theme::resolve`, `tags.rs` body tag, `renderer` cell span via `pangospan`, `export::markup`,
+  `export::html` CSS, the PDF sink, `theme/tests/contrast.rs`, `data/themes.toml`, SCHEMA.md's
+  key table): `addition_fg`, `addition_bg`, `deletion_fg`, `deletion_bg`. The `_fg` keys get
+  a value in `[themes.system]` so every theme has one; the `_bg` keys have none, so an
+  unset background is absent (decision 1). Strikethrough of deleted text takes the existing
+  `strikethrough_color`.
+- **Extraction** (`annotate::scan::extract`): a replacement keeps its old side and then its
+  new side as cleaned text. `Annotation::cleaned_content` stays the NEW side (the marker
+  anchor, the cell pairing, `suggestion_sides` and the export claim all read it), and a new
+  `cleaned_old` range carries the old side. The shift table gains a pair per side.
+- **Which style a run takes** is one function over an `Annotation`: a highlight's claim
+  takes the annotation highlight; an addition's text and a replacement's new side the
+  addition style; a deletion's text and a replacement's old side the deletion style.
+  `PreviewBuilder::ann_highlights` and the cell path (`finalize_cell_markup`,
+  `annotate_markup`, `wrap_markup_at_char_ranges`) carry that style beside each range
+  instead of assuming the highlight.
+- **Copy** drops deletion-styled runs (decision 2); the copy map is where the rendered
+  selection is mapped back to source.
+- **Accept/remove** already fall back to a full re-render when the page text changes
+  (`preview::refresh_annotations_in_place`'s identity guard), and `apply_annotation_edit`
+  already leaves fold keys free to move when they do.

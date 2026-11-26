@@ -87,9 +87,13 @@ pub(crate) struct Annotation {
     /// boundary.
     pub(crate) src_span: Range<OriginalByteOffset>,
     /// Range of the visible content in the **cleaned** text — the highlight span
-    /// to tag, or (for a `Comment`) an empty range at the marker anchor. Typed
+    /// to tag, or (for a `Comment`) an empty range at the marker anchor. For a
+    /// `Substitution` this is its NEW side; its old side is [`Self::cleaned_old`]. Typed
     /// `CleanedByteOffset` (N1-phase-2).
     pub(crate) cleaned_content: Range<CleanedByteOffset>,
+    /// A `Substitution`'s OLD side as shown on the page, struck through just before its
+    /// new side (PLAN.suggested-edit-colours.md); `None` for every other kind.
+    pub(crate) cleaned_old: Option<Range<CleanedByteOffset>>,
     /// Comment-body byte range in the **original** source (drives Edit), if any.
     pub(crate) src_comment_body: Option<Range<usize>>,
     /// The extracted comment text (delimiters stripped), if any.
@@ -128,6 +132,46 @@ impl Annotation {
     /// tags, the table cells and the export all take.
     pub(crate) fn highlights_text(&self) -> bool {
         self.kind != AnnKind::Comment
+    }
+
+    /// The cleaned runs this annotation marks on the page and the style each takes —
+    /// the one answer the body tags, the table cells and the export read. A highlight's
+    /// claim is highlighted; what a suggested edit would add takes the addition style and
+    /// what it would remove the deletion style, so a replacement is two runs, old then
+    /// new (PLAN.suggested-edit-colours.md). A point comment marks nothing.
+    pub(crate) fn styled_runs(&self) -> Vec<(Range<usize>, ClaimStyle)> {
+        let raw = |r: &Range<CleanedByteOffset>| r.start.raw()..r.end.raw();
+        let content = raw(&self.cleaned_content);
+        match self.kind {
+            AnnKind::Highlight => vec![(content, ClaimStyle::Highlight)],
+            AnnKind::Insertion => vec![(content, ClaimStyle::Addition)],
+            AnnKind::Deletion => vec![(content, ClaimStyle::Deletion)],
+            AnnKind::Substitution => self
+                .cleaned_old
+                .iter()
+                .map(|old| (raw(old), ClaimStyle::Deletion))
+                .chain([(content, ClaimStyle::Addition)])
+                .collect(),
+            AnnKind::Comment => Vec::new(),
+        }
+    }
+}
+
+/// How the page marks a run of annotated text: the annotation highlight's wash, or a
+/// suggested edit's addition or deletion colours (the deletion struck through).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ClaimStyle {
+    Highlight,
+    Addition,
+    Deletion,
+}
+
+impl ClaimStyle {
+    /// Whether text in this style is left out when the page is copied: what a suggested
+    /// edit would remove is not part of the text as it would read once accepted
+    /// (PLAN.suggested-edit-colours.md, decision 2).
+    pub(crate) fn copied(self) -> bool {
+        self != ClaimStyle::Deletion
     }
 }
 
@@ -531,6 +575,14 @@ pub(crate) fn extract(source: &str) -> Extraction {
         // Literal text before the construct is kept verbatim (no shift).
         cleaned.push_str(&source[cursor..i]);
 
+        // A replacement shows what it would remove, struck through, right before what it
+        // would put in its place: the old side is kept too, mapped 1:1 like the new.
+        let cleaned_old = p.old.clone().map(|old| {
+            let start = cleaned.len();
+            shifts.push((start, old.start));
+            cleaned.push_str(&source[old]);
+            CleanedByteOffset::new(start)..CleanedByteOffset::new(cleaned.len())
+        });
         let cleaned_content = match &p.keep {
             Some(keep) => {
                 // Keep the visible text; record the shift at its start and end.
@@ -553,6 +605,7 @@ pub(crate) fn extract(source: &str) -> Extraction {
             kind: p.kind,
             src_span: OriginalByteOffset::new(p.span.start)..OriginalByteOffset::new(p.span.end),
             cleaned_content,
+            cleaned_old,
             src_comment_body: p.comment.as_ref().map(|(r, _)| r.clone()),
             comment: p.comment.map(|(_, t)| t),
             src_old: p.old,
@@ -597,7 +650,11 @@ mod tests {
     fn suggestions_keep_their_visible_text() {
         assert_eq!(extract("say {++hello++} there").cleaned, "say hello there");
         assert_eq!(extract("the {--old--} way").cleaned, "the old way");
-        assert_eq!(extract("go {~~left~>right~~} now").cleaned, "go right now");
+        // A replacement shows both sides, old then new (PLAN.suggested-edit-colours.md).
+        assert_eq!(
+            extract("go {~~left~>right~~} now").cleaned,
+            "go leftright now"
+        );
     }
 
     // ---- annotation metadata ---------------------------------------------
@@ -608,7 +665,7 @@ mod tests {
         // own, and the old side is located for Remove to keep.
         let src = "a {~~,~>:~~}{>>colon<<} b";
         let e = extract(src);
-        assert_eq!(e.cleaned, "a : b");
+        assert_eq!(e.cleaned, "a ,: b");
         assert_eq!(e.annotations.len(), 1, "{:?}", e.annotations);
         let s = &e.annotations[0];
         assert_eq!(s.kind, AnnKind::Substitution);
@@ -619,6 +676,15 @@ mod tests {
         );
         assert_eq!(&src[s.src_old.clone().unwrap()], ",");
         assert_eq!(&src[s.src_comment_body.clone().unwrap()], "colon");
+        // The page shows the old side then the new, and each maps back to its own bytes.
+        let cleaned = |r: Range<CleanedByteOffset>| &e.cleaned[r.start.raw()..r.end.raw()];
+        assert_eq!(cleaned(s.cleaned_old.clone().unwrap()), ",");
+        assert_eq!(cleaned(s.cleaned_content.clone()), ":");
+        let back = |c: usize| cleaned_to_original(&e.shifts, CleanedByteOffset::new(c)).raw();
+        assert_eq!(
+            (back(2), back(3)),
+            (src.find(',').unwrap(), src.find(':').unwrap())
+        );
         let sides = crate::annotate::suggestion_sides(s).unwrap();
         assert_eq!(
             (&src[sides.old.unwrap()], &src[sides.new.unwrap()]),

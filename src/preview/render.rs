@@ -402,18 +402,13 @@ pub(crate) fn refresh_annotations_in_place(
         return false;
     }
 
-    // Re-tag: clear the annotation-highlight tag everywhere, then apply the new ranges to
-    // the LIVE buffer (buffer char offsets are identical since the text is identical).
-    if let Some(tag) = live.tag_table().lookup("annotation-highlight") {
-        live.remove_tag(&tag, &live.start_iter(), &live.end_iter());
-        for &span in &products.highlight_ranges {
-            live.apply_tag(
-                &tag,
-                &live.iter_at_offset(span.start),
-                &live.iter_at_offset(span.end),
-            );
-        }
-    }
+    // Re-tag: clear every claim style's tag everywhere, then apply the new runs to the
+    // LIVE buffer (buffer char offsets are identical since the text is identical).
+    super::build::retag_claims(
+        &live,
+        &products.highlight_ranges,
+        crate::span::BufferSpan::new(0, live.char_count()),
+    );
 
     // Table-cell annotation / scroll-jump regression fix: a highlight INSIDE a table cell is Pango
     // markup on the cell's `GtkLabel` (built by `finalize_cell_markup`), NOT a buffer tag,

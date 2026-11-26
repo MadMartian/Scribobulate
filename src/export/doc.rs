@@ -81,10 +81,19 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         // The SAME mapper the preview places its claim highlight with, so the extent
         // obligation (Document Rendering CAM row 3) is satisfied by one implementation
         // rather than two that agree today.
-        for range in
-            crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, &content_evs, &scripts)
-        {
-            mark_claim(&mut doc.blocks, idx, range);
+        // Each run in its own style — a replacement's old side struck in the deletion
+        // colours before its new side in the addition colours, as the page shows them
+        // (PLAN.suggested-edit-colours.md; CAM Document Rendering row 17).
+        for (run, style) in ann.styled_runs() {
+            for range in crate::annotate::map_cleaned_highlight_to_local(
+                cleaned,
+                run.start,
+                run.end,
+                &content_evs,
+                &scripts,
+            ) {
+                mark_claim(&mut doc.blocks, idx, range, style);
+            }
         }
         // The LAST fragment of this claim, in document order, is the one that carries
         // the comment. Only knowable after every range for `idx` has been marked, since
@@ -169,6 +178,8 @@ fn insert_point(block: &mut Block, idx: usize, pos: i32, after: bool) -> bool {
 fn point_marker(idx: usize) -> Inline {
     Inline::Claim {
         idx,
+        // A point comment marks no text, so its style draws nothing.
+        style: crate::annotate::ClaimStyle::Highlight,
         tail: true,
         inner: Vec::new(),
     }
@@ -239,29 +250,34 @@ fn claim_text(cleaned: &str, hs: usize, he: usize) -> String {
 /// Split every [`Inline::Text`] overlapping `range` and wrap the overlap in a
 /// [`Inline::Claim`]. Recursive, because a claim can land inside emphasis, a link, a
 /// list item or a table cell — every context Document Rendering CAM row 2 names.
-fn mark_claim(blocks: &mut Vec<Block>, idx: usize, range: (i32, i32)) {
+fn mark_claim(
+    blocks: &mut Vec<Block>,
+    idx: usize,
+    range: (i32, i32),
+    style: crate::annotate::ClaimStyle,
+) {
     for block in blocks {
         match block {
             Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
-                mark_inlines(inlines, idx, range)
+                mark_inlines(inlines, idx, range, style)
             }
-            Block::BlockQuote(inner) => mark_claim(inner, idx, range),
+            Block::BlockQuote(inner) => mark_claim(inner, idx, range, style),
             // The BODY takes claims like any other content — it is ordinary document
             // text that the preview happened not to draw. The summary does not: it
             // lives inside raw HTML, which carries no annotations.
-            Block::Disclosure { body, .. } => mark_claim(body, idx, range),
+            Block::Disclosure { body, .. } => mark_claim(body, idx, range, style),
             Block::List { items, .. } => {
                 for item in items {
-                    mark_claim(&mut item.blocks, idx, range);
+                    mark_claim(&mut item.blocks, idx, range, style);
                 }
             }
             Block::Table { head, rows, .. } => {
                 for cell in head {
-                    mark_inlines(cell, idx, range);
+                    mark_inlines(cell, idx, range, style);
                 }
                 for row in rows {
                     for cell in row {
-                        mark_inlines(cell, idx, range);
+                        mark_inlines(cell, idx, range, style);
                     }
                 }
             }
@@ -359,6 +375,7 @@ fn for_each_claim_mut(blocks: &mut [Block], idx: usize, f: &mut impl FnMut(&mut 
                     idx: i,
                     inner,
                     tail,
+                    ..
                 } => {
                     if *i == idx {
                         f(tail);
@@ -401,7 +418,12 @@ fn for_each_claim_mut(blocks: &mut [Block], idx: usize, f: &mut impl FnMut(&mut 
     }
 }
 
-fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
+fn mark_inlines(
+    inlines: &mut Vec<Inline>,
+    idx: usize,
+    range: (i32, i32),
+    style: crate::annotate::ClaimStyle,
+) {
     let (rs, re) = range;
     let mut out: Vec<Inline> = Vec::with_capacity(inlines.len());
     for inline in std::mem::take(inlines) {
@@ -433,6 +455,7 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
                 }
                 out.push(Inline::Claim {
                     idx,
+                    style,
                     // Set by `mark_tail` once the whole tree is marked — only then is
                     // it known which fragment is last.
                     tail: false,
@@ -473,6 +496,7 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
                 }
                 out.push(Inline::Claim {
                     idx,
+                    style,
                     tail: false,
                     inner: vec![Inline::Code {
                         text: cut(os, oe),
@@ -492,7 +516,7 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
             // never marked — losing the claim highlight inside it, silently.
             mut other => {
                 if let Some(nested) = other.nested_mut() {
-                    mark_inlines(nested, idx, range);
+                    mark_inlines(nested, idx, range, style);
                 }
                 out.push(other);
             }
@@ -1065,9 +1089,9 @@ mod export_doc_tests {
     }
 
     #[test]
-    fn a_suggested_replacement_exports_its_new_text_claimed_and_its_change_listed() {
-        // TDD 17.71 / CAM Document Rendering row 17: the page's new text is the claim,
-        // and the summary quotes the change as every other surface does.
+    fn a_suggested_replacement_exports_both_sides_styled_and_its_change_listed() {
+        // TDD 17.71 / CAM Document Rendering row 17: the export shows the change as the
+        // page does, and the summary quotes it as every other surface does.
         let doc = doc_of("Dear sir{~~,~>:~~}{>>colon<<} hello\n");
         assert_eq!(doc.annotations.len(), 1, "{:?}", doc.annotations);
         assert_eq!(doc.annotations[0].comment, "colon");
@@ -1075,14 +1099,26 @@ mod export_doc_tests {
         let Some(Block::Paragraph(v)) = doc.blocks.first() else {
             panic!("{:?}", doc.blocks);
         };
-        let claimed: String = v
+        // Both sides, as the page shows them: the old struck in the deletion style, then
+        // the new in the addition style, which carries the note (PLAN.suggested-edit-colours.md).
+        let runs: Vec<_> = v
             .iter()
             .filter_map(|i| match i {
-                Inline::Claim { inner, .. } => Some(crate::export::plain_text(inner)),
+                Inline::Claim {
+                    inner, style, tail, ..
+                } => Some((crate::export::plain_text(inner), *style, *tail)),
                 _ => None,
             })
             .collect();
-        assert_eq!(claimed, ":", "{v:?}");
+        use crate::annotate::ClaimStyle;
+        assert_eq!(
+            runs,
+            [
+                (",".to_string(), ClaimStyle::Deletion, false),
+                (":".to_string(), ClaimStyle::Addition, true)
+            ],
+            "{v:?}"
+        );
     }
 
     #[test]

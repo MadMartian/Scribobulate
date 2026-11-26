@@ -641,6 +641,10 @@ banded heading does.
 | `annotation_hl_color` | colour | `#FFD133_61` | Annotation highlight overlay. |
 | `annotation_chip_bg` | colour | hardcoded amber | CriticMarkup comment gutter chip's fill. Omitted, the chip stays the exact hardcoded amber/white it always was (TDD 18.2). |
 | `annotation_chip_fg` | colour | hardcoded white | Ink for the chip's overflow-count numeral. |
+| `addition_fg` | colour | `#1a7f37` | Ink for what a suggested edit would add — an addition's text and a replacement's new side. Walked to the legibility floor against what it is drawn on (its fill over the page, or the page), so the conventional green reads on a dark page too; a stated ink that already clears the floor is untouched. Reaches the body tag, the table-cell span and both export sinks. |
+| `addition_bg` | colour | — (absent) | Fill behind what a suggested edit would add. Omitted, there is no fill at all — not the annotation highlight's wash. |
+| `deletion_fg` | colour | `#c8102e` | Ink for what a suggested edit would remove — a deletion's text and a replacement's old side, drawn struck through (the line takes `strikethrough_color` where set). Walked like `addition_fg`. |
+| `deletion_bg` | colour | — (absent) | Fill behind what a suggested edit would remove. Omitted, there is no fill at all. |
 | `annotation_chip_sprite` | sprite path | — | A sprite drawn in place of the flat chip fill. No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
 | `find_hl_all_color` | colour | `#f6d32d` | Highlight for all find matches. |
 | `find_hl_current_color` | colour | `#ff7800` | Highlight for the current find match. Like `find_hl_all_color` and `annotation_hl_color` this is an **overlay wash with no surface to inherit from**, so it resolves to a stated literal rather than to a derivation of the desktop probe — the column said "derived" and the code never was. |

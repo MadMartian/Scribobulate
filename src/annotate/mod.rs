@@ -35,7 +35,7 @@ pub(crate) use mutate::{
     remove_annotation,
 };
 pub(crate) use scan::{
-    chip_anchor, cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation,
+    chip_anchor, cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation, ClaimStyle,
 };
 pub(crate) use written::holds_block_break;
 

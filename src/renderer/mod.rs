@@ -69,6 +69,7 @@ pub(crate) use segments::{is_inline_tag, is_inline_tag_end, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
 
+#[cfg(test)]
 /// Opening Pango span for a CriticMarkup claim highlight inside a table-cell label.
 ///
 /// GENERATED from the active theme's `annotation_hl`, not a literal: a table cell is a
@@ -89,6 +90,18 @@ pub(crate) fn ann_hl_open(theme: &crate::theme::Theme) -> String {
     )
 }
 pub(crate) const ANN_HL_CLOSE: &str = "</span>";
+
+/// The opening span for a run of annotated text in `style` inside a table-cell label —
+/// the cell twin of the claim and suggestion body tags. Closed by [`ANN_HL_CLOSE`].
+pub(crate) fn claim_open(
+    style: crate::annotate::ClaimStyle,
+    theme: &crate::theme::Theme,
+    inks: crate::palette::SuggestionInks,
+) -> String {
+    // The ONE builder the PDF sink also reads, so a suggestion in a table cell and on
+    // paper cannot be spelled two ways (`pangospan`).
+    crate::pangospan::claim(style, theme, inks).open
+}
 
 /// Opening Pango span for a `==highlight==` (mark) inside a table-cell label — the
 /// cell twin of the `TagName::Mark` body tag. A table cell is a `GtkLabel` outside
@@ -201,6 +214,7 @@ pub(crate) fn merge_char_ranges(ranges: impl IntoIterator<Item = CharRange>) -> 
     merged
 }
 
+#[cfg(test)]
 /// Wrap half-open **char** ranges of `plain` in the amber annotation highlight span.
 /// `highlights` are char offsets into `plain` (cell-local, as from
 /// [`crate::annotate::map_cleaned_highlight_to_local`]); they are sorted and
@@ -210,22 +224,38 @@ pub(crate) fn annotate_markup(
     highlights: &[(usize, usize)],
     theme: &crate::theme::Theme,
 ) -> String {
+    let runs: Vec<_> = highlights
+        .iter()
+        .map(|&(a, b)| (a, b, crate::annotate::ClaimStyle::Highlight))
+        .collect();
+    annotate_markup_styled(plain, &runs, &|_| ann_hl_open(theme))
+}
+
+/// [`annotate_markup`] for runs in any claim style, each opened by `open(style)`:
+/// characters are grouped into maximal runs of one style, so overlapping runs of a style
+/// merge and two styles side by side stay two spans.
+pub(crate) fn annotate_markup_styled(
+    plain: &str,
+    runs: &[(usize, usize, crate::annotate::ClaimStyle)],
+    open: &dyn Fn(crate::annotate::ClaimStyle) -> String,
+) -> String {
     let chars: Vec<char> = plain.chars().collect();
     let n = chars.len();
-    // Clamped to the text, then merged through the ONE merge — see `merge_char_ranges`.
-    let merged = merge_char_ranges(highlights.iter().map(|&(a, b)| CharRange {
-        start: a.min(n),
-        end: b.min(n),
-    }));
     let mut out = String::new();
     let mut cursor = 0usize;
-    for CharRange { start: a, end: b } in merged {
+    for (a, b, style) in merge_styled_runs(runs, n) {
+        // A run that starts inside one already written (two styles overlapping, which
+        // no annotation produces) gives up its covered part rather than repeat text.
+        let a = a.max(cursor);
+        if a >= b {
+            continue;
+        }
         if cursor < a {
             out.push_str(&glib::markup_escape_text(
                 &chars[cursor..a].iter().collect::<String>(),
             ));
         }
-        out.push_str(&ann_hl_open(theme));
+        out.push_str(&open(style));
         out.push_str(&glib::markup_escape_text(
             &chars[a..b].iter().collect::<String>(),
         ));
@@ -237,6 +267,35 @@ pub(crate) fn annotate_markup(
             &chars[cursor..].iter().collect::<String>(),
         ));
     }
+    out
+}
+
+/// `runs` clamped to `n` characters and merged per style through the ONE merge (see
+/// `merge_char_ranges`), in document order.
+fn merge_styled_runs(
+    runs: &[(usize, usize, crate::annotate::ClaimStyle)],
+    n: usize,
+) -> Vec<(usize, usize, crate::annotate::ClaimStyle)> {
+    use crate::annotate::ClaimStyle;
+    let mut out = Vec::new();
+    for style in [
+        ClaimStyle::Highlight,
+        ClaimStyle::Addition,
+        ClaimStyle::Deletion,
+    ] {
+        let merged = merge_char_ranges(runs.iter().filter(|&&(_, _, s)| s == style).map(
+            |&(start, end, _)| CharRange {
+                start: start.min(n),
+                end: end.min(n),
+            },
+        ));
+        out.extend(
+            merged
+                .into_iter()
+                .map(|CharRange { start, end }| (start, end, style)),
+        );
+    }
+    out.sort_by_key(|&(start, _, _)| start);
     out
 }
 
@@ -441,9 +500,11 @@ struct InterBlock {
 
 pub(crate) struct Renderer {
     buf: TextBuffer,
-    /// Cleaned-document highlight ranges `(start, end)` for CriticMarkup claims
-    /// (table-cell annotation — painted into cell labels via [`annotate_markup`]).
-    pub(crate) ann_highlights: Vec<(usize, usize)>,
+    /// Cleaned-document runs every annotation marks, with the style each takes
+    /// (table-cell annotation — painted into cell labels via [`annotate_markup_styled`]).
+    pub(crate) ann_highlights: Vec<(std::ops::Range<usize>, crate::annotate::ClaimStyle)>,
+    /// A suggested edit's colours on this page, for the cell spans.
+    pub(crate) suggestion_inks: crate::palette::SuggestionInks,
     /// The cleaned Markdown this render is walking (for cell highlight mapping).
     pub(crate) cleaned: String,
     /// Source byte range of the event currently being processed (set by the
@@ -1228,11 +1289,12 @@ impl Renderer {
         buf: TextBuffer,
         theme: std::rc::Rc<crate::theme::Theme>,
         code_chips: crate::palette::CodeChips,
+        suggestion_inks: crate::palette::SuggestionInks,
         syntect_theme: String,
         doc_dir: Option<std::path::PathBuf>,
         allow_unsafe_images: bool,
         cleaned: String,
-        ann_highlights: Vec<(usize, usize)>,
+        ann_highlights: Vec<(std::ops::Range<usize>, crate::annotate::ClaimStyle)>,
         zoom: f64,
         folds: crate::fold::FoldState,
     ) -> Self {
@@ -1245,6 +1307,7 @@ impl Renderer {
             theme,
             code_chips,
             ann_highlights,
+            suggestion_inks,
             scripts: std::rc::Rc::new(BlockScripts::scan(&cleaned)),
             cleaned,
             zoom,
@@ -1301,23 +1364,23 @@ impl Renderer {
         content_evs: &[(usize, usize, i32, i32)],
         cleaned: &str,
         scripts: &BlockScripts,
-        ann_highlights: &[(usize, usize)],
-        theme: &crate::theme::Theme,
+        ann_highlights: &[(std::ops::Range<usize>, crate::annotate::ClaimStyle)],
+        open: &dyn Fn(crate::annotate::ClaimStyle) -> String,
     ) -> String {
         if ann_highlights.is_empty() || plain.is_empty() {
             return markup.to_string();
         }
-        let mut local: Vec<(usize, usize)> = Vec::new();
-        for &(hs, he) in ann_highlights {
+        let mut local = Vec::new();
+        for (run, style) in ann_highlights {
             for (a, b) in crate::annotate::map_cleaned_highlight_to_local(
                 cleaned,
-                hs,
-                he,
+                run.start,
+                run.end,
                 content_evs,
                 scripts,
             ) {
                 if a < b {
-                    local.push((a as usize, b as usize));
+                    local.push((a as usize, b as usize, *style));
                 }
             }
         }
@@ -1326,16 +1389,17 @@ impl Renderer {
         }
         let escaped_plain = glib::markup_escape_text(plain);
         if markup == escaped_plain.as_str() {
-            return annotate_markup(plain, &local, theme);
+            return annotate_markup_styled(plain, &local, open);
         }
         // Formatted cell: insert the amber highlight at the EXACT plain-char offsets, tag-
         // aware — NOT by text search. A `result.find(slice)` wrapped the FIRST occurrence of
         // the substring, so a claim repeated in the cell (very common in the ANTI-PATTERNS
         // TOC cells) got highlighted on the wrong occurrence.
-        wrap_markup_at_char_ranges(markup, &local, theme)
+        wrap_markup_styled(markup, &local, open)
     }
 }
 
+#[cfg(test)]
 /// Insert the amber annotation-highlight span into an existing Pango-markup string at the
 /// given PLAIN-CHARACTER ranges (`plain`-char indices, the same indexing
 /// [`annotate_markup`] uses). Walks the markup tracking the plain-char index — tags
@@ -1349,26 +1413,44 @@ fn wrap_markup_at_char_ranges(
     ranges: &[(usize, usize)],
     theme: &crate::theme::Theme,
 ) -> String {
+    let runs: Vec<_> = ranges
+        .iter()
+        .map(|&(a, b)| (a, b, crate::annotate::ClaimStyle::Highlight))
+        .collect();
+    wrap_markup_styled(markup, &runs, &|_| ann_hl_open(theme))
+}
+
+/// [`wrap_markup_at_char_ranges`] for runs in any claim style, each opened by
+/// `open(style)`. A change of style between two adjacent characters closes one span and
+/// opens the next, as a tag boundary does.
+fn wrap_markup_styled(
+    markup: &str,
+    runs: &[(usize, usize, crate::annotate::ClaimStyle)],
+    open: &dyn Fn(crate::annotate::ClaimStyle) -> String,
+) -> String {
     // Through the ONE merge — see `merge_char_ranges`. It also sorts and drops empties,
     // which is why the caller no longer does either.
-    let merged = merge_char_ranges(ranges.iter().map(|&(start, end)| CharRange { start, end }));
+    let merged = merge_styled_runs(runs, usize::MAX);
     if merged.is_empty() {
         return markup.to_string();
     }
-    let in_range = |i: usize| merged.iter().any(|r| i >= r.start && i < r.end);
+    let style_at = |i: usize| {
+        merged
+            .iter()
+            .find(|&&(start, end, _)| i >= start && i < end)
+            .map(|&(_, _, style)| style)
+    };
 
-    let open = ann_hl_open(theme);
-    let mut out = String::with_capacity(markup.len() + 3 * open.len());
+    let mut out = String::with_capacity(markup.len() + 64 * merged.len());
     let mut it = markup.chars().peekable();
     let mut plain_idx = 0usize;
-    let mut amber = false;
+    let mut current: Option<crate::annotate::ClaimStyle> = None;
     while let Some(c) = it.next() {
         if c == '<' {
-            // A tag: close amber before it (re-opens on the next highlighted char, so the
+            // A tag: close the span before it (re-opens on the next marked char, so the
             // span never straddles the tag boundary), then copy the whole tag verbatim.
-            if amber {
+            if current.take().is_some() {
                 out.push_str(ANN_HL_CLOSE);
-                amber = false;
             }
             out.push(c);
             for d in it.by_ref() {
@@ -1380,13 +1462,15 @@ fn wrap_markup_at_char_ranges(
             continue;
         }
         // A visible char (a bare char, or an `&…;` entity — both are ONE plain char).
-        let want = in_range(plain_idx);
-        if want && !amber {
-            out.push_str(&ann_hl_open(theme));
-            amber = true;
-        } else if !want && amber {
-            out.push_str(ANN_HL_CLOSE);
-            amber = false;
+        let want = style_at(plain_idx);
+        if want != current {
+            if current.is_some() {
+                out.push_str(ANN_HL_CLOSE);
+            }
+            if let Some(style) = want {
+                out.push_str(&open(style));
+            }
+            current = want;
         }
         out.push(c);
         if c == '&' {
@@ -1399,7 +1483,7 @@ fn wrap_markup_at_char_ranges(
         }
         plain_idx += 1;
     }
-    if amber {
+    if current.is_some() {
         out.push_str(ANN_HL_CLOSE);
     }
     out

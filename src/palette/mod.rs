@@ -4,9 +4,11 @@ use gtk::gdk;
 use gtk::prelude::*;
 
 mod codechips;
+mod suggestion;
 #[cfg(test)]
 pub(crate) use codechips::over;
 pub(crate) use codechips::{surface_at, CodeChips, CodeRunSurface, CodeSurface};
+pub(crate) use suggestion::{SuggestionInks, SuggestionStyle};
 
 /// Convert a syntect highlighting color (0–255 channels) to a GDK RGBA.
 fn syntect_color_to_rgba(c: syntect::highlighting::Color) -> gdk::RGBA {
@@ -81,7 +83,7 @@ const WALK_STEPS: usize = 20;
 /// colour and once for the selection ink, each with its own copy of the floor, the step
 /// size and the step count — so either could be corrected without the other, which is
 /// the whole of finding `F-WCAG-001`.
-fn walk_to_contrast(ink: gdk::RGBA, fill: gdk::RGBA) -> gdk::RGBA {
+pub(super) fn walk_to_contrast(ink: gdk::RGBA, fill: gdk::RGBA) -> gdk::RGBA {
     let target = if luminance(fill) < DARK_SURFACE_LUMINANCE {
         gdk::RGBA::WHITE
     } else {
@@ -182,6 +184,8 @@ pub(crate) struct Palette {
     /// styled by generated CSS rather than a tag).
     pub(crate) rule: gdk::RGBA,
     pub(crate) syntect_theme: String,
+    /// A suggested edit's colours, walked to the legibility floor on this page.
+    pub(crate) suggestion_inks: SuggestionInks,
 }
 
 // NOTE: `Palette` deliberately carries no `is_dark`. It used to, and the editor's
@@ -418,6 +422,7 @@ impl Palette {
                 .rule_color
                 .unwrap_or_else(|| mix_rgba(bg, chrome_fg, 0.25)),
             syntect_theme,
+            suggestion_inks: SuggestionInks::resolve(theme, bg),
         }
     }
 

@@ -641,6 +641,25 @@ Colour. The CriticMarkup comment gutter chip's fill.
 .B annotation_chip_fg
 Colour. Ink for the chip's overflow-count numeral.
 .TP
+.B addition_fg
+Colour, default
+.IR #1a7f37 .
+Ink for what a suggested edit would add. Lightened or darkened as needed to stay
+legible on the page it is drawn on.
+.TP
+.B addition_bg
+Colour. Fill behind what a suggested edit would add. Omitted, there is no fill.
+.TP
+.B deletion_fg
+Colour, default
+.IR #c8102e .
+Ink for what a suggested edit would remove, which is drawn struck through. Kept
+legible like
+.BR addition_fg .
+.TP
+.B deletion_bg
+Colour. Fill behind what a suggested edit would remove. Omitted, there is no fill.
+.TP
 .B annotation_chip_sprite
 Sprite drawn in place of the flat chip fill. Has no expression in an exported
 PDF.

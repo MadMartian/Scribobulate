@@ -348,9 +348,11 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
             Inline::Image(img) => image_html(img, out),
             Inline::Claim {
                 idx,
+                style,
                 tail,
                 inner: v,
             } => {
+                let class = claim_class(*style);
                 // The claim highlight, plus its comment as an aside beside it — the
                 // in-file review loop is the product thesis, so an export that drops
                 // the review is the wrong document (TDD 25.13).
@@ -362,9 +364,9 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
                 // (F-AP-B-204). The other fragments carry `class="claim"` alone, which
                 // is what the highlight styling reads.
                 if *tail {
-                    let _ = write!(out, "<span class=\"claim\" id=\"claim-{}\">", idx + 1);
+                    let _ = write!(out, "<span class=\"{class}\" id=\"claim-{}\">", idx + 1);
                 } else {
-                    out.push_str("<span class=\"claim\">");
+                    let _ = write!(out, "<span class=\"{class}\">");
                 }
                 inlines_html(v, page, out);
                 out.push_str("</span>");
@@ -760,7 +762,7 @@ fn chrome_rules(p: &Palette, t: &Theme) -> String {
     let _ = write!(
         css,
         ".claim {{ background: {claim}; }}
-.comment {{ display: block; border-left: {bar_w}px solid {bar}; margin: 0.4em 0 0.4em 1rem;
+{suggestion_css}.comment {{ display: block; border-left: {bar_w}px solid {bar}; margin: 0.4em 0 0.4em 1rem;
   padding-left: {bar_gap}px; font-size: 0.9em; opacity: 0.85; }}
 .missing-image {{ border: 1px dashed {rule}; padding: 0.2em 0.4em; opacity: 0.75; }}
 .export-note {{ max-width: 46rem; margin: 1.5rem auto; font-size: 0.9em; opacity: 0.8; }}
@@ -775,8 +777,41 @@ img {{ max-width: 100%; height: auto; }}
         bar_gap = m.blockquote_text_gap,
         rule = to_hex_rgba(p.rule),
         chip_css = annotation_chip_css(t),
+        suggestion_css = suggestion_css(p, t),
     );
     css
+}
+
+/// The class a run of annotated text takes: the claim highlight, or one side of a
+/// suggested edit (PLAN.suggested-edit-colours.md).
+fn claim_class(style: crate::annotate::ClaimStyle) -> &'static str {
+    use crate::annotate::ClaimStyle;
+    match style {
+        ClaimStyle::Highlight => "claim",
+        ClaimStyle::Addition => "claim-addition",
+        ClaimStyle::Deletion => "claim-deletion",
+    }
+}
+
+/// A suggested edit's two sides, from the palette's resolved inks — the values the
+/// preview's body tags read: an ink, a fill only where the theme states one, and the
+/// removed side struck through in the strike colour where one is set.
+fn suggestion_css(p: &Palette, t: &Theme) -> String {
+    let side = |s: crate::palette::SuggestionStyle| {
+        let bg =
+            s.bg.map(|bg| format!(" background: {};", to_hex_rgba(bg)))
+                .unwrap_or_default();
+        format!("color: {};{bg}", to_hex_rgba(s.fg))
+    };
+    let strike = t
+        .strikethrough_color
+        .map(|c| format!(" text-decoration-color: {};", to_hex_rgba(c)))
+        .unwrap_or_default();
+    format!(
+        ".claim-addition {{ {add} }}\n.claim-deletion {{ {del} text-decoration: line-through;{strike} }}\n",
+        add = side(p.suggestion_inks.addition),
+        del = side(p.suggestion_inks.deletion),
+    )
 }
 
 /// Headings: the theme's scale ladder, applied to the base size. Five entries, not

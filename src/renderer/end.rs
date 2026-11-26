@@ -194,7 +194,7 @@ impl Renderer {
                             &self.cleaned,
                             &self.scripts,
                             &self.ann_highlights,
-                            &self.theme,
+                            &|style| super::claim_open(style, &self.theme, self.suggestion_inks),
                         );
                     }
                     // Every cell is a selectable GtkLabel with Pango markup for

@@ -327,7 +327,8 @@ pub(super) fn splice(
         old_volatile.start,
         old_volatile.start + (buf.char_count() - after_delete),
     );
-    retag_region_highlights(buf, &products.highlight_ranges, region_written);
+    // Exactly PASS A's runs inside the region, whatever the insertion point carried.
+    super::build::retag_claims(buf, &products.highlight_ranges, region_written);
 
     // Merge: survivors (GTK's own delete already unparented anything strictly
     // inside the deleted range and touched nothing outside it, so this is exact)
@@ -390,34 +391,8 @@ pub(super) fn splice(
     })
 }
 
-/// Put the `annotation-highlight` tag over the part of each of `ranges` that falls
-/// inside `region`, clearing it from `region` first so the result is exactly PASS A's
-/// extent rather than PASS A's plus whatever the insertion point carried. Table-cell highlights are not buffer tags (they
-/// are Pango markup the region render already wrote into its own cell labels), so
-/// they never appear in `ranges` and need nothing here.
-fn retag_region_highlights(buf: &TextBuffer, ranges: &[BufferSpan], region: BufferSpan) {
-    let Some(tag) = buf
-        .tag_table()
-        .lookup(crate::tags::TagName::AnnotationHighlight.name())
-    else {
-        return;
-    };
-    buf.remove_tag(
-        &tag,
-        &buf.iter_at_offset(region.start),
-        &buf.iter_at_offset(region.end),
-    );
-    for span in clip_to_region(ranges, region) {
-        buf.apply_tag(
-            &tag,
-            &buf.iter_at_offset(span.start),
-            &buf.iter_at_offset(span.end),
-        );
-    }
-}
-
 /// The non-empty intersections of `ranges` with `region`, in order.
-fn clip_to_region(
+pub(super) fn clip_to_region(
     ranges: &[BufferSpan],
     region: BufferSpan,
 ) -> impl Iterator<Item = BufferSpan> + '_ {
