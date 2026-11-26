@@ -16,7 +16,10 @@ use crate::codeview::CreateAnnotation;
 use crate::span::CleanedByteOffset;
 
 mod overlay;
-pub(crate) use overlay::{position_card, wire_annotation_overlay};
+pub(crate) use overlay::{
+    follow_scroll_after_paint, position_card, position_card_at, wire_annotation_overlay,
+    AfterPaintSlot,
+};
 /// The cell-press controller's event filter and coordinate transform, display-free.
 mod press;
 
