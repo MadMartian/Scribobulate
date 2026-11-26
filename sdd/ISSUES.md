@@ -325,15 +325,31 @@ Linux and macOS passed the same run, and master's run on the same day passed on 
 master, neither touching forensics): same test, same assertion, but with the exit codes
 the other way round — `armed exited 0xc0000005, control 0xc00000fd`. Passed on re-run.
 
-**What is known**: two sightings in one day on unrelated trees. The swapped codes in the
-second may only mean the two children's labels differ from what the message assumes; read
-`assert_a_reported_death` before reading anything into them. Not reproduced locally; not yet
-tried on the `windows` seat.
+**What is known**:
+- Two sightings in one day, on unrelated trees.
+- In both, the armed child's stderr ends at the probe line and **no report file exists at
+  all**, not a partial one. The filter's first action opens the report, so the child died
+  before the filter ran, not while it wrote.
+- In the first sighting the *control* child, which has no filter armed, died
+  `0xc0000005` rather than `0xc00000fd`. That is Windows' own exception dispatch
+  re-faulting on the overflowed stack, which is the likeliest way the armed child dies
+  before reaching the filter.
+- Not reproduced on the `windows` seat (Win10 Pro 19045, GTK 4.24.1 / GLib 2.90.1,
+  rustc 1.95.0 MSVC):
+  - the test alone, 300 runs idle and 300 under load;
+  - the whole `forensics::exception` module at default parallelism, 100 runs under load;
+  - the two children driven directly with their exit codes recorded, 400 runs. Every
+    run gave `0xc00000fd` for both children and a complete report.
+- Suspected (inferred, not probed): the CI runner image (`windows-latest`, a Server
+  build) leaves less stack headroom for exception dispatch than Win10 19045.
 
-**Next step**: have the `windows` seat run the test in a loop (it re-executes the test
-binary per case, so a few hundred runs are cheap) to measure how often the report goes
-missing, and when it does, whether the handler ran at all (its own stderr) or ran and failed
-to write.
+**Next step**: measure on CI itself. Run the two children directly in a loop on a
+`windows-latest` job, recording both exit codes and whether a report exists, to get the
+rate there. Candidate fixes, each to be weighed against that rate:
+- Give the probe thread a fixed stack size and a fixed frame size, so the guard page is
+  hit at a known depth.
+- Let the test tell "Windows died before the filter" from a filter failure. This needs a
+  crash-safe "filter entered" signal, and the test would accept the first case only.
 
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
