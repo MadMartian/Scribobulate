@@ -491,6 +491,11 @@ Gatekeeper click — the full run already proved what Gatekeeper shows.
   gate 1.
 - Open `ISSUES.md` and remove nothing: a release does not close an issue, a fix does.
 
+The final step after the release has gone live is to notify the operator accordingly, use these settings for the notification:
+- **Application Name**: `"DevOps"`
+- **Summary**: `"Scribobulate version <version-num> has been released! 🎉🚀"`
+- **Message**: *Any further details*
+
 ## Rig notes
 
 The lessons the release rigs taught — pdftotext's form feed, a pipe held by a portal, the
