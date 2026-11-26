@@ -276,6 +276,12 @@ pub fn run() -> glib::ExitCode {
     // on that platform while behaving correctly on Linux; see `app::carries_option_argument`.
     //
     // Returns rather than `process::exit`, so no destructor is skipped.
+    // `--help`, answered here for the same reasons: GLib's own help would list none of
+    // the switches above, which it never sees (TDD 8.8).
+    if app::is_help_request(&argv) {
+        print!("{}", app::usage_text());
+        return glib::ExitCode::SUCCESS;
+    }
     if app::is_version_request(&argv) {
         println!("{}", app::version_line());
         return glib::ExitCode::SUCCESS;
