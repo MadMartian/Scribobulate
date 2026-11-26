@@ -64,6 +64,8 @@ Read all of the above, plus:
   channel (Homebrew, winget, Flathub, a package repository) or a step that feeds one.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a
   performance gate, or reaching for a GTK debug channel.
+- [`sdd/PLAN.suggested-edit-colours.md`](sdd/PLAN.suggested-edit-colours.md) — before
+  styling suggested edits on the page or adding their theme colours.
 
 ## Task triggers
 

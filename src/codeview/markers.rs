@@ -37,6 +37,12 @@ pub(crate) struct MarkerSource {
     /// Cleaned-document range of the claim (or point-comment anchor) — used to
     /// pair a marker with a table-cell label after the widgets exist (cell-marker pairing).
     pub(crate) cleaned_content: std::ops::Range<usize>,
+    /// A suggested edit's OLD side in the ORIGINAL source — what Remove keeps (TDD
+    /// 17.74): a replacement's old text or a deletion's text; `None` for an addition,
+    /// whose Remove keeps nothing, and for a highlight or a comment. For a suggested edit,
+    /// `src_content` is the NEW side, what Accept edit keeps (TDD 17.73) — `None` for a
+    /// deletion, whose Accept keeps nothing.
+    pub(crate) src_old: Option<std::ops::Range<usize>>,
 }
 
 /// One CriticMarkup comment marker to draw in the preview's right margin,
@@ -63,6 +69,9 @@ pub(crate) struct MarkerData {
     /// The highlighted claim snippet (for the popover header); `None` for a
     /// point comment.
     pub(crate) claim: Option<String>,
+    /// The change a suggested edit proposes, shown in place of the claim with Accept
+    /// edit beside Remove (TDD 17.72); `None` for a highlight or a comment.
+    pub(crate) suggestion: Option<crate::annotate::Suggestion>,
     /// Byte-range mapping back to the construct in the source (Edit/Remove and the
     /// table-cell pairing). Grouped into [`MarkerSource`] (F-AP-001).
     pub(crate) source: MarkerSource,

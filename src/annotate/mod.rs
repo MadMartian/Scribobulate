@@ -17,9 +17,10 @@
 //! - **Point comment** (no highlighted span, used for the cross-block fallback):
 //!   `{>>reviewer comment<<}`
 //!
-//! v1 renders only these two; the suggested-edit kinds (`{++ins++}`,
-//! `{--del--}`, `{~~a~>b~~}`) are recognised but styled inert (deferred, not
-//! designed out — see [`scan::AnnKind`]).
+//! - **Suggested edits**: a replacement `{~~old~>new~~}`, an addition `{++text++}` or a
+//!   deletion `{--text--}`, each optionally followed by `{>>note<<}`. The page reads the
+//!   replacement's `new`, or the added or deleted text; the card accepts the edit (keeps
+//!   what would come) or removes it (keeps what would go) — see [`SuggestionSides`].
 
 pub(crate) mod landing;
 pub(crate) mod mutate;
@@ -37,6 +38,79 @@ pub(crate) use scan::{
     chip_anchor, cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation,
 };
 pub(crate) use written::holds_block_break;
+
+use std::ops::Range;
+
+/// A suggested edit as every surface quotes it — the card, the viewer's row and the
+/// export: the side it would remove and the side it would add, each read as the page reads
+/// Markdown ([`plain_claim`]). A replacement has both (either possibly empty), an addition
+/// only `new`, a deletion only `old`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Suggestion {
+    pub(crate) old: Option<String>,
+    pub(crate) new: Option<String>,
+}
+
+impl Suggestion {
+    /// `ann`'s suggestion, read from the `original` source it was scanned from; `None`
+    /// for any other kind, or for ranges that are not a slice of `original`.
+    pub(crate) fn of(original: &str, ann: &Annotation) -> Option<Self> {
+        let sides = suggestion_sides(ann)?;
+        let read = |r: Option<Range<usize>>| -> Option<Option<String>> {
+            match r {
+                Some(r) => Some(Some(plain_claim(original.get(r)?))),
+                None => Some(None),
+            }
+        };
+        Some(Self {
+            old: read(sides.old)?,
+            new: read(sides.new)?,
+        })
+    }
+}
+
+/// A suggested edit's sides as ORIGINAL-source byte ranges: what removing (rejecting) it
+/// keeps, and what accepting it keeps. `None` keeps nothing: an addition has no old side,
+/// a deletion no new one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SuggestionSides {
+    pub(crate) old: Option<Range<usize>>,
+    pub(crate) new: Option<Range<usize>>,
+}
+
+/// `ann`'s [`SuggestionSides`]; `None` for a highlight or a comment. The visible side is
+/// kept verbatim, so it is as long in the original as in the cleaned text: an addition's
+/// or deletion's text begins just past its 3-byte opener, a replacement's new side just
+/// past the old side's `~>`.
+pub(crate) fn suggestion_sides(ann: &Annotation) -> Option<SuggestionSides> {
+    const OPEN_LEN: usize = 3; // "{++" / "{--"
+    let len = ann
+        .cleaned_content
+        .end
+        .raw()
+        .saturating_sub(ann.cleaned_content.start.raw());
+    let content = |at: usize| Some(at..at + len);
+    let start = ann.src_span.start.raw() + OPEN_LEN;
+    match ann.kind {
+        AnnKind::Substitution => {
+            let old = ann.src_old.clone()?;
+            let ns = old.end + scan::SUB_ARROW.len();
+            Some(SuggestionSides {
+                old: Some(old),
+                new: content(ns),
+            })
+        }
+        AnnKind::Insertion => Some(SuggestionSides {
+            old: None,
+            new: content(start),
+        }),
+        AnnKind::Deletion => Some(SuggestionSides {
+            old: content(start),
+            new: None,
+        }),
+        AnnKind::Highlight | AnnKind::Comment => None,
+    }
+}
 
 /// A claim's text as the page SHOWS it: the run of cleaned source the highlight covers
 /// with its Markdown read, not quoted. `**bold claim**` is `bold claim`, a link is its

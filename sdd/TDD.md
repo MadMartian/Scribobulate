@@ -18,7 +18,7 @@
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
-| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.69 |
+| 17 | Annotation & review (CriticMarkup) | 17.1 – 17.74 |
 | 18 | Preview reading themes | 18.1 – 18.58 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.25 |
@@ -2814,10 +2814,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** it is shown in the preview
 - **Then** the words "the earth is flat" appear with a coloured highlight background, and neither the `{==…==}`/`{>>…<<}` delimiters nor the comment text appear in the rendered text
 
-### 17.2 Suggested-edit markup renders inert, without braces
+### 17.2 Suggested-edit markup renders without braces
 - **Given** a document containing `{++inserted++}`, `{--deleted--}`, and `{~~old~>new~~}`
 - **When** it is shown in the preview
-- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown (v1 applies no distinct styling to these kinds)
+- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown, each highlighted as a suggested edit (17.71)
 
 ### 17.3 A comment is reachable from a margin marker
 - **Given** a rendered document with a highlighted claim that carries a comment
@@ -3237,6 +3237,27 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
 - **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
+
+### 17.71 A suggested edit is an annotation with a margin marker
+- **Given** a document containing a suggested edit — a replacement `{~~old~>new~~}` (either side possibly empty), an addition `{++text++}` or a deletion `{--text--}` — with or without a note `{>>note<<}` right after it
+- **When** it is shown in the preview
+- **Then** the page reads a replacement's new text, or an addition's or deletion's text, highlighted like a claim (a deletion's text stays, so the reader sees what would go), and its line carries a margin marker that counts it like any other annotation (17.4)
+
+### 17.72 A suggested edit's card shows the change and offers to accept it
+- **Given** the margin card of a suggested edit is open
+- **When** the reader reads it
+- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
+- **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
+
+### 17.73 Accepting a suggested edit applies it
+- **Given** a suggested edit's card is open
+- **When** the reader chooses Accept edit
+- **Then** the whole construct, with its note, is replaced in the file by what the edit leaves — a replacement's new text, an addition's text, nothing for a deletion — so the annotation and its marker are gone and the page reads the result unhighlighted; nothing else in the document changes, and Undo restores the construct
+
+### 17.74 Removing a suggested edit rejects it
+- **Given** a suggested edit's card is open
+- **When** the reader chooses Remove
+- **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone; nothing else in the document changes, and Undo restores the construct
 
 ## 18. Preview reading themes
 
@@ -3773,10 +3794,11 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** the annotations viewer is shown
 - **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only; a bare highlight shows the claim under an empty comment, 17.67)
 
-### 20.2 Inert kinds are not listed, and a bare highlight is
-- **Given** a document containing a bare `{==highlight==}` (no comment) and inert kinds (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`) alongside real annotations
+### 20.2 Every CriticMarkup annotation is listed, a bare highlight included
+- **Given** a document containing a bare `{==highlight==}` (no comment) and suggested edits (`{~~a~>b~~}`, `{++ins++}`, `{--del--}`) alongside commented annotations
 - **When** the viewer is shown
-- **Then** only highlights (commented or bare, 17.67) and point comments appear — the suggested-edit kinds have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **Then** every one has a row — highlights (commented or bare, 17.67), point comments and suggested edits — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **And** a suggested edit's row quotes its change with what goes struck through and what comes in italics — a replacement's old text, an arrow, then its new text; an addition's text; a deletion's text — with its note as the comment
 
 ### 20.3 An empty or annotation-less document shows a placeholder, not an error
 - **Given** a document with no annotations
@@ -3795,11 +3817,6 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** the user single-clicks an entry, or moves the selection with up/down/PgUp/PgDown
 - **Then** navigation happens immediately (no double-click required)
 - **And** the keyboard focus **stays in the list** across the navigation, so the next arrow press moves to the next row: browsing the list is a sequence of presses, not one press per trip through the Tab order. (The comment card the navigation opens therefore does *not* take focus — unlike a card opened by clicking its margin chip or by the Next/Previous Annotation commands, where the reader has asked to act on that one annotation and the card's own Escape/Edit/Remove must be reachable.)
-
-### 20.6 Navigation resolves the correct annotation even when membership isn't 1:1
-- **Given** a document where an inert kind sits *before* an annotation (so the annotation's list position differs from its chip's position)
-- **When** the user activates that annotation's row
-- **Then** the document navigates to *that* annotation — never a neighbor — because navigation keys on the annotation's source span identity, not a positional row index
 
 ### 20.7 An annotation inside a table cell is navigable
 - **Given** a comment-bearing annotation anchored to text inside a table cell, off-screen

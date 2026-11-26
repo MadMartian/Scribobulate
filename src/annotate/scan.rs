@@ -31,7 +31,7 @@ const DEL_OPEN: &str = "{--";
 const DEL_CLOSE: &str = "--}";
 const SUB_OPEN: &str = "{~~";
 const SUB_CLOSE: &str = "~~}";
-const SUB_ARROW: &str = "~>";
+pub(super) const SUB_ARROW: &str = "~>";
 
 /// Every opener/closer pair the pass recognises, as ONE table.
 ///
@@ -55,21 +55,25 @@ const PAIRS: [(&str, &str); 5] = [
     (SUB_OPEN, SUB_CLOSE),
 ];
 
-/// Which CriticMarkup construct an [`Annotation`] is. v1 renders `Highlight` and
-/// `Comment`; the suggested-edit kinds are recognised and their visible text is
-/// kept, but no distinct styling is applied yet (deferred, not designed out —
-/// keeping the inert kinds is what makes enabling them later a styling-only change).
+/// Which CriticMarkup construct an [`Annotation`] is. Every kind is an annotation the
+/// reader meets (a chip, a row, a card); the three suggested edits — substitution,
+/// insertion and deletion — can also be accepted (TDD 17.71–17.74).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum AnnKind {
     /// `{==content==}` — optionally immediately followed by `{>>comment<<}`.
     Highlight,
     /// `{>>comment<<}` — a standalone point comment (also the cross-block fallback).
     Comment,
-    /// `{++text++}` — insertion (v1 inert).
+    /// `{++text++}` — a suggested addition, optionally followed by `{>>note<<}`. The page
+    /// reads `text`, highlighted; accepting keeps it, removing drops it.
     Insertion,
-    /// `{--text--}` — deletion (v1 inert; text kept visible).
+    /// `{--text--}` — a suggested deletion, optionally followed by `{>>note<<}`. The page
+    /// still reads `text`, highlighted, so the reader sees what would go; accepting drops
+    /// it, removing keeps it.
     Deletion,
-    /// `{~~old~>new~~}` — substitution (v1 inert; `new` kept visible).
+    /// `{~~old~>new~~}` — a suggested replacement, optionally immediately followed by
+    /// `{>>note<<}`. The page reads `new`, highlighted like a claim; its card offers to
+    /// accept it (keep `new`) or remove it (keep `old`) (TDD 17.71–17.74).
     Substitution,
 }
 
@@ -90,6 +94,10 @@ pub(crate) struct Annotation {
     pub(crate) src_comment_body: Option<Range<usize>>,
     /// The extracted comment text (delimiters stripped), if any.
     pub(crate) comment: Option<String>,
+    /// A `Substitution`'s OLD side — the text between `{~~` and `~>` — as a byte range
+    /// in the **original** source; `None` for every other kind. Its new side is the
+    /// kept content, at the same place `cleaned_content` maps to.
+    pub(crate) src_old: Option<Range<usize>>,
 }
 
 impl Annotation {
@@ -102,16 +110,24 @@ impl Annotation {
     /// could have no row (TDD 20.2).
     ///
     /// True for every `Highlight` — `{==claim==}{>>comment<<}` and the bare
-    /// `{==claim==}`, which carries no comment yet (TDD 17.67) — and for a point
-    /// `Comment` (`{>>comment<<}`). False for the v1-inert suggested-edit kinds
-    /// (`{++ins++}`, `{--del--}`, `{~~a~>b~~}`), which have no chip and no defined
-    /// presentation (deferred, not designed out).
+    /// `{==claim==}`, which carries no comment yet (TDD 17.67) — for every suggested
+    /// edit (`{~~a~>b~~}`, `{++ins++}`, `{--del--}`, with or without a note, TDD 17.71),
+    /// and for a point `Comment` that carries a comment (`{>>comment<<}`).
     pub(crate) fn is_listed(&self) -> bool {
         match self.kind {
-            AnnKind::Highlight => true,
+            AnnKind::Highlight | AnnKind::Substitution | AnnKind::Insertion | AnnKind::Deletion => {
+                true
+            }
             AnnKind::Comment => self.comment.is_some() && self.src_comment_body.is_some(),
-            _ => false,
         }
+    }
+
+    /// Whether the page draws this annotation's kept text highlighted, as a claim: a
+    /// highlight's claim and a suggested edit's visible text — everything but a point
+    /// comment, which keeps no text. The one answer the body
+    /// tags, the table cells and the export all take.
+    pub(crate) fn highlights_text(&self) -> bool {
+        self.kind != AnnKind::Comment
     }
 }
 
@@ -238,6 +254,8 @@ struct Parsed {
     /// `(comment-body original range, extracted text)`, if the construct carries a
     /// comment.
     comment: Option<(Range<usize>, String)>,
+    /// A substitution's old side (original range); `None` for every other kind.
+    old: Option<Range<usize>>,
 }
 
 /// Every fixed string [`extract`] has to locate, indexed ONCE per pass.
@@ -391,6 +409,22 @@ fn match_pair(
     Some((content, close_at + close.len()))
 }
 
+/// The `{>>…<<}` immediately after a construct ending at `end`, which binds to it as its
+/// comment or note, and where the construct then ends. A highlight and every suggested
+/// edit take one; nothing adjacent leaves `end` where it was.
+fn bind_note(
+    source: &str,
+    idx: &DelimIndex,
+    end: usize,
+) -> (Option<(Range<usize>, String)>, usize) {
+    if source[end..].starts_with(COMMENT_OPEN) {
+        if let Some((body, cend)) = match_pair(source, idx, end, COMMENT_OPEN, COMMENT_CLOSE) {
+            return (Some((body.clone(), source[body].to_string())), cend);
+        }
+    }
+    (None, end)
+}
+
 /// Attempt to parse a construct at `i` (which points at a `{`). Returns `None`
 /// when the bytes at `i` are not a well-formed CriticMarkup construct — the caller
 /// then treats the `{` as literal text.
@@ -398,20 +432,14 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
     let rest = &source[i..];
 
     if rest.starts_with(HL_OPEN) {
-        let (content, mut end) = match_pair(source, idx, i, HL_OPEN, HL_CLOSE)?;
-        // An immediately-adjacent {>>…<<} binds to the highlight as its comment.
-        let mut comment = None;
-        if source[end..].starts_with(COMMENT_OPEN) {
-            if let Some((body, cend)) = match_pair(source, idx, end, COMMENT_OPEN, COMMENT_CLOSE) {
-                comment = Some((body.clone(), source[body].to_string()));
-                end = cend;
-            }
-        }
+        let (content, end) = match_pair(source, idx, i, HL_OPEN, HL_CLOSE)?;
+        let (comment, end) = bind_note(source, idx, end);
         return Some(Parsed {
             kind: AnnKind::Highlight,
             span: i..end,
             keep: Some(content),
             comment,
+            old: None,
         });
     }
 
@@ -422,32 +450,37 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
             span: i..end,
             keep: None,
             comment: Some((body.clone(), source[body].to_string())),
+            old: None,
         });
     }
 
     if rest.starts_with(INS_OPEN) {
         let (content, end) = match_pair(source, idx, i, INS_OPEN, INS_CLOSE)?;
+        let (comment, end) = bind_note(source, idx, end);
         return Some(Parsed {
             kind: AnnKind::Insertion,
             span: i..end,
             keep: Some(content),
-            comment: None,
+            comment,
+            old: None,
         });
     }
 
     if rest.starts_with(DEL_OPEN) {
         let (content, end) = match_pair(source, idx, i, DEL_OPEN, DEL_CLOSE)?;
+        let (comment, end) = bind_note(source, idx, end);
         return Some(Parsed {
             kind: AnnKind::Deletion,
             span: i..end,
             keep: Some(content),
-            comment: None,
+            comment,
+            old: None,
         });
     }
 
     if rest.starts_with(SUB_OPEN) {
         let (content, end) = match_pair(source, idx, i, SUB_OPEN, SUB_CLOSE)?;
-        // Substitution requires `~>`; keep only the "new" side visible in v1.
+        // Substitution requires `~>`; the page keeps only the "new" side.
         //
         // Indexed, not `source[content].find(SUB_ARROW)`. The `?` on a MISSING
         // arrow is what made the scan quadratic: the construct is rejected, the
@@ -457,11 +490,13 @@ fn try_parse(source: &str, idx: &DelimIndex, i: usize) -> Option<Parsed> {
         // main thread, as the closers' scan-to-EOF (QA round 3 D-2, R3).
         let arrow_at = idx.next_within(SUB_ARROW, &content)?;
         let new_range = arrow_at + SUB_ARROW.len()..content.end;
+        let (comment, end) = bind_note(source, idx, end);
         return Some(Parsed {
             kind: AnnKind::Substitution,
             span: i..end,
             keep: Some(new_range),
-            comment: None,
+            comment,
+            old: Some(content.start..arrow_at),
         });
     }
 
@@ -520,6 +555,7 @@ pub(crate) fn extract(source: &str) -> Extraction {
             cleaned_content,
             src_comment_body: p.comment.as_ref().map(|(r, _)| r.clone()),
             comment: p.comment.map(|(_, t)| t),
+            src_old: p.old,
         });
         cursor = p.span.end;
     }
@@ -558,13 +594,85 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_keep_their_visible_text_inert() {
+    fn suggestions_keep_their_visible_text() {
         assert_eq!(extract("say {++hello++} there").cleaned, "say hello there");
         assert_eq!(extract("the {--old--} way").cleaned, "the old way");
         assert_eq!(extract("go {~~left~>right~~} now").cleaned, "go right now");
     }
 
     // ---- annotation metadata ---------------------------------------------
+
+    #[test]
+    fn a_suggested_replacement_binds_its_note_and_records_its_old_side() {
+        // TDD 17.71: the note after a suggestion is its note, not a point comment of its
+        // own, and the old side is located for Remove to keep.
+        let src = "a {~~,~>:~~}{>>colon<<} b";
+        let e = extract(src);
+        assert_eq!(e.cleaned, "a : b");
+        assert_eq!(e.annotations.len(), 1, "{:?}", e.annotations);
+        let s = &e.annotations[0];
+        assert_eq!(s.kind, AnnKind::Substitution);
+        assert_eq!(s.comment.as_deref(), Some("colon"));
+        assert_eq!(
+            &src[s.src_span.start.raw()..s.src_span.end.raw()],
+            "{~~,~>:~~}{>>colon<<}"
+        );
+        assert_eq!(&src[s.src_old.clone().unwrap()], ",");
+        assert_eq!(&src[s.src_comment_body.clone().unwrap()], "colon");
+        let sides = crate::annotate::suggestion_sides(s).unwrap();
+        assert_eq!(
+            (&src[sides.old.unwrap()], &src[sides.new.unwrap()]),
+            (",", ":")
+        );
+        // Either side may be empty.
+        let src = "x {~~gone~>~~} y {~~~>added~~} z";
+        let sides: Vec<_> = extract(src)
+            .annotations
+            .iter()
+            .map(|a| {
+                let sides = crate::annotate::suggestion_sides(a).unwrap();
+                (
+                    src[sides.old.unwrap()].to_string(),
+                    src[sides.new.unwrap()].to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sides,
+            [
+                ("gone".into(), String::new()),
+                (String::new(), "added".into())
+            ]
+        );
+        assert!(extract(src).annotations.iter().all(Annotation::is_listed));
+    }
+
+    #[test]
+    fn an_addition_or_deletion_binds_its_note_and_locates_its_text() {
+        // TDD 17.71: an addition has only a side to add, a deletion only one to remove;
+        // each takes the note right after it, and the page keeps the text either way.
+        let src = "a {++more++}{>>why<<} b {--less--} c";
+        let e = extract(src);
+        assert_eq!(e.cleaned, "a more b less c");
+        let [add, del] = &e.annotations[..] else {
+            panic!("{:?}", e.annotations);
+        };
+        assert_eq!(
+            (add.kind, add.comment.as_deref()),
+            (AnnKind::Insertion, Some("why"))
+        );
+        assert_eq!(
+            (del.kind, del.comment.as_deref()),
+            (AnnKind::Deletion, None)
+        );
+        let add_sides = crate::annotate::suggestion_sides(add).unwrap();
+        assert_eq!(add_sides.old, None);
+        assert_eq!(&src[add_sides.new.unwrap()], "more");
+        let del_sides = crate::annotate::suggestion_sides(del).unwrap();
+        assert_eq!(&src[del_sides.old.unwrap()], "less");
+        assert_eq!(del_sides.new, None);
+        assert!(e.annotations.iter().all(Annotation::is_listed));
+    }
 
     #[test]
     fn highlight_records_kind_span_and_comment() {

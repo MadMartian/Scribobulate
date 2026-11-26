@@ -275,7 +275,7 @@ impl<'a> Prepared<'a> {
         let ann_highlights = extraction
             .annotations
             .iter()
-            .filter(|a| a.kind == crate::annotate::AnnKind::Highlight)
+            .filter(|a| a.highlights_text())
             .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
             .collect();
         let palette = Palette::for_theme(&theme);
@@ -888,7 +888,18 @@ fn build_markers(
         // N1-phase-2 boundary: the marker pipeline (`MarkerSource`, `codeview`,
         // `cells`) works in raw `usize`, so unwrap the typed `Annotation` ranges to
         // `.raw()` here. `anchor_cleaned` is a cleaned byte offset (→ buffer offset).
+        let mut suggestion = None;
         let (anchor_cleaned, claim, src_content) = match ann.kind {
+            AnnKind::Substitution | AnnKind::Insertion | AnnKind::Deletion => {
+                let (Some(sides), Some(s)) = (
+                    crate::annotate::suggestion_sides(ann),
+                    crate::annotate::Suggestion::of(original, ann),
+                ) else {
+                    continue;
+                };
+                suggestion = Some((s, sides.old));
+                (ann.cleaned_content.end.raw(), None, sides.new)
+            }
             AnnKind::Highlight => {
                 // The claim is kept verbatim, so its cleaned byte length equals its
                 // original byte length; it begins just past "{==".
@@ -903,9 +914,8 @@ fn build_markers(
                 // here is a process abort — no `catch_unwind` on the app path),
                 // and a range that is merely off a char boundary panics on the
                 // slice. `saturating_sub` + `.get()` make a malformed annotation
-                // render as an empty claim rather than kill the window, which is
-                // the same degradation the `_ => continue` arm below already
-                // applies to kinds it cannot handle.
+                // render as an empty claim rather than kill the window, as a
+                // suggested edit whose sides cannot be read yields no marker above.
                 let cleaned_len = hi.saturating_sub(lo);
                 (
                     hi,
@@ -918,14 +928,14 @@ fn build_markers(
                 )
             }
             AnnKind::Comment => (crate::annotate::chip_anchor(original, ann), None, None),
-            _ => continue,
         };
         // A bare highlight has no comment yet: its comment is empty and its "body" the
         // empty range just past the closing `==}`, where Edit writes `{>>…<<}`
         // (TDD 17.67). Every other listed annotation carries both.
         let (comment, body) = match (ann.comment.clone(), ann.src_comment_body.clone()) {
             (Some(comment), Some(body)) => (comment, body),
-            _ if ann.kind == AnnKind::Highlight => {
+            // A suggested edit without a note is in the same position.
+            _ if ann.highlights_text() => {
                 let end = ann.src_span.end.raw();
                 (String::new(), end..end)
             }
@@ -951,11 +961,13 @@ fn build_markers(
             anchor: cleaned_offset_to_buf(anchor_cleaned, cleaned, hl_evs),
             comment,
             claim,
+            suggestion: suggestion.as_ref().map(|(s, _)| s.clone()),
             source: crate::codeview::MarkerSource {
                 construct,
                 src_content,
                 src_comment_body: body,
                 cleaned_content: ann.cleaned_content.start.raw()..ann.cleaned_content.end.raw(),
+                src_old: suggestion.and_then(|(_, old)| old),
             },
             cell_widget: None,
             cell_table_anchor: None,
@@ -1023,7 +1035,7 @@ fn collect_highlight_ranges(
 ) -> Vec<crate::span::BufferSpan> {
     let mut ranges = Vec::new();
     for ann in annotations {
-        if ann.kind != crate::annotate::AnnKind::Highlight {
+        if !ann.highlights_text() {
             continue;
         }
         ranges.extend(highlight_tag_ranges(
@@ -1233,6 +1245,38 @@ mod pure_tests {
     }
 
     #[test]
+    fn a_suggested_replacement_has_a_marker_carrying_both_sides() {
+        // TDD 17.71/17.72: one marker beside the new text, the change for its card, the
+        // note as its comment (or an empty one Edit can write), and both sides located
+        // for Accept edit (new) and Remove (old).
+        let original = "Dear sir{~~,~>:~~}{>>colon<<} hi {~~a~>b~~}";
+        let ex = crate::annotate::extract(original);
+        assert_eq!(ex.cleaned, "Dear sir: hi b");
+        let evs = [(0usize, ex.cleaned.len(), 0i32, ex.cleaned.len() as i32)];
+        let markers = build_markers(original, &ex.cleaned, &ex.annotations, &evs);
+        assert_eq!(markers.len(), 2);
+        let m = &markers[0];
+        assert_eq!(m.anchor, 9, "beside the end of the new text");
+        assert_eq!(m.comment, "colon");
+        assert_eq!(m.claim, None);
+        assert_eq!(
+            m.suggestion,
+            Some(crate::annotate::Suggestion {
+                old: Some(",".into()),
+                new: Some(":".into())
+            })
+        );
+        let src = |r: &Option<std::ops::Range<usize>>| &original[r.clone().unwrap()];
+        assert_eq!(src(&m.source.src_old), ",");
+        assert_eq!(src(&m.source.src_content), ":");
+        assert_eq!(&original[m.source.src_comment_body.clone()], "colon");
+        // No note: an empty comment whose body sits just past the construct.
+        let end = original.len();
+        assert_eq!(markers[1].comment, "");
+        assert_eq!(markers[1].source.src_comment_body, end..end);
+    }
+
+    #[test]
     fn build_markers_emits_one_per_commented_annotation() {
         let cleaned = "the earth is flat here";
         // The ORIGINAL the src_span below indexes: "{==flat==}" at 13..23 and
@@ -1246,6 +1290,7 @@ mod pure_tests {
                 ..crate::span::CleanedByteOffset::new(17),
             src_comment_body: Some(16..20),
             comment: Some("note".into()),
+            src_old: None,
         };
         let evs = [(0usize, 22usize, 0i32, 22i32)];
         let markers = build_markers(original, cleaned, std::slice::from_ref(&ann), &evs);
@@ -2242,6 +2287,27 @@ mod gtk_integration_tests {
             !buf.iter_at_offset(flat + 4).has_tag(&tag),
             "the space after the claim is not highlighted"
         );
+    }
+
+    /// TDD 17.71: a suggested replacement reads its new text, highlighted exactly like a
+    /// claim; its old side and its note are nowhere on the page.
+    #[gtktest::test]
+    fn a_suggested_replacement_highlights_its_new_text_only() {
+        let md = "the earth is {~~flat~>round~~}{>>fixed<<} ok";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let text = buffer_slice(buf);
+        assert_eq!(text, "the earth is round ok", "cleaned buffer text");
+        let tag = buf
+            .tag_table()
+            .lookup("annotation-highlight")
+            .expect("highlight tag exists");
+        let at = char_off(&text, "round");
+        let tagged: Vec<bool> = (at - 1..at + 6)
+            .map(|off| buf.iter_at_offset(off).has_tag(&tag))
+            .collect();
+        assert_eq!(tagged, [false, true, true, true, true, true, false]);
+        assert_eq!(products.markers.len(), 1, "one margin marker");
     }
 
     /// The same "exactly the claim" contract on a run whose rendered length DIFFERS

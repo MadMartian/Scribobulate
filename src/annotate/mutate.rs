@@ -950,6 +950,53 @@ mod tests {
     /// end-to-end test passes even with this floor removed. Each defense needs a
     /// guard that fails when THAT defense alone is taken away.
     #[test]
+    fn accepting_or_removing_a_suggestion_keeps_one_side_and_drops_its_note() {
+        // TDD 17.73 / 17.74: the whole construct, note included, becomes the side the
+        // choice keeps — accepting keeps what would come, removing keeps what would go.
+        let settle = |src: &str| {
+            let ann = &super::super::extract(src).annotations[0];
+            let sides = super::super::suggestion_sides(ann).unwrap();
+            let span = ann.src_span.start.raw()..ann.src_span.end.raw();
+            (
+                remove_annotation(src, span.clone(), sides.new).unwrap(),
+                remove_annotation(src, span, sides.old).unwrap(),
+            )
+        };
+        for (src, accepted, removed) in [
+            (
+                "Dear sir{~~,~>:~~}{>>colon<<} hello",
+                "Dear sir: hello",
+                "Dear sir, hello",
+            ),
+            (
+                "Dear sir{~~,~>:~~} hello",
+                "Dear sir: hello",
+                "Dear sir, hello",
+            ),
+            (
+                "one {++more ++}{>>add<<}thing",
+                "one more thing",
+                "one thing",
+            ),
+            (
+                "one {--less --}{>>cut<<}thing",
+                "one thing",
+                "one less thing",
+            ),
+            // An empty side keeps nothing in place.
+            ("a {~~gone~>~~} b", "a  b", "a gone b"),
+            // A deletion of a whole paragraph takes its line and blank line with it.
+            (
+                "Keep.\n\n{--Drop this.--}\n\nAfter.\n",
+                "Keep.\n\nAfter.\n",
+                "Keep.\n\nDrop this.\n\nAfter.\n",
+            ),
+        ] {
+            assert_eq!(settle(src), (accepted.into(), removed.into()), "{src:?}");
+        }
+    }
+
+    #[test]
     fn remove_is_total_against_a_range_the_source_cannot_hold() {
         let src = "alpha {==beta==}";
         // Past the end.

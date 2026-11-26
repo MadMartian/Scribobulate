@@ -113,12 +113,22 @@ fn hitbox_count(view: &CodePreviewView) -> usize {
 /// test driving the real UI has no forwarded handle by design: walking is how it stays
 /// an honest end-to-end test of what the user's pointer actually reaches.
 fn find_descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {
+    find_descendant_where(root, |_: &T| true)
+}
+
+/// The first descendant `T` that `keep` accepts.
+fn find_descendant_where<T: IsA<gtk::Widget>>(
+    root: &impl IsA<gtk::Widget>,
+    keep: impl Fn(&T) -> bool + Copy,
+) -> Option<T> {
     let mut child = root.as_ref().first_child();
     while let Some(c) = child {
         if let Ok(t) = c.clone().downcast::<T>() {
-            return Some(t);
+            if keep(&t) {
+                return Some(t);
+            }
         }
-        if let Some(found) = find_descendant::<T>(&c) {
+        if let Some(found) = find_descendant_where(&c, keep) {
             return Some(found);
         }
         child = c.next_sibling();
@@ -1132,6 +1142,188 @@ fn a_chip_stays_under_its_click_zone_when_the_preview_is_scrolled_sideways() {
     assert!(
         amber_at(&after, w, ax, ay),
         "scrolled 150px sideways, the chip is no longer painted under its click zone"
+    );
+    crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
+}
+
+/// TDD 17.71–17.74: a suggested edit's chip opens a card that spells out the change —
+/// what goes struck through, what comes in italics, each quoted after its label — and
+/// offers Accept edit beside Remove. Each button rewrites the document to one side, note
+/// and all, through the same path the window applies every card's edit by. Every kind:
+/// a replacement, an addition and a deletion.
+#[gtktest::test]
+fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
+    use gtk::subclass::prelude::*;
+    let cases: [(&str, &[&str], &str, &str); 3] = [
+        (
+            "Dear sir{~~,~>:~~}{>>colon<<} hello.\n",
+            &["Replace: \u{201c},\u{201d}", "With: \u{201c}:\u{201d}"],
+            "Dear sir: hello.\n",
+            "Dear sir, hello.\n",
+        ),
+        (
+            "One {++more ++}{>>add<<}thing.\n",
+            &["Added: \u{201c}more\u{201d}"],
+            "One more thing.\n",
+            "One thing.\n",
+        ),
+        (
+            "One {--less --}{>>cut<<}thing.\n",
+            &["Removed: \u{201c}less\u{201d}"],
+            "One thing.\n",
+            "One less thing.\n",
+        ),
+    ];
+    for (src, lines, accepted, removed) in cases {
+        for (button, expected) in [("Accept edit", accepted), ("Remove", removed)] {
+            let pane = crate::preview::render(
+                None,
+                src,
+                None,
+                1.0,
+                false,
+                &crate::fold::FoldState::default(),
+            );
+            let view = view_of(pane.clone());
+            let win = gtk::Window::new();
+            win.set_default_size(700, 400);
+            win.set_child(Some(&pane));
+            win.present();
+            // precondition: the suggestion has a chip
+            settle("the suggestion's chip to paint", || {
+                hitbox_count(&view) == 1
+            });
+
+            let doc = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+            doc.set_text(src);
+            view.set_annotation_sink({
+                let doc = doc.clone();
+                std::rc::Rc::new(move |e: AnnotationEdit| {
+                    crate::window::apply_annotation_edit(&doc, e)
+                })
+            });
+            assert!(view.open_stepped_marker_popover(0, Direction::Next));
+            // precondition: the card opened
+            settle("the card to open", || view.has_open_marker_popover());
+            let card = view
+                .imp()
+                .marker_card
+                .borrow()
+                .clone()
+                .expect("the card exists once opened");
+
+            for line in lines {
+                let label = find_descendant_where::<gtk::Label>(&card, |l| l.text() == *line)
+                    .unwrap_or_else(|| panic!("{src:?}: the card reads {line:?}"));
+                let markup = label.label();
+                let tag = if line.starts_with("Replace") || line.starts_with("Removed") {
+                    "<s>"
+                } else {
+                    "<i>"
+                };
+                assert!(markup.contains(tag), "{src:?}: {markup}");
+            }
+            assert!(
+                find_button(&card, "Edit").is_some(),
+                "the note stays editable (17.72)"
+            );
+
+            find_button(&card, button)
+                .unwrap_or_else(|| panic!("the card offers {button}"))
+                .emit_clicked();
+            let text = || crate::saferizer::BufferText::of(&doc).into_string();
+            settle("the button to rewrite the document", || text() != src);
+            assert_eq!(text(), expected, "{src:?} {button}");
+            crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
+        }
+    }
+}
+
+/// TDD 17.71 inside a table (Document Rendering CAM row 2): a suggested replacement in
+/// a cell has its new text highlighted in the cell and its own margin marker, as a claim
+/// there does.
+#[gtktest::test]
+fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
+    const SRC: &str = "| word |\n|---|\n| say {~~hi~>hello~~} there |\n";
+    let pane = crate::preview::render(
+        None,
+        SRC,
+        None,
+        1.0,
+        false,
+        &crate::fold::FoldState::default(),
+    );
+    let view = view_of(pane.clone());
+    let win = gtk::Window::new();
+    win.set_default_size(700, 400);
+    win.set_child(Some(&pane));
+    win.present();
+    settle("the cell's chip to paint", || hitbox_count(&view) == 1);
+    let open = crate::renderer::ann_hl_open(&crate::theme::active());
+    let cell = find_descendant_where::<gtk::Label>(&view, |l| l.label().contains(&open))
+        .expect("a cell carries the annotation highlight");
+    assert_eq!(cell.text(), "say hello there");
+    crate::testpump::destroy_after_tooltip_delay(&win, || ());
+}
+
+/// TDD 17.72: however long the text a suggestion replaces, its card still shows "With:"
+/// without the reader scrolling. Each side is capped on its own; under one shared cap a
+/// long old side pushed the new one out of sight.
+#[gtktest::test]
+fn a_long_suggestion_still_shows_what_it_is_replaced_with() {
+    use gtk::subclass::prelude::*;
+    let long = "We are hoping to maybe deliver the export feature sometime next week, \
+                or possibly the week after, depending on how the testing goes and \
+                whether anything else comes up in the meantime that needs attention";
+    let src = format!("{{~~{long}~>Friday~~}} it is.\n");
+    let pane = crate::preview::render(
+        None,
+        &src,
+        None,
+        1.0,
+        false,
+        &crate::fold::FoldState::default(),
+    );
+    let view = view_of(pane.clone());
+    let win = gtk::Window::new();
+    win.set_default_size(700, 400);
+    win.set_child(Some(&pane));
+    win.present();
+    settle("the suggestion's chip to paint", || {
+        hitbox_count(&view) == 1
+    });
+    view.set_annotation_sink(std::rc::Rc::new(|_e: AnnotationEdit| {}));
+    assert!(view.open_stepped_marker_popover(0, Direction::Next));
+    settle("the card to open", || view.has_open_marker_popover());
+    let card = view
+        .imp()
+        .marker_card
+        .borrow()
+        .clone()
+        .expect("the card exists once opened");
+    let old = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
+        .expect("the old side is shown");
+    let new = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<i>"))
+        .expect("the new side is shown");
+    settle("the card to lay out", || {
+        new.height() > 0 && old.height() > 0
+    });
+    let scroller = |l: &gtk::Label| {
+        l.ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .expect("each side is capped in a scroller")
+    };
+    // precondition: the old side really is long enough to be capped
+    let old_sw = scroller(&old);
+    assert!(
+        old_sw.vadjustment().upper() > old_sw.vadjustment().page_size(),
+        "the fixture's old side must overflow its cap"
+    );
+    let new_sw = scroller(&new);
+    assert_ne!(old_sw, new_sw, "each side has a cap of its own");
+    assert!(
+        new_sw.vadjustment().upper() <= new_sw.vadjustment().page_size(),
+        "\"With:\" is shown whole, unscrolled"
     );
     crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
 }

@@ -1421,22 +1421,18 @@ pub(crate) mod gtk_integration_tests {
         });
     }
 
-    /// The annotations viewer lists exactly the highlights and point comments (TDD
-    /// 20.1/20.2, 17.67): a bare highlight is listed beside the commented ones, and the
-    /// inert suggested-edit kinds are excluded, so a document with a commented highlight,
-    /// a bare one, an insertion and a point comment shows three rows.
+    /// The annotations viewer lists every annotation (TDD 20.1/20.2, 17.67): a commented
+    /// highlight, a bare one, each kind of suggested edit and a point comment — six rows.
     #[gtktest::test]
-    fn the_annotations_viewer_lists_highlights_and_comments_but_not_inert_kinds() {
+    fn the_annotations_viewer_lists_every_kind_of_annotation() {
         let app = test_app("com.extollit.scribobulate.integrationtest.annlist");
-        let md = "a {==c1==}{>>note one<<} b {==bare==} c {++ins++} d {>>point<<} e";
+        let md = "a {==c1==}{>>note one<<} b {==bare==} c {++ins++} d {--del--} \
+                  e {~~old~>new~~} f {>>point<<} g";
         let win = new_window(&app, "IT-ann", md, None);
         let ch = winstate::chrome(&win).expect("chrome registered");
         let lv = list_view_of(&ch.annotations_scroller).expect("annotations list is a ListView");
         let n = lv.model().expect("selection model").n_items();
-        assert_eq!(
-            n, 3,
-            "commented highlight, bare highlight and point comment listed; inert kind excluded"
-        );
+        assert_eq!(n, 6, "every annotation in the document has a row");
     }
 
     /// The four-state sidebar rule (TDD 20.9): the two panes toggle independently, and
@@ -1809,35 +1805,6 @@ pub(crate) mod gtk_integration_tests {
                 total - split
             );
         }
-    }
-
-    /// Viewer navigation resolves to the correct chip by SPAN IDENTITY, even with a
-    /// inert kind interposed (TDD 20.6): each listed annotation's `src_span` start
-    /// resolves to its own margin-chip index via `marker_index_for_src`.
-    #[gtktest::test]
-    fn viewer_navigation_resolves_chips_by_identity() {
-        let app = test_app("com.extollit.scribobulate.integrationtest.annident");
-        let md = "a {==c1==}{>>note one<<} b {++ins++} c {==c2==}{>>note two<<} d";
-        let win = new_window(&app, "IT-ident", md, None);
-        let entries = crate::annotations::extract_entries(md);
-        assert_eq!(
-            entries.len(),
-            2,
-            "two annotations; the insertion is not listed"
-        );
-        let view = preview_text_view(&win)
-            .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
-            .expect("preview view in preview mode");
-        // Each entry's identity resolves to its own chip index, in order — the inert
-        // insertion has no chip and does not perturb the mapping.
-        assert_eq!(
-            view.marker_index_for_src(entries[0].src_span.start.raw()),
-            Some(0)
-        );
-        assert_eq!(
-            view.marker_index_for_src(entries[1].src_span.start.raw()),
-            Some(1)
-        );
     }
 
     /// In split mode, activating a viewer row moves the editor CARET onto the annotation
