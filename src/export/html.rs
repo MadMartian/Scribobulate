@@ -760,6 +760,7 @@ fn chrome_rules(p: &Palette, t: &Theme) -> String {
     let _ = write!(
         css,
         ".claim {{ background: {claim}; }}
+.claim code {{ background: none; }}
 .comment {{ display: block; border-left: {bar_w}px solid {bar}; margin: 0.4em 0 0.4em 1rem;
   padding-left: {bar_gap}px; font-size: 0.9em; opacity: 0.85; }}
 .missing-image {{ border: 1px dashed {rule}; padding: 0.2em 0.4em; opacity: 0.75; }}
@@ -1718,6 +1719,31 @@ mod html_sink_tests {
         assert!(
             claim.contains("#00ff0080"),
             "the annotation claim's wash lost its alpha — exported `{claim}`"
+        );
+    }
+
+    /// TDD 25.13: inline code inside a claim shows the claim's highlight. The claim's
+    /// span does wrap the `<code>`, but a `<code>`'s chip is opaque and paints over its
+    /// parent's wash, so the sheet must clear the chip inside a claim — and with a rule
+    /// that outranks every surface's chip rule (`h1 code`, `blockquote code`: element
+    /// selectors), which a class selector does regardless of source order.
+    #[test]
+    fn inline_code_inside_a_claim_drops_its_chip_in_the_exported_sheet() {
+        let (palette, theme) = style();
+        let css = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+        assert!(
+            css.lines()
+                .any(|l| l.trim() == ".claim code { background: none; }"),
+            "no rule clears the code chip inside a claim — the chip hides the highlight:\n{css}"
+        );
+        assert!(
+            !css.lines()
+                .any(|l| l.split_once('{').is_some_and(|(sel, _)| sel
+                    .split(',')
+                    .any(|s| s.contains(".claim")
+                        && s.contains("code")
+                        && s.trim() != ".claim code"))),
+            "another rule targets code in a claim and may contradict the clearing rule"
         );
     }
 

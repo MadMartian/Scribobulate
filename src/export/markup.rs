@@ -89,13 +89,17 @@ fn emit_markup(
                 tail,
                 inner: v,
             } => {
+                // No chip inside a claim: Pango paints a nested span's background over
+                // its parent's, so an opaque chip would hide the claim's wash on the
+                // code it holds. Without one the code shows the claim's highlight, as
+                // the preview draws it (TDD 25.13).
                 span(
                     out,
                     &crate::pangospan::annotation_claim(theme),
                     v,
                     doc,
                     theme,
-                    chip,
+                    None,
                 );
                 // The comment as a margin note beside its claim — the in-file review
                 // loop is the product thesis, and an export that drops the review is
@@ -374,24 +378,37 @@ mod markup_tests {
     }
 
     fn claim_markup(md: &str) -> String {
+        claim_markup_on(md, None)
+    }
+
+    fn claim_markup_on(md: &str, chip: Option<gtk::gdk::RGBA>) -> String {
         let theme = crate::theme::Themes::builtin().resolve("system");
         let d = doc::build(md, &RenderOptions::default());
         let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
             panic!("expected one paragraph: {:?}", d.blocks);
         };
-        inline_markup(inlines, &d, &theme, None)
+        inline_markup(inlines, &d, &theme, chip)
     }
 
-    /// TDD 25.13: inline code inside a claim is drawn inside the claim's highlight.
+    /// TDD 25.13: inline code inside a claim is drawn inside the claim's highlight,
+    /// and its chip does not paint over that highlight. The surface passes a REAL
+    /// chip: with `None` the code span carries no background whatever the claim
+    /// does, which is how this test once passed while the export hid the highlight.
     #[test]
     fn inline_code_inside_a_claim_is_inside_its_highlight_in_pdf_markup() {
         let theme = crate::theme::Themes::builtin().resolve("system");
+        let chip = gtk::gdk::RGBA::new(0.92, 0.92, 0.92, 1.0);
         let claim = crate::pangospan::annotation_claim(&theme).open;
-        let code = crate::pangospan::code(None).open;
-        let out = claim_markup("{==see `code` here==}{>>c<<}\n");
+        let bare = crate::pangospan::code(None).open;
+        let chipped = crate::pangospan::code(Some(chip)).open;
+        let out = claim_markup_on("{==see `code` here==}{>>c<<} and `out`\n", Some(chip));
         assert!(
-            out.contains(&format!("{claim}{code}")),
-            "`code` is outside the claim highlight: {out}"
+            out.contains(&format!("{claim}{bare}code")),
+            "`code` inside the claim must carry no chip of its own: {out}"
+        );
+        assert!(
+            out.contains(&format!("{chipped}out")),
+            "`out`, outside any claim, keeps its chip: {out}"
         );
     }
 
