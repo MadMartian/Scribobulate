@@ -3235,7 +3235,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.70 A changed comment closes only when the reader says so
 - **Given** an annotation card with its comment field open — a new annotation from the preview or the editor, or an Edit of an existing one — and the reader has changed the text from what the card opened with (empty for a new one, the stored comment for an Edit)
 - **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
-- **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
+- **Then** the card stays open with the changed text, and closes only on Escape while the card has focus, the corner ×, Cancel, or a commit with Enter or Save
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
 
 ## 18. Preview reading themes

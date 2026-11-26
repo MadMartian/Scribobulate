@@ -66,6 +66,7 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
+| H | Any | Production | A window restored squeezed below its sidebar sections' minimum and left a while before being grown keeps the squeezed sidebar split, and quitting then saves it over the one the reader chose | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 
@@ -409,6 +410,34 @@ out by the operator's cap on that machine.
 to the two tests a log line on failure of the editor's vadjustment value, upper and page
 size and the settle helper's outcome, so one CI failure says whether the park was never
 reached, was undone, or the settle gave up.
+
+## H. A window restored squeezed keeps the squeezed sidebar split if grown late
+
+**Severity**: Low (a layout preference is lost; no document content is affected).
+
+**Observed** (2026-11-26, Linux, operator's X11/KDE session, GTK 4.6.9, v1.0.1 release
+pass, MANUAL-TEST 20.21b): set a window's sidebar divider (outline over annotations), shrink
+the window until a section stops shrinking, quit, relaunch. The window restores at its
+squeezed size. Grown again within about 2 s, the divider returns to the chosen ratio. Left
+about 15 s before growing, it keeps the squeezed position (divider at y 588 of 900 instead
+of 707), and the next quit writes that fraction (`sidebar_split = 0.633`) over the chosen
+one (0.785), so the choice is lost. 3 of 3 runs with the long wait, 0 of 3 with the short
+one. The same shrink-and-grow inside one session, with no restart, restores correctly.
+Filed `Any` because the split's bookkeeping is shared code; Windows and macOS have not been
+driven.
+
+**Suspected mechanism** (not measured): only a divider move the reader makes is stored, and
+a move that arrives with a sidebar height change is taken for GTK's clamp. After a restore
+at the squeezed size, something late — a deferred allocation or the session's own restore
+pass settling — moves the divider without a height change in the same turn, so it reads as
+the reader's and is stored.
+
+**Mitigation options**:
+- Find the late move (log every stored write with its cause on a restored, squeezed window)
+  and exclude it the way the clamp is excluded.
+- Store the reader's fraction only from the divider's own drag gesture, never from a
+  position notify.
+- Accept: the case needs a restart at a squeezed size and a wait before growing.
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
