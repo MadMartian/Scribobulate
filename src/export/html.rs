@@ -1766,18 +1766,20 @@ mod html_sink_tests {
     fn inline_code_inside_a_claim_drops_its_chip_in_the_exported_sheet() {
         let (palette, theme) = style();
         let css = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+        // Every claim class — the highlight and both suggested-edit styles — since the
+        // cell and PDF paths drop the chip for each of them alike.
+        const CLEAR: &str =
+            ".claim code, .claim-addition code, .claim-deletion code { background: none; }";
         assert!(
-            css.lines()
-                .any(|l| l.trim() == ".claim code { background: none; }"),
+            css.lines().any(|l| l.trim() == CLEAR),
             "no rule clears the code chip inside a claim — the chip hides the highlight:\n{css}"
         );
         assert!(
             !css.lines()
                 .any(|l| l.split_once('{').is_some_and(|(sel, _)| sel
                     .split(',')
-                    .any(|s| s.contains(".claim")
-                        && s.contains("code")
-                        && s.trim() != ".claim code"))),
+                    .any(|s| s.contains(".claim") && s.contains("code"))
+                    && l.trim() != CLEAR)),
             "another rule targets code in a claim and may contradict the clearing rule"
         );
     }
