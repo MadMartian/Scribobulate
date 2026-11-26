@@ -383,6 +383,11 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
 - Launch; open a document; About shows the release version and the licence notices
   resolve.
 - The file association opens a `.md` from the file manager.
+- The installed binary's `--help` prints the app's own usage — not the toolkit's
+  generic help — and it lists every switch README.md and TDD §8 offer a user, and
+  nothing a user cannot pass. Read it against those documents, not against the code:
+  the code's own test only proves the help matches the code. (v1.0.1 found `--help`
+  answered by GLib with none of the app's switches, unnoticed through v1.0.0.)
 - Uninstall leaves nothing behind that the installer put there.
 - The steps above run in full once per release campaign; after that, each target move
   takes the full run or the lite run by the rule below.
@@ -410,7 +415,7 @@ To confirm, list the files the diff touches (`git diff --stat <last-full-gate-9
 commit>..<target>`) and assign each to a category or to none. One file in a category
 → the full gate on every platform whose artefact it reaches. None → **gate 9 lite**:
 verify the artefact's sum, install it over the previous build, prove the version
-(`--version`) and the commit, launch once, quit once. The commit proof is the log's
+(`--version`), the help (`--help`, as above) and the commit, launch once, quit once. The commit proof is the log's
 identity line where the log carries one (Windows, macOS); where it does not (Linux),
 it is the commit found in the installed binary and the previous one absent. On macOS
 the lite run strips quarantine from its scratch copy, so it costs the operator no

@@ -271,8 +271,11 @@ fn follow_scroll_with_card(
             let Some(span) = anchor.get() else {
                 return;
             };
+            let Some(b) = bar.upgrade() else {
+                return;
+            };
             let (ew, ow, bw) = (ed.downgrade(), overlay.clone(), bar.clone());
-            follow_scroll_after_paint(ed.upcast_ref(), &slot, move || {
+            follow_scroll_after_paint(ed.upcast_ref(), b.upcast_ref(), &slot, move || {
                 let (Some(ed), Some(ov), Some(b)) = (ew.upgrade(), ow.upgrade(), bw.upgrade())
                 else {
                     return false;
@@ -593,6 +596,31 @@ mod gtk_integration_tests {
             (40..=80).contains(&moved),
             "the card must move up with its text by about the 60 px scrolled; it moved {moved} px \
              (from {before})"
+        );
+
+        // Its text scrolls out of view: the card is concealed, not closed, and not left
+        // over lines it does not belong to; it returns with its text.
+        let start = vadj.value() - 60.0;
+        crate::saferizer::scrollpos::jump(&vadj, start + 1500.0);
+        pump_until(&|| bar.opacity() == 0.0);
+        assert!(
+            bar.is_visible(),
+            "scrolling its text away must not close the card"
+        );
+        assert!(
+            bar.opacity() == 0.0 && !bar.can_target(),
+            "a card whose text is off screen must be concealed"
+        );
+        crate::saferizer::scrollpos::jump(&vadj, start);
+        pump_until(&|| bar.opacity() == 1.0);
+        assert!(
+            bar.opacity() == 1.0 && bar.can_target(),
+            "the card returns with its text"
+        );
+        assert!(
+            (bar.margin_top() - before).abs() <= 4,
+            "the card returns over its text: at {} (was {before})",
+            bar.margin_top()
         );
         win.destroy();
     }

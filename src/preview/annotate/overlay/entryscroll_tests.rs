@@ -1,6 +1,7 @@
 //! The preview's comment card through a scroll (TDD 17.25): a card the reader is
-//! writing in stays open and moves with its text. Before the fix it was placed once,
-//! on opening, and sat still while its text scrolled away.
+//! writing in stays open and moves with its text, and is concealed while its text is off
+//! screen. Before the fix it was placed once, on opening, and sat still while its text
+//! scrolled away.
 //!
 //! In its own file because `overlay.rs` is past the soft line limit.
 
@@ -89,6 +90,37 @@ fn an_open_comment_card_moves_with_its_text_when_the_preview_scrolls() {
         (40..=80).contains(&moved),
         "the card must move up with its text by about the {SCROLL_BY} px scrolled; it moved \
          {moved} px (from {before})"
+    );
+
+    // Its text scrolls out of view: the card is concealed, not closed, and not left over
+    // paragraphs it does not belong to; it returns with its text.
+    let start = vadj.value() - SCROLL_BY;
+    crate::saferizer::scrollpos::jump(&vadj, start + 1500.0);
+    let _ = until_or_for(Clock::Frame, Duration::from_secs(3), || {
+        bar.opacity() == 0.0
+    });
+    drain_for(Clock::Frame, Duration::from_millis(200));
+    assert!(
+        bar.is_visible(),
+        "scrolling its text away must not close the card"
+    );
+    assert!(
+        bar.opacity() == 0.0 && !bar.can_target(),
+        "a card whose text is off screen must be concealed"
+    );
+    crate::saferizer::scrollpos::jump(&vadj, start);
+    let _ = until_or_for(Clock::Frame, Duration::from_secs(3), || {
+        bar.opacity() == 1.0
+    });
+    drain_for(Clock::Frame, Duration::from_millis(200));
+    assert!(
+        bar.opacity() == 1.0 && bar.can_target(),
+        "the card returns with its text"
+    );
+    assert!(
+        (bar.margin_top() - before).abs() <= 4,
+        "the card returns over its text: at {} (was {before})",
+        bar.margin_top()
     );
     win.destroy();
 }

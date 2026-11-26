@@ -204,9 +204,37 @@ pub(crate) fn version_line() -> String {
     format!("scribobulate {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// Is this a `--help` / `-h` / `-?` invocation? GLib's other `--help-*` switches are not:
+/// they still reach GOption, which owns them.
+pub(crate) fn is_help_request(args: &[String]) -> bool {
+    args.iter()
+        .skip(1)
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| matches!(a.as_str(), "--help" | "-h" | "-?"))
+}
+
+/// What `--help` prints: what the app takes on its command line. GLib's own help lists
+/// none of it, because each of these switches is answered before GLib parses argv.
+pub(crate) fn usage_text() -> String {
+    format!(
+        "Usage:\n  scribobulate [OPTION…] [FILE…]\n\n\
+         Open Markdown files. A FILE may be a pattern such as *.md. A second launch opens its\n\
+         files in the Scribobulate already running.\n\n\
+         Options:\n\
+         \x20 -n, --new-instance       Start a separate Scribobulate instead of using the running one\n\
+         \x20 {switch} NAME          Use the instance called NAME, with its own windows and saved state\n\
+         \x20 -V, --version            Print the version and exit\n\
+         \x20 -h, --help               Print this help and exit\n\
+         \x20 --help-gapplication      Show the toolkit's application options\n",
+        switch = crate::instance::SWITCH,
+    )
+}
+
 #[cfg(test)]
 mod option_argument_tests {
-    use super::{carries_option_argument, is_version_request, version_line};
+    use super::{
+        carries_option_argument, is_help_request, is_version_request, usage_text, version_line,
+    };
 
     fn argv(rest: &[&str]) -> Vec<String> {
         std::iter::once("scribobulate")
@@ -269,6 +297,38 @@ mod option_argument_tests {
         assert!(!is_version_request(&argv(&["--versionx"])));
         assert!(!is_version_request(&argv(&["-v"])), "-v is not --version");
         assert!(!is_version_request(&argv(&["notes.md"])));
+    }
+
+    #[test]
+    fn help_is_recognised_in_its_spellings_and_leaves_glibs_help_family_alone() {
+        for a in ["--help", "-h", "-?"] {
+            assert!(is_help_request(&argv(&[a])), "{a}");
+        }
+        for a in ["--help-all", "--help-gapplication", "--helpx", "notes.md"] {
+            assert!(!is_help_request(&argv(&[a])), "{a}");
+        }
+        assert!(
+            !is_help_request(&argv(&["--", "--help"])),
+            "after -- it is a file"
+        );
+    }
+
+    /// The help names every switch the app answers itself, so it cannot fall behind them
+    /// the way GLib's default help did. `--probe-startup` is a packaging probe, not a
+    /// user's option, and stays out.
+    #[test]
+    fn the_usage_names_every_option_a_user_can_pass() {
+        let usage = usage_text();
+        for opt in [
+            "[FILE…]",
+            "-n, --new-instance",
+            crate::instance::SWITCH,
+            "-V, --version",
+            "-h, --help",
+        ] {
+            assert!(usage.contains(opt), "usage omits {opt}:\n{usage}");
+        }
+        assert!(!usage.contains("--probe-startup"));
     }
 
     /// The version string is taken from Cargo, never restated.

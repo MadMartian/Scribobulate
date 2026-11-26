@@ -18,7 +18,7 @@ A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
 - **Annotations.** A comment card whose text you have changed stays open until you
   cancel or save it; clicking elsewhere, moving focus or selecting other text no longer
   throws the draft away. An open card stays open, following its text, while the view
-  scrolls. A comment's margin marker stays on the pane's edge, and still opens, when the
+  scrolls, and steps out of sight while its text is off screen. A comment's margin marker stays on the pane's edge, and still opens, when the
   preview is scrolled sideways.
 - **Export.** Inline code inside an annotated claim is highlighted with the rest of the
   claim, a claim's comment follows the whole claim, and a comment with no claim is kept
@@ -26,6 +26,8 @@ A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
 - **File patterns on the command line.** A pattern such as `*.md` that no shell expanded
   opens every file it matches, and one that matches nothing says so in the window,
   instead of opening a new document under that literal name.
+- **Command-line help.** `scribobulate --help` lists the files and switches the app
+  takes, instead of the toolkit's generic help, which named none of them.
 - **Editor highlighting.** A link is highlighted as exactly itself, no longer from the
   first bracket earlier on its line (a task checkbox, say).
 - **Navigation.** Ctrl+End in the preview reaches the true end of a document that is
