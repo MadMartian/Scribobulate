@@ -5,6 +5,49 @@ anything platform-specific — and leaves out what a user cannot (refactors, tes
 register work). The release notes on GitHub copy the section for that version and add
 Known issues, Requirements and the signing disclosure.
 
+## v1.0.1 — 2026-11-26
+
+A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
+
+### Changed
+
+- New windows and tabs open on a warmer welcome page.
+
+### Fixed
+
+- **Annotations.** A comment card whose text you have changed stays open until you
+  cancel or save it; clicking elsewhere, moving focus or selecting other text no longer
+  throws the draft away. An open card stays open, following its text, while the view
+  scrolls. A comment's margin marker stays on the pane's edge, and still opens, when the
+  preview is scrolled sideways.
+- **Export.** Inline code inside an annotated claim is highlighted with the rest of the
+  claim, a claim's comment follows the whole claim, and a comment with no claim is kept
+  as a margin note instead of being dropped.
+- **File patterns on the command line.** A pattern such as `*.md` that no shell expanded
+  opens every file it matches, and one that matches nothing says so in the window,
+  instead of opening a new document under that literal name.
+- **Editor highlighting.** A link is highlighted as exactly itself, no longer from the
+  first bracket earlier on its line (a task checkbox, say).
+- **Navigation.** Ctrl+End in the preview reaches the true end of a document that is
+  still rendering, and a click during its travel no longer snaps back to the top.
+- **Window state.** The sidebar split you set survives shrinking the window until a
+  section hits its minimum, and comes back when the window grows again. A recovered tab
+  that is not in front shows its unsaved dot at once.
+- **Menus.** The Change Case row is greyed with its items, in the Edit menu and the
+  document context menu, when they are unavailable.
+
+### Platform-specific
+
+- **Linux (GTK below 4.7, e.g. Ubuntu 22.04).** Preview prose breaks at the spaces
+  between words again, rather than mid-word; only a paragraph holding a run too long to
+  fit wraps by character.
+- **Windows.** Which filenames count as devices (`nul.md`, `con.md`) is asked of
+  Windows, so a Windows release that treats them as ordinary files opens them.
+- **macOS.** Opening and closing windows no longer keeps each closed window's menu tree
+  in memory.
+- **Releases.** All four installers are attached to the GitHub release, with a
+  `SHA256SUMS.txt` beside them.
+
 ## v1.0.0 — 2026-11-14
 
 The first release. There is no previous version to diff against, so this entry is the

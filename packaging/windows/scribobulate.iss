@@ -283,8 +283,8 @@ begin
     { ShellExec itself failed -- the overwhelmingly common cause is the user
       dismissing the UAC prompt (ERROR_CANCELLED, 1223). Nothing has been
       written yet; say what is missing and why, and stop. }
-    Result := 'Scribobulate needs the Microsoft Visual C++ runtime, which this' + #13#10 +
-              'computer does not have. Installing it requires administrator' + #13#10 +
+    Result := 'Scribobulate needs a newer Microsoft Visual C++ runtime than' + #13#10 +
+              'this computer has. Installing it requires administrator' + #13#10 +
               'approval, and that was not given.' + #13#10 + #13#10 +
               'Nothing has been installed. Run Setup again and approve the' + #13#10 +
               'prompt, or install the Microsoft Visual C++ Redistributable' + #13#10 +
