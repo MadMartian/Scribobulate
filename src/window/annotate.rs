@@ -319,7 +319,7 @@ fn splice_minimal(buf: &gtk::TextBuffer, old: &str, new: &str) {
     // written straight after one just saved — a follow-up, an Edit beside it — would
     // undo together with it. The delete it now records is the second change; the
     // document text is the same either way (gtktexthistory.c `end_user_action`,
-    // `action_chain`; GTK4Rs skill).
+    // `action_chain`; GTK4Rs/AP-397).
     if start == end && old_len > 0 {
         if start > 0 {
             start -= 1;

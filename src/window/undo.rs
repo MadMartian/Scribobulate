@@ -1,4 +1,4 @@
-//! One typed seam for `GtkTextBuffer`'s undo grouping (the GTK4Rs/AP-110
+//! One typed seam for `GtkTextBuffer`'s undo grouping (GTK4Rs/AP-110 and GTK4Rs/AP-397: the
 //! undo-barrier contract).
 //!
 //! **How `GtkTextHistory` separates steps** (gtktexthistory.c, unchanged 4.6.9–4.24.1;
