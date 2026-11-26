@@ -1,18 +1,25 @@
 //! One typed seam for `GtkTextBuffer`'s undo grouping (the GTK4Rs/AP-110
 //! undo-barrier contract).
 //!
-//! `GtkTextBuffer`'s built-in undo (`GtkTextHistory`) sets an undo-group barrier
-//! on `end_user_action` — but `redo()` and `undo()` leave the history WITHOUT
-//! one. So a discrete edit made straight after a Redo merges into the redone
-//! action's undo group, and a single later Undo reverts BOTH: a silent loss of
-//! an edit. The fix is an empty `begin_user_action()`/`end_user_action()` pair
-//! flushed *before* the real edit's own user action opens — the empty pair sets
-//! the barrier, so the edit that follows is always its own discrete step
-//! regardless of what preceded it. (Empirically, `place_cursor` does NOT set the
-//! barrier; an empty user action does. An empty pair records no edit, so it
-//! neither creates a spurious undo entry nor clears the redo stack.)
+//! **How `GtkTextHistory` separates steps** (gtktexthistory.c, unchanged 4.6.9–4.24.1;
+//! researcher-read, and the two claims about the empty pair re-measured here): a user
+//! action becomes an undo step closed by a BARRIER only when it recorded two or more
+//! changes that do not merge — a delete and an insert, say. A user action that recorded
+//! ONE change is instead hoisted out of its group and pushed as if typed, so it merges
+//! with the step before it whenever the typing rules allow: an insert that begins where
+//! the previous insert ended, with no newline and no word break, joins it. And
+//! `undo()`/`redo()` leave the history without a trailing barrier, so the next edit
+//! after a Redo can merge into the redone step.
 //!
-//! That barrier flush is easy to forget: all three of the buffer's discrete-edit
+//! The empty `begin_user_action()`/`end_user_action()` pair the constructor runs first
+//! does NOT set a barrier — an empty group is discarded — and it clears the redo stack
+//! (measured; any edit that follows clears it anyway). It reopens a surviving group of
+//! two or more changes, whose close then pushes a fresh barrier; it cannot help after a
+//! hoisted single change. So an edit that must stay its own step records two changes:
+//! `window::annotate::splice_minimal` rewrites a neighbouring character with a pure
+//! insertion for exactly this reason. There is no public barrier API through 4.24.1.
+//!
+//! The pair is easy to forget: all three of the buffer's discrete-edit
 //! routines DO wrap their edit in a `begin_user_action`/`end_user_action` pair,
 //! so grepping for the obvious symbol finds nothing missing — the distinguishing
 //! feature is the *empty pair flushed first*, and it lived at only one of the
@@ -51,7 +58,8 @@ impl UndoGroup {
     /// guard's `Drop` closes the action.
     pub(crate) fn new(buf: &impl IsA<gtk::TextBuffer>) -> Self {
         let buf = buf.upcast_ref::<gtk::TextBuffer>().clone();
-        // Empty pair FIRST — this is the barrier flush the whole seam exists for.
+        // Empty pair FIRST: it re-closes a surviving multi-change group with a fresh
+        // barrier. It is NOT a barrier of its own (module doc).
         #[expect(clippy::disallowed_methods)]
         {
             buf.begin_user_action();
