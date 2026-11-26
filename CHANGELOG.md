@@ -18,8 +18,9 @@ A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
 - **Annotations.** A comment card whose text you have changed stays open until you
   cancel or save it; clicking elsewhere, moving focus or selecting other text no longer
   throws the draft away. An open card stays open, following its text, while the view
-  scrolls, and steps out of sight while its text is off screen. A comment's margin marker stays on the pane's edge, and still opens, when the
-  preview is scrolled sideways.
+  scrolls, and steps out of sight while its text is off screen. A comment's margin
+  marker stays on the pane's edge, and still opens, when the preview is scrolled
+  sideways.
 - **Export.** Inline code inside an annotated claim is highlighted with the rest of the
   claim, a claim's comment follows the whole claim, and a comment with no claim is kept
   as a margin note instead of being dropped.
