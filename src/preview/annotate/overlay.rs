@@ -385,8 +385,70 @@ pub(crate) fn position_card(
     let Some((start, end)) = view.buffer().selection_bounds() else {
         return false;
     };
-    let r0 = view.iter_location(&start);
-    let r1 = view.iter_location(&end);
+    position_card_over(view, overlay, bar, &start, &end)
+}
+
+/// [`position_card`] for a span held as buffer offsets rather than the live selection:
+/// the span the card was RAISED over, which a card holding a draft keeps after the
+/// reader has clicked or selected elsewhere (TDD 17.70). Offsets past the end clamp to
+/// it, since a reload can shorten the buffer under an open card.
+pub(crate) fn position_card_at(
+    view: &impl IsA<gtk::TextView>,
+    overlay: &gtk::Overlay,
+    bar: &gtk::Widget,
+    (a, b): (i32, i32),
+) -> bool {
+    let view = view.as_ref();
+    let buf = view.buffer();
+    let n = buf.char_count();
+    let start = buf.iter_at_offset(a.clamp(0, n));
+    let end = buf.iter_at_offset(b.clamp(0, n));
+    position_card_over(view, overlay, bar, &start, &end)
+}
+
+/// Re-place an open comment card after the view scrolls, so it moves with the text it
+/// belongs to (TDD 17.25). The geometry is read in the frame clock's `after-paint`,
+/// the one phase where a `GtkTextView` read matches what was painted (GTK4Rs/AP-142):
+/// read straight from `value-changed` it lags the scroll and the card trails its text.
+/// One handler at a time per card — a newer scroll replaces a pending one — and it
+/// disconnects itself on its first fire. `place` returns `false` when the anchor has
+/// scrolled out of view; the card then stays where it last was, open: scrolling never
+/// closes a card the reader is writing in.
+pub(crate) fn follow_scroll_after_paint(
+    view: &gtk::Widget,
+    slot: &AfterPaintSlot,
+    place: impl Fn() -> bool + 'static,
+) {
+    if let Some((clk, id)) = slot.borrow_mut().take() {
+        clk.disconnect(id);
+    }
+    let Some(clock) = view.frame_clock() else {
+        place();
+        return;
+    };
+    view.queue_draw();
+    let pending = slot.clone();
+    let id = clock.connect_after_paint(move |clock| {
+        if let Some((_, id)) = pending.borrow_mut().take() {
+            clock.disconnect(id);
+        }
+        place();
+    });
+    *slot.borrow_mut() = Some((clock, id));
+}
+
+/// The one pending `after-paint` handler a card's scroll-follow may hold.
+pub(crate) type AfterPaintSlot = Rc<RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>>;
+
+fn position_card_over(
+    view: &gtk::TextView,
+    overlay: &gtk::Overlay,
+    bar: &gtk::Widget,
+    start: &gtk::TextIter,
+    end: &gtk::TextIter,
+) -> bool {
+    let r0 = view.iter_location(start);
+    let r1 = view.iter_location(end);
     let (x0, y0) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r0.x(), r0.y());
     let (x1, _y1) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r1.x(), r1.y());
     let line_h = r0.height().max(1);
@@ -1165,6 +1227,39 @@ pub(crate) fn wire_annotation_overlay(
         let painted = Cell::new(PaintedTop::at(view, vadj.value()));
         let width = Cell::new(view.width());
         let follow = rearm.clone();
+        // The comment card, open over the span it was raised for, follows that span.
+        let card_slot: AfterPaintSlot = Rc::new(RefCell::new(None));
+        let follow_card = {
+            let view = view.downgrade();
+            let overlay = overlay.downgrade();
+            let bar = bar.downgrade();
+            let anchor_sel = anchor_sel.clone();
+            move || {
+                let (Some(v), Some(ov), Some(bar)) =
+                    (view.upgrade(), overlay.upgrade(), bar.upgrade())
+                else {
+                    return;
+                };
+                let anchor_sel = anchor_sel.clone();
+                let (vw, ow, bw) = (v.downgrade(), ov.downgrade(), bar.downgrade());
+                follow_scroll_after_paint(v.upcast_ref(), &card_slot, move || {
+                    let (Some(v), Some(ov), Some(bar)) = (vw.upgrade(), ow.upgrade(), bw.upgrade())
+                    else {
+                        return false;
+                    };
+                    match anchor_sel.borrow().clone() {
+                        Some(AnchorSel::Body(a, b)) => {
+                            position_card_at(&v, &ov, bar.upcast_ref(), (a, b))
+                        }
+                        Some(AnchorSel::Cell(label, a, b)) => {
+                            position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b)
+                        }
+                        None => false,
+                    }
+                });
+            }
+        };
+        let card = bar.downgrade();
         vadj.connect_value_changed(glib::clone!(
             #[weak(rename_to = p)]
             pop,
@@ -1193,6 +1288,13 @@ pub(crate) fn wire_annotation_overlay(
                     // before the re-anchor's animation ends, leaving the card pinned to
                     // where the word was mid-travel.
                     follow();
+                } else if moved
+                    && entry_open.get()
+                    && card.upgrade().is_some_and(|c| c.is_visible())
+                {
+                    // The card the reader is writing in stays open and moves with its
+                    // text, by any scroll — the reader's or the view's own (TDD 17.25).
+                    follow_card();
                 }
             }
         ));
@@ -1228,6 +1330,9 @@ mod catchup_tests;
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod resizeflip_tests;
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod entryscroll_tests;
 
 /// The action card wired onto `view`, for tests.
 #[cfg(all(test, feature = "gtk-integration-tests"))]

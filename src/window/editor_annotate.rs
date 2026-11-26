@@ -19,7 +19,10 @@
 //! `preview/annotate.rs` helpers it reuses.
 
 use crate::codeview::AnnotationEdit;
-use crate::preview::annotate::{capture_editor_selection, position_card, PendingTarget};
+use crate::preview::annotate::{
+    capture_editor_selection, follow_scroll_after_paint, position_card, position_card_at,
+    AfterPaintSlot, PendingTarget,
+};
 use crate::widgets::comment_entry::CommentEntry;
 use gtk::glib;
 use gtk::prelude::*;
@@ -135,6 +138,11 @@ pub(crate) fn wire_editor_annotate_card(
     overlay.set_clip_overlay(&bar, true);
     overlay.set_measure_overlay(&bar, false);
 
+    // The span the card was raised over, in buffer offsets: what the card follows when
+    // the editor scrolls, whatever the reader has clicked or selected since (TDD 17.25).
+    let anchor: Rc<Cell<Option<(i32, i32)>>> = Rc::new(Cell::new(None));
+    follow_scroll_with_card(editor, overlay, &bar, &entry_open, &anchor);
+
     // The trigger: capture the editor selection, reveal + position the card, focus it.
     let show: Rc<dyn Fn()> = Rc::new({
         let editor = editor.downgrade();
@@ -143,6 +151,7 @@ pub(crate) fn wire_editor_annotate_card(
         let entry = entry.downgrade();
         let entry_open = entry_open.clone();
         let pending = pending.clone();
+        let anchor = anchor.clone();
         move || {
             let (Some(editor), Some(overlay), Some(bar), Some(entry)) = (
                 editor.upgrade(),
@@ -158,6 +167,7 @@ pub(crate) fn wire_editor_annotate_card(
             let buf = editor.buffer();
             let source = crate::saferizer::BufferText::of(&buf).into_string();
             *pending.borrow_mut() = capture_editor_selection(&source, a.offset(), b.offset());
+            anchor.set(Some((a.offset(), b.offset())));
             // A selection wholly inside an existing comment is not annotatable: say so
             // rather than raising a card whose commit would write nothing (TDD 17.59).
             if pending
@@ -231,6 +241,61 @@ pub(crate) fn wire_editor_annotate_card(
     bar.add_controller(focus);
 
     show
+}
+
+/// Keep the open card over the span it was raised for while the editor scrolls, by any
+/// scroll — the reader's or the editor's own. The editor's vadjustment is set by its
+/// scroller after this is wired, and may be replaced, so the follow is attached to
+/// whichever adjustment the editor holds.
+fn follow_scroll_with_card(
+    editor: &sourceview::View,
+    overlay: &gtk::Overlay,
+    bar: &gtk::Box,
+    entry_open: &Rc<Cell<bool>>,
+    anchor: &Rc<Cell<Option<(i32, i32)>>>,
+) {
+    let slot: AfterPaintSlot = Rc::new(RefCell::new(None));
+    let follow: Rc<dyn Fn()> = Rc::new({
+        let editor = editor.downgrade();
+        let overlay = overlay.downgrade();
+        let bar = bar.downgrade();
+        let entry_open = entry_open.clone();
+        let anchor = anchor.clone();
+        move || {
+            let Some(ed) = editor.upgrade() else {
+                return;
+            };
+            if !entry_open.get() || !bar.upgrade().is_some_and(|b| b.is_visible()) {
+                return;
+            }
+            let Some(span) = anchor.get() else {
+                return;
+            };
+            let (ew, ow, bw) = (ed.downgrade(), overlay.clone(), bar.clone());
+            follow_scroll_after_paint(ed.upcast_ref(), &slot, move || {
+                let (Some(ed), Some(ov), Some(b)) = (ew.upgrade(), ow.upgrade(), bw.upgrade())
+                else {
+                    return false;
+                };
+                position_card_at(&ed, &ov, b.upcast_ref(), span)
+            });
+        }
+    });
+    let attach = {
+        let follow = follow.clone();
+        move |adj: &gtk::Adjustment| {
+            let follow = follow.clone();
+            adj.connect_value_changed(move |_| follow());
+        }
+    };
+    if let Some(adj) = editor.vadjustment() {
+        attach(&adj);
+    }
+    editor.connect_vadjustment_notify(move |ed| {
+        if let Some(adj) = ed.vadjustment() {
+            attach(&adj);
+        }
+    });
 }
 
 /// The editor card's own contract, driven through the real trigger.
@@ -462,6 +527,72 @@ mod gtk_integration_tests {
             found,
             "the editor card's bar must carry ANNOTATION_CARD_CLASS — the preview card \
              shares it for styling, and every test locates the card through it"
+        );
+        win.destroy();
+    }
+
+    /// TDD 17.25: a card the reader is writing in stays open and moves with its text
+    /// when the editor scrolls. Before the fix it was placed once, on opening, and sat
+    /// still while its text scrolled away.
+    #[gtktest::test]
+    fn an_open_card_moves_with_its_text_when_the_editor_scrolls() {
+        let source: String = (0..200)
+            .map(|i| format!("line {i} of the document\n"))
+            .collect();
+        let editor = sourceview::View::new();
+        let buf = editor.buffer();
+        buf.set_text(&source);
+        let scroller = gtk::ScrolledWindow::new();
+        scroller.set_child(Some(&editor));
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&scroller));
+        let show = wire_editor_annotate_card(&overlay, &editor);
+        let win = gtk::Window::new();
+        win.set_default_size(800, 600);
+        win.set_child(Some(&overlay));
+        win.present();
+
+        // Pump until `done` holds, bounded by a timeout SOURCE (GTK4Rs/AP-79).
+        let pump_until = |done: &dyn Fn() -> bool| {
+            let deadline = std::rc::Rc::new(std::cell::Cell::new(false));
+            let id = glib::timeout_add_local_once(std::time::Duration::from_secs(5), {
+                let deadline = deadline.clone();
+                move || deadline.set(true)
+            });
+            while !done() && !deadline.get() {
+                glib::MainContext::default().iteration(true);
+            }
+            if !deadline.get() {
+                id.remove();
+            }
+        };
+        pump_until(&|| win.is_mapped() && scroller.vadjustment().upper() > 600.0);
+
+        // A span on line 12, well inside the first screen and below the card's height.
+        let line = buf.iter_at_line(12).expect("line 12 exists");
+        let mut end = line;
+        end.forward_chars(4);
+        buf.select_range(&line, &end);
+        show();
+        for _ in 0..50 {
+            glib::MainContext::default().iteration(false);
+        }
+        let bar = overlay
+            .last_child()
+            .expect("the card bar is an overlay child");
+        assert!(bar.is_visible(), "the card opened");
+        let before = bar.margin_top();
+
+        let vadj = scroller.vadjustment();
+        crate::saferizer::scrollpos::jump(&vadj, vadj.value() + 60.0);
+        pump_until(&|| bar.margin_top() != before);
+
+        assert!(bar.is_visible(), "scrolling must not close the card");
+        let moved = before - bar.margin_top();
+        assert!(
+            (40..=80).contains(&moved),
+            "the card must move up with its text by about the 60 px scrolled; it moved {moved} px \
+             (from {before})"
         );
         win.destroy();
     }
