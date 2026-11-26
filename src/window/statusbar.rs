@@ -182,6 +182,52 @@ fn fit_indicators(bar: &StatusBar) {
     super::chrome_fit::apply_visible_area_inset(&bar.indicators, 0);
 }
 
+/// Clicking the document's path copies it, whole and absolute — never the `~` or
+/// shortened form the bar shows (TDD 16.19). Only while the label reads the base
+/// message: over a hovered link or a passing notice, the click is not on the path.
+pub(super) fn wire_path_copy(window: &ApplicationWindow) {
+    let Some(chrome) = winstate::chrome(window) else {
+        return;
+    };
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_PRIMARY);
+    // A whole click on the label, never the release that ends a drag begun elsewhere
+    // (GTK4Rs/AP-169): the label is one target, so the hit is always it.
+    crate::saferizer::ClickActivation::new()
+        .max_travel(crate::saferizer::click_activation::drag_threshold())
+        .wire(
+            &click,
+            |_, _| Some(()),
+            glib::clone!(
+                #[weak]
+                window,
+                move |_: &gtk::GestureClick, (), _, _| {
+                    copy_path_if_shown(&window);
+                }
+            ),
+        );
+    chrome.statusbar.message.add_controller(click);
+}
+
+/// The click's work: copy the active document's path if the bar is showing it.
+/// Returns whether it copied.
+fn copy_path_if_shown(window: &ApplicationWindow) -> bool {
+    let Some(st) = state(window) else {
+        return false;
+    };
+    if !st.chrome().status.borrow().shows_base() {
+        return false;
+    }
+    let Some(path) = st.path.borrow().clone() else {
+        return false;
+    };
+    crate::clipboard::set_text(&window.clipboard(), &path.to_string_lossy());
+    // A copy changes nothing on screen, so it is acknowledged (TDD 16.15).
+    st.chrome()
+        .push_timed_notice(core::PATH_COPIED, super::toast::INFO_STATUS_TIME);
+    true
+}
+
 /// Every indicator, for the active tab: the one call a mode switch or a tab switch
 /// makes (from `apply_mode_action_state`).
 pub(crate) fn refresh_status_indicators(window: &ApplicationWindow) {
@@ -902,6 +948,68 @@ mod tests {
 
     /// TDD 16.10 — messages left, indicators right in their fixed order, and a long
     /// message shortens instead of displacing an indicator.
+    /// TDD 16.18–16.19: the bar names the document by its path, and a click on the
+    /// path copies it whole — only while the path, not a notice, is what shows.
+    #[gtktest::test]
+    fn the_path_shows_and_a_click_copies_it_whole() {
+        let app = make_app("com.extollit.scribobulate.integrationtest.statusbar.path");
+        let dir = std::env::temp_dir().join(format!("scrib-status-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("doc.md");
+        std::fs::write(&file, "# Doc\n").expect("write fixture");
+        let window = new_window(&app, "w", "# Doc\n", Some(&file));
+        let chrome = crate::winstate::chrome(&window).expect("chrome registered");
+        let shown = core::status_path(
+            &file,
+            Some(&glib::home_dir()),
+            crate::config::config().window.status_path_max,
+        );
+        assert!(
+            pump_until(|| chrome.statusbar.message.text() == shown),
+            "the bar reads {:?}, not the path {shown:?}",
+            chrome.statusbar.message.text()
+        );
+
+        assert!(copy_path_if_shown(&window), "a click on the path copies it");
+        let read: Rc<RefCell<Option<String>>> = Default::default();
+        window
+            .clipboard()
+            .read_text_async(gtk::gio::Cancellable::NONE, {
+                let read = read.clone();
+                move |text| *read.borrow_mut() = text.ok().flatten().map(|s| s.to_string())
+            });
+        assert!(
+            pump_until(|| read.borrow().is_some()),
+            "the clipboard read returns"
+        );
+        assert_eq!(
+            read.borrow().as_deref(),
+            Some(&*file.to_string_lossy()),
+            "the copy is the whole absolute path, not the bar's rendering"
+        );
+        assert_eq!(chrome.statusbar.message.text(), core::PATH_COPIED);
+
+        // Over a notice the click is not on the path.
+        assert!(
+            !copy_path_if_shown(&window),
+            "over a notice nothing is copied"
+        );
+
+        // A document with no file shows no path.
+        let untitled = new_window(&app, "u", "# New\n", None);
+        let untitled_chrome = crate::winstate::chrome(&untitled).expect("chrome registered");
+        assert!(pump_until(|| untitled_chrome
+            .statusbar
+            .message
+            .text()
+            .is_empty()));
+        assert!(!copy_path_if_shown(&untitled));
+
+        window.destroy();
+        untitled.destroy();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[gtktest::test]
     fn messages_sit_left_and_indicators_right_in_order() {
         let app = make_app("com.extollit.scribobulate.integrationtest.statusbar.layout");

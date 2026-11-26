@@ -719,6 +719,7 @@ fn build_window(
     wire_scroll_spy(&window);
 
     wire_close_request(&window);
+    statusbar::wire_path_copy(&window);
     // Crash recovery: leaving the editor pane — for a menu, the toolbar, another window,
     // another application — commits every outstanding snapshot at once rather than
     // waiting out the debounce.

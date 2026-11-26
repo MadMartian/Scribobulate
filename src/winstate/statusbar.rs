@@ -262,18 +262,21 @@ pub(crate) fn zoom_accessible_name(percent: &str) -> String {
     format!("Zoom {percent}, reset to 100%")
 }
 
-/// The persistent base message for the ACTIVE tab: every condition that holds for as
-/// long as it is true, most urgent first (TDD 4.4, 16.16).
+/// The persistent base message for the ACTIVE tab: the document's path (TDD 16.18),
+/// then every condition that holds for as long as it is true, most urgent first (TDD
+/// 4.4, 16.16).
 ///
-/// A lost file leads because the buffer is then the document's only copy; live reload
-/// being off follows because it explains why the view may be out of date; unsaved
-/// changes close the line.
+/// A lost file leads the conditions because the buffer is then the document's only
+/// copy; live reload being off follows because it explains why the view may be out of
+/// date; unsaved changes close the line.
 pub(crate) fn base_message(
+    path: Option<&str>,
     loss: Option<BackingLoss>,
     live_reload_off: bool,
     dirty: bool,
 ) -> String {
     let segments: Vec<&str> = [
+        path,
         loss.map(BackingLoss::notice),
         live_reload_off.then_some(LIVE_RELOAD_OFF),
         dirty.then_some(UNSAVED_CHANGES),
@@ -472,9 +475,284 @@ pub(crate) fn renamed_text(new_path: &std::path::Path) -> String {
     format!("Renamed to {name}")
 }
 
+/// Confirmation for clicking the document's path in the status bar (TDD 16.19).
+pub(crate) const PATH_COPIED: &str = "Path copied";
+
+/// What stands in for the part of a path the status bar leaves out (TDD 16.18).
+const PATH_ELLIPSIS: &str = "...";
+
+/// The fewest trailing components a shortened path keeps: two folders and the file.
+const PATH_MIN_TAIL: usize = 3;
+
+/// A path split for display: what it starts from (`~`, `/`, `C:\`), and the names after.
+#[derive(Debug, PartialEq, Eq)]
+struct PathParts {
+    /// The start as written, separator included: `~/`, `/`, `C:\`.
+    root: String,
+    /// Whether the start is the home folder, which stands as the kept ancestor itself.
+    home: bool,
+    /// Every name after the root, the file's last.
+    names: Vec<String>,
+    sep: char,
+}
+
+/// Split `path` for display, writing the home folder as `~` (TDD 16.18).
+fn path_parts(path: &std::path::Path, home: Option<&std::path::Path>) -> PathParts {
+    use std::path::Component;
+    let sep = std::path::MAIN_SEPARATOR;
+    let names_of = |p: &std::path::Path| -> Vec<String> {
+        p.components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    if let Some(rest) = home
+        .filter(|h| h.components().count() > 1)
+        .and_then(|h| path.strip_prefix(h).ok())
+        .filter(|r| r.components().next().is_some())
+    {
+        return PathParts {
+            root: format!("~{sep}"),
+            home: true,
+            names: names_of(rest),
+            sep,
+        };
+    }
+    let root: String = path
+        .components()
+        .take_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+        .map(|c| match c {
+            Component::RootDir => sep.to_string(),
+            other => other.as_os_str().to_string_lossy().into_owned(),
+        })
+        .collect();
+    PathParts {
+        root,
+        home: false,
+        names: names_of(path),
+        sep,
+    }
+}
+
+fn char_len(s: &str) -> usize {
+    s.chars().count()
+}
+
+fn render_path(root: &str, names: &[String], sep: char) -> String {
+    let mut out = root.to_string();
+    out.push_str(&names.join(&sep.to_string()));
+    out
+}
+
+/// `name` with its start replaced by the ellipsis so it is `keep` characters long
+/// (ellipsis included). `keep` is at least one character more than the ellipsis.
+fn cut_start(name: &str, keep: usize) -> String {
+    let tail = keep - char_len(PATH_ELLIPSIS);
+    let skip = char_len(name) - tail;
+    format!(
+        "{PATH_ELLIPSIS}{}",
+        name.chars().skip(skip).collect::<String>()
+    )
+}
+
+/// The status bar's rendering of the active document's path (TDD 16.18): the whole
+/// path with the home folder as `~` when it fits in `max` characters (0: always).
+///
+/// Longer, its middle gives way to `...`: it keeps the first folder below the root
+/// (the `~` itself for a path in the home folder) and as many trailing names as fit,
+/// never fewer than two folders and the file. If even that is too long — or there are
+/// too few names to leave any out — the longest folder name loses its start to `...`
+/// until the path fits, and the file name is cut that way only when no folder can give
+/// more.
+pub(crate) fn status_path(
+    path: &std::path::Path,
+    home: Option<&std::path::Path>,
+    max: usize,
+) -> String {
+    shorten_path(path_parts(path, home), max)
+}
+
+fn shorten_path(parts: PathParts, max: usize) -> String {
+    let PathParts {
+        root,
+        home,
+        names,
+        sep,
+    } = parts;
+    let whole = render_path(&root, &names, sep);
+    if max == 0 || char_len(&whole) <= max {
+        return whole;
+    }
+    let head = usize::from(!home);
+    let mut kept: Vec<String> = names.clone();
+    // Index of the ellipsis among `kept`, so the trimming below never cuts it.
+    let mut marker = None;
+    if names.len() > head + PATH_MIN_TAIL {
+        let most = names.len() - head - 1;
+        let candidate = |tail: usize| -> Vec<String> {
+            let mut v: Vec<String> = names[..head].to_vec();
+            v.push(PATH_ELLIPSIS.to_string());
+            v.extend_from_slice(&names[names.len() - tail..]);
+            v
+        };
+        let fit = (PATH_MIN_TAIL..=most)
+            .rev()
+            .map(candidate)
+            .find(|v| char_len(&render_path(&root, v, sep)) <= max);
+        if let Some(v) = fit {
+            return render_path(&root, &v, sep);
+        }
+        kept = candidate(PATH_MIN_TAIL);
+        marker = Some(head);
+    }
+    let floor = char_len(PATH_ELLIPSIS) + 1;
+    let leaf = kept.len() - 1;
+    loop {
+        let over = char_len(&render_path(&root, &kept, sep)).saturating_sub(max);
+        if over == 0 {
+            break;
+        }
+        // The longest folder that can still give characters; the file only after.
+        let folder = (0..leaf)
+            .filter(|&i| Some(i) != marker && char_len(&kept[i]) > floor)
+            .max_by_key(|&i| (char_len(&kept[i]), std::cmp::Reverse(i)));
+        let Some(i) = folder.or((char_len(&kept[leaf]) > floor).then_some(leaf)) else {
+            break;
+        };
+        let len = char_len(&kept[i]);
+        kept[i] = cut_start(&kept[i], len.saturating_sub(over).max(floor));
+    }
+    render_path(&root, &kept, sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unix(root: &str, home: bool, names: &[&str]) -> PathParts {
+        PathParts {
+            root: root.to_string(),
+            home,
+            names: names.iter().map(|n| n.to_string()).collect(),
+            sep: '/',
+        }
+    }
+
+    #[test]
+    fn a_path_that_fits_shows_whole_with_home_as_a_tilde() {
+        let home = std::path::Path::new("/home/me");
+        let p = std::path::Path::new("/home/me/notes/today.md");
+        let expect = format!("~{0}notes{0}today.md", std::path::MAIN_SEPARATOR);
+        if cfg!(unix) {
+            assert_eq!(status_path(p, Some(home), 100), expect);
+            // Outside the home folder the path stays absolute.
+            assert_eq!(
+                status_path(std::path::Path::new("/opt/x.md"), Some(home), 100),
+                "/opt/x.md"
+            );
+            // A sibling that merely shares the home folder's name as a prefix is not in it.
+            assert_eq!(
+                status_path(std::path::Path::new("/home/meg/x.md"), Some(home), 100),
+                "/home/meg/x.md"
+            );
+        }
+        // Zero means never shorten.
+        let long = unix("/", false, &["a"; 60]);
+        assert_eq!(shorten_path(long, 0), format!("/{}", ["a"; 60].join("/")));
+    }
+
+    #[test]
+    fn a_long_path_keeps_its_first_folder_and_as_many_trailing_names_as_fit() {
+        let names = [
+            "home",
+            "jonathan",
+            "Documents",
+            "Projects",
+            "Coding",
+            "Rust",
+            "Scribobulate",
+            "sdd",
+            "TDD.md",
+        ];
+        // Whole: 58 characters.
+        assert_eq!(
+            shorten_path(unix("/", false, &names), 40),
+            "/home/.../Rust/Scribobulate/sdd/TDD.md"
+        );
+        // Tighter: the two folders and the file are the floor of the tail.
+        assert_eq!(
+            shorten_path(unix("/", false, &names), 33),
+            "/home/.../Scribobulate/sdd/TDD.md"
+        );
+        // In the home folder the tilde is the kept ancestor.
+        let in_home = [
+            "Documents",
+            "Projects",
+            "Coding",
+            "Rust",
+            "Scribobulate",
+            "sdd",
+            "TDD.md",
+        ];
+        assert_eq!(
+            shorten_path(unix("~/", true, &in_home), 34),
+            "~/.../Rust/Scribobulate/sdd/TDD.md"
+        );
+    }
+
+    #[test]
+    fn a_long_folder_name_loses_its_start_when_leaving_folders_out_is_not_enough() {
+        let long = "an-extremely-long-folder-name-that-will-not-fit";
+        let names = ["data", "one", "two", long, "notes", "file.md"];
+        let got = shorten_path(unix("/", false, &names), 40);
+        assert_eq!(char_len(&got), 40, "{got}");
+        assert!(
+            got.starts_with("/data/.../...") && got.ends_with("-not-fit/notes/file.md"),
+            "{got}"
+        );
+        // Too few names to leave any out: the long one is cut, nothing else.
+        let few = ["data", long, "file.md"];
+        let got = shorten_path(unix("/", false, &few), 30);
+        assert_eq!(char_len(&got), 30, "{got}");
+        assert!(
+            got.starts_with("/data/...") && got.ends_with("/file.md"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn the_file_name_is_cut_only_when_no_folder_can_give_more() {
+        let leaf = format!("{}.md", "x".repeat(60));
+        let got = shorten_path(unix("~/", true, &["a", &leaf]), 20);
+        assert_eq!(char_len(&got), 20, "{got}");
+        assert!(
+            got.starts_with("~/a/...") && got.ends_with("xx.md"),
+            "{got}"
+        );
+        // A limit below what can be kept leaves the shortest form; the status bar's own
+        // ellipsis takes it from there.
+        let got = shorten_path(unix("~/", true, &["abcdef", "ghijkl"]), 3);
+        assert_eq!(got, "~/...f/...l");
+    }
+
+    #[test]
+    fn a_windows_path_keeps_its_drive_and_backslashes() {
+        let parts = PathParts {
+            root: "C:\\".to_string(),
+            home: false,
+            names: ["Data", "Clients", "Acme", "2026", "Reports", "q3.md"]
+                .iter()
+                .map(|n| n.to_string())
+                .collect(),
+            sep: '\\',
+        };
+        assert_eq!(
+            shorten_path(parts, 30),
+            "C:\\Data\\...\\2026\\Reports\\q3.md"
+        );
+    }
 
     #[test]
     fn line_endings_classify_the_document_not_the_host() {
@@ -582,18 +860,24 @@ mod tests {
     /// TDD 16.16 — every condition that holds shows, in urgency order.
     #[test]
     fn base_message_composes_every_standing_condition() {
-        assert_eq!(base_message(None, false, false), "");
-        assert_eq!(base_message(None, false, true), UNSAVED_CHANGES);
+        assert_eq!(base_message(None, None, false, false), "");
+        assert_eq!(base_message(None, None, false, true), UNSAVED_CHANGES);
         assert_eq!(
-            base_message(Some(BackingLoss::Deleted), true, true),
+            base_message(None, Some(BackingLoss::Deleted), true, true),
             format!(
                 "{} · {LIVE_RELOAD_OFF} · {UNSAVED_CHANGES}",
                 BackingLoss::Deleted.notice()
             )
         );
         assert_eq!(
-            base_message(Some(BackingLoss::Truncated), false, false),
+            base_message(None, Some(BackingLoss::Truncated), false, false),
             BackingLoss::Truncated.notice()
+        );
+        // TDD 16.18 — the path leads, the conditions follow it.
+        assert_eq!(base_message(Some("~/a.md"), None, false, false), "~/a.md");
+        assert_eq!(
+            base_message(Some("~/a.md"), None, false, true),
+            format!("~/a.md · {UNSAVED_CHANGES}")
         );
     }
 

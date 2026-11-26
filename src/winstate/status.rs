@@ -162,6 +162,13 @@ impl MessageStack {
         }
     }
 
+    /// Whether the base message is the one showing — nothing pushed over it.
+    fn base_on_top(&self) -> bool {
+        self.entries
+            .last()
+            .is_some_and(|e| e.ctx == self.base_ctx())
+    }
+
     /// The message that should currently show: the topmost entry's, or "".
     fn top(&self) -> &str {
         self.entries.last().map(|e| e.msg.as_str()).unwrap_or("")
@@ -250,6 +257,12 @@ impl StatusStack {
     #[cfg(all(test, feature = "gtk-integration-tests"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.stack.top().is_empty()
+    }
+
+    /// Whether the label reads the base message rather than a notice pushed over it —
+    /// so a click on it means the document's path (TDD 16.19), not a hovered link.
+    pub(crate) fn shows_base(&self) -> bool {
+        self.stack.base_on_top()
     }
 
     fn sync(&self) {

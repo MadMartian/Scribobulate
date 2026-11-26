@@ -17,7 +17,7 @@
 | 13 | Preview zoom | 13.1 – 13.12 |
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
-| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.17 |
+| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.19 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.77 |
 | 18 | Preview reading themes | 18.1 – 18.64 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
@@ -2801,6 +2801,21 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** focus or review reaches an indicator
 - **Then** it announces what the indicator is along with its value ("Word count, 1,234 words", "Zoom 110%, reset to 100%")
 - **And** indicators do not announce every change — only the message area is a live status region (16.5)
+
+### 16.18 The status bar names the active document by its path
+- **Given** a window whose active document has a file
+- **Then** the left of the status bar shows the file's whole path, the home folder written `~`, whenever no passing message covers it; a standing condition (16.16, "Unsaved changes") follows the path rather than replacing it, and a passing message (a hovered link, a confirmation) replaces it only while it shows
+- **And** it follows the active document: a tab switch, Save As and a rename each show the new path
+- **And given** a document that has never been saved, **Then** no path shows
+- **And given** a path longer than the configured length (default 100 characters; 0 never shortens), **Then** its middle gives way to `...`: it keeps the first folder below the root (for a path in the home folder, the `~` itself) and as many trailing names as fit, never fewer than two folders and the file name — e.g. `~/.../Rust/Scribobulate/sdd/TDD.md`
+- **And given** a path that is still too long that way, or has too few folders to leave any out, **Then** the longest folder name loses its start to `...` until the path fits, and the file name is cut that way only when no folder can give more
+- **And** the window title keeps naming the document by its file name alone (15.7): window lists and task switchers have little room
+
+### 16.19 Clicking the path copies it
+- **Given** the status bar showing the active document's path
+- **When** the user clicks it
+- **Then** the clipboard holds the file's whole absolute path — never the `~` form or the shortened one — and "Path copied" acknowledges it (16.15)
+- **And given** a passing message covering the path, **Then** a click there copies nothing
 
 ### 16.6 Online Markdown reference is reachable from Help
 - **Given** any open window

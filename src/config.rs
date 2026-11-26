@@ -132,6 +132,10 @@ impl Default for OutlineConfig {
 pub(crate) struct WindowConfig {
     pub width: i32,
     pub height: i32,
+    /// The longest the status bar writes the document's path, in characters, before
+    /// its middle gives way to `...` (TDD 16.18); 0 never shortens it. 100 is what fits
+    /// beside the indicators in a window of the default width.
+    pub status_path_max: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -225,6 +229,7 @@ impl Default for WindowConfig {
         Self {
             width: 900,
             height: 720,
+            status_path_max: 100,
         }
     }
 }

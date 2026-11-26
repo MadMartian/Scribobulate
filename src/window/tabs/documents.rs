@@ -73,6 +73,8 @@ pub(super) fn retitle_window(window: &ApplicationWindow) {
         winstate::tab_count(window),
         active_name.as_deref(),
     )));
+    // The status bar names the same document by its path (TDD 16.18).
+    crate::window::save::refresh_status_base(window);
 }
 
 /// Schedule a rebuild of `window`'s `View ▸ Documents` submenu to match its open

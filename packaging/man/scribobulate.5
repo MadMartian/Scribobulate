@@ -52,6 +52,12 @@ Width in pixels of a new window, when no session is restored.
 .TP
 .BR height " (integer, default " 720 )
 Height in pixels of a new window, when no session is restored.
+.TP
+.BR status_path_max " (integer, default " 100 )
+The longest, in characters, the status bar writes the active document's path before
+leaving out its middle as
+.BR ... ;
+0 never shortens it. Clicking the path copies it whole.
 .SS [view]
 Page margins for the preview, in pixels.
 .TP
