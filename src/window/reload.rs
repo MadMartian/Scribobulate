@@ -784,9 +784,12 @@ mod gtk_integration_tests {
             });
             assert_eq!(tab.editor_text(), ORIGINAL, "the buffer is kept");
             let notice = winstate::BackingLoss::Truncated.notice();
-            assert_eq!(
-                tab.chrome().status.borrow().label_text(),
-                notice,
+            assert!(
+                tab.chrome()
+                    .status
+                    .borrow()
+                    .label_text()
+                    .ends_with(&format!(" · {notice}")),
                 "the reader is told (and, the timer being seconds long, is still told \
                  when the file comes back below — which is what that assertion needs)"
             );
@@ -933,9 +936,12 @@ mod gtk_integration_tests {
                 window.lookup_action("save").is_some_and(|a| a.is_enabled()),
                 "and Save is still the remedy"
             );
-            assert_eq!(
-                tab.chrome().status.borrow().label_text(),
-                winstate::BackingLoss::Truncated.notice(),
+            assert!(
+                tab.chrome()
+                    .status
+                    .borrow()
+                    .label_text()
+                    .ends_with(&format!(" · {}", winstate::BackingLoss::Truncated.notice())),
                 "the persistent line still states the condition (it is the other surface)"
             );
 
@@ -1526,9 +1532,13 @@ mod gtk_integration_tests {
             check_and_reload_tab(&tab);
             settle("the loss is recorded", || tab.backing_loss.get().is_some());
             assert!(!info.is_visible(), "the toast no longer covers the prompt");
-            assert_eq!(
-                tab.chrome().status.borrow().label_text(),
-                winstate::BackingLoss::Deleted.notice(),
+            // The base line leads with the path (TDD 16.18), then the condition.
+            assert!(
+                tab.chrome()
+                    .status
+                    .borrow()
+                    .label_text()
+                    .ends_with(&format!(" · {}", winstate::BackingLoss::Deleted.notice())),
                 "the loss line is not under a stale acknowledgement"
             );
             window.destroy();

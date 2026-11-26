@@ -259,6 +259,14 @@ impl StatusStack {
         self.stack.top().is_empty()
     }
 
+    /// Whether no notice is up — the label reads the base line (the document's path
+    /// and standing conditions, TDD 16.18) or nothing. What "stayed silent" means
+    /// now that a document with a file always has a base line.
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
+    pub(crate) fn shows_no_notice(&self) -> bool {
+        self.stack.base_on_top() || self.stack.top().is_empty()
+    }
+
     /// Whether the label reads the base message rather than a notice pushed over it —
     /// so a click on it means the document's path (TDD 16.19), not a hovered link.
     pub(crate) fn shows_base(&self) -> bool {

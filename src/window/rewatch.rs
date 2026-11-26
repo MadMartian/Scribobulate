@@ -440,7 +440,14 @@ mod gtk_integration_tests {
                 tab.backing_loss.get() == Some(winstate::BackingLoss::Deleted)
             });
             assert!(loss_toast.is_visible(), "precondition: the prompt is up");
-            assert_eq!(tab.chrome().status.borrow().label_text(), notice);
+            assert!(
+                tab.chrome()
+                    .status
+                    .borrow()
+                    .label_text()
+                    .ends_with(&format!(" · {notice}")),
+                "the path, then the loss (TDD 16.18)"
+            );
 
             std::fs::rename(&away, &path).expect("rename back");
             settle("the same bytes back retire the loss (TDD 3.6)", || {

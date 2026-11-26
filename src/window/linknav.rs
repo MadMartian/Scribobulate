@@ -492,7 +492,7 @@ mod gtk_integration_tests {
             "an unmatched fragment must not install a scroll target (silent, not an error)"
         );
         assert!(
-            target_tab.chrome().status.borrow().is_empty(),
+            target_tab.chrome().status.borrow().shows_no_notice(),
             "an unmatched fragment must not raise a status-bar notice either"
         );
 
