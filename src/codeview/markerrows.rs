@@ -174,6 +174,7 @@ fn append_edit_remove_controls(
         let card = card.clone();
         move |text: &str| {
             let text = text.to_string();
+            let view = card.view();
             card.dismiss();
             let Some(body) = body_rel.clone() else { return };
             if !text.trim().is_empty() {
@@ -182,11 +183,22 @@ fn append_edit_remove_controls(
                 let sink = sink.clone();
                 let construct = construct.clone();
                 glib::idle_add_local_once(move || {
+                    // The construct's start does not move when its comment is rewritten,
+                    // so it names the same annotation in the render the edit produces.
+                    let start = construct.captured_at().start;
                     sink(AnnotationEdit::EditComment {
                         construct,
                         body,
                         text,
                     });
+                    // Saving an edit leaves the card open on what was saved (TDD 17.7):
+                    // the reader sees the new comment, and the controls a comment brings
+                    // (Add Follow-up), without reopening. The render the edit triggered
+                    // has already installed its markers, so the card is opened afresh on
+                    // them in the same turn, before a frame can show it closed.
+                    if let Some(view) = view {
+                        view.reopen_marker_card_on(start);
+                    }
                 });
             }
         }

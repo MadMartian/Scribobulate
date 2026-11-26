@@ -206,6 +206,15 @@ impl CodePreviewView {
         true
     }
 
+    /// Open the card on the annotation whose construct begins at source byte `start`, in
+    /// this render's markers, taking focus — the card a just-saved edit reopens on (TDD
+    /// 17.7). Nothing happens when no marker begins there any more.
+    pub(crate) fn reopen_marker_card_on(&self, start: usize) {
+        if let Some(index) = self.marker_index_for_src(start) {
+            self.open_marker_popover_at(index, CardFocus::Take);
+        }
+    }
+
     /// The **identity** (`src_span.start`) of the annotation one step from buffer char
     /// offset `from` in `direction`, wrapping — the inverse lookup of
     /// [`marker_index_for_src`], and the preview's answer to "which annotation is next".

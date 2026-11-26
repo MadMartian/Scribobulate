@@ -1327,3 +1327,50 @@ fn a_long_suggestion_still_shows_what_it_is_replaced_with() {
     );
     crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
 }
+
+/// TDD 17.7: saving an Edit leaves the card open on what was saved — here a bare
+/// highlight's first comment — in a real window, whose sink rewrites the document and
+/// re-renders the preview under the card.
+#[gtktest::test]
+fn saving_an_edit_leaves_the_card_open_on_the_saved_comment() {
+    use gtk::subclass::prelude::*;
+    let app =
+        crate::window::testkit::test_app("com.extollit.scribobulate.integrationtest.editstays");
+    let win = crate::window::new_window(&app, "IT-editstays", "A {==claim==} here.\n", None);
+    let view = find_descendant::<CodePreviewView>(&win).expect("the preview view");
+    settle("the chip to paint", || hitbox_count(&view) == 1);
+    assert!(view.open_stepped_marker_popover(0, Direction::Next));
+    settle("the card to open", || view.has_open_marker_popover());
+    let card = || {
+        view.imp()
+            .marker_card
+            .borrow()
+            .clone()
+            .expect("the card exists once opened")
+    };
+    find_button(&card(), "Edit")
+        .expect("a bare highlight offers Edit")
+        .emit_clicked();
+    let entry = {
+        let mut found = None;
+        settle("the edit field to show", || {
+            found = find_descendant::<sourceview::View>(&card());
+            found.is_some()
+        });
+        found.unwrap()
+    };
+    crate::widgets::comment_entry::set_comment_text(&entry, "noted");
+    crate::widgets::comment_entry::press_key(&entry, gtk::gdk::Key::Return);
+
+    let source = || crate::window::document_source(&win).unwrap_or_default();
+    settle("the comment to reach the document", || {
+        source().contains("{>>noted<<}")
+    });
+    settle("the card to show the saved comment", || {
+        view.has_open_marker_popover()
+            && find_descendant_where::<gtk::Label>(&card(), |l| l.text() == "noted").is_some()
+    });
+    crate::testpump::destroy_after_tooltip_delay(win.upcast_ref(), || {
+        view.popdown_marker_popover()
+    });
+}
