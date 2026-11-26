@@ -96,7 +96,13 @@ pub(super) fn draw(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
             // than a cosmetic one.
             let (chip_x, cy) = (raw_x.round(), raw_y.round());
             let (marker_w, chip_h) = (raw_w.round().max(1.0), raw_h.round().max(1.0));
-            let rect = graphene::Rect::new(chip_x, cy, marker_w, chip_h);
+            // `chip_x` is a PANE position (the right margin of what is on screen), but
+            // this pass paints in buffer space, which GTK shifts left by the horizontal
+            // scroll offset. Map it back through GTK's own transform so the chip stays
+            // put on the pane when an over-wide preview is scrolled sideways, where its
+            // hit-box and the card's anchor (both pane positions) already are.
+            let draw_x = chip_buffer_x(view, chip_x);
+            let rect = graphene::Rect::new(draw_x, cy, marker_w, chip_h);
             // Through the SHARED resample-and-draw seam (the twin of
             // `tile_texture`).
             let sprite_drawn = chip_decor.sprite.is_some_and(|sprite| {
@@ -110,12 +116,13 @@ pub(super) fn draw(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
             if local.len() > 1 {
                 let layout = view.create_pango_layout(Some(&local.len().to_string()));
                 snapshot.save();
-                snapshot.translate(&graphene::Point::new(chip_x + 2.0, cy - 1.0));
+                snapshot.translate(&graphene::Point::new(draw_x + 2.0, cy - 1.0));
                 snapshot.append_layout(&layout, &ink);
                 snapshot.restore();
             }
             // Hit-box in WIDGET coords. Convert the chip's buffer-y to widget-y
-            // with GTK's own transform (chip_x is already widget-space). Using
+            // with GTK's own transform (chip_x is already widget-space, and
+            // `draw_x` above is its buffer-space twin). Using
             // `cy - visible_rect().y()` drifts by the top margin on compositors
             // where the two disagree — the same bug that displaced the task
             // checkbox hit zone (operator, 2026-07-16); GTK4Rs/AP-80-safe (pure math).
@@ -129,4 +136,12 @@ pub(super) fn draw(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
         }
     }
     *ctx.imp.marker_hitboxes.borrow_mut() = hitboxes;
+}
+
+/// The buffer-space x at which `snapshot_layer` must paint so the result lands at widget
+/// x `widget_x` — the inverse of the horizontal shift GTK applies to that pass. Zero
+/// sideways scroll makes it the identity.
+fn chip_buffer_x(view: &super::CodePreviewView, widget_x: f32) -> f32 {
+    let (bx, _) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, widget_x as i32, 0);
+    widget_x + (bx - widget_x as i32) as f32
 }

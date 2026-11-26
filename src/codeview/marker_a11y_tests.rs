@@ -1018,3 +1018,120 @@ fn a_card_takes_the_focus_only_when_the_opener_asked_for_it() {
 
     crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
 }
+
+/// [`super::painttest::framebuffer_of`] without a main-loop turn. That helper reads a
+/// `WidgetPaintable`, which is empty from a `queue_draw` until the next frame
+/// (GTK4Rs/AP-156), and the next frame is a turn; snapshotting the view through its
+/// parent runs its snapshot now. The view sits at its parent's origin, so the frame is
+/// in the view's own coordinates.
+fn frame_now(view: &CodePreviewView) -> Vec<u8> {
+    use gtk::{gdk, gsk};
+    let parent = view.parent().expect("the view has a scroller");
+    assert_eq!(
+        view.translate_coordinates(&parent, 0.0, 0.0),
+        Some((0.0, 0.0)),
+        "the view is not at its parent's origin, so the frame would be offset"
+    );
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(view, &snapshot);
+    let node = snapshot
+        .to_node()
+        .expect("the preview snapshots to something");
+    let renderer = gsk::CairoRenderer::new();
+    renderer
+        .realize(None::<&gdk::Surface>)
+        .expect("the Cairo renderer realizes without a surface");
+    let texture = renderer.render_texture(&node, None);
+    let (tw, th) = (texture.width() as usize, texture.height() as usize);
+    let mut data = vec![0u8; tw * th * 4];
+    texture.download(&mut data, tw * 4);
+    // Unrealize before the drop (GTK4Rs/AP-272).
+    renderer.unrealize();
+    data
+}
+
+/// Whether the pixel at widget point `(x, y)` of an ARGB32 framebuffer `w` pixels wide is
+/// the chip's amber: red well over green, green well over blue. Loose on purpose — the
+/// flat fill is 95% opaque, so the exact bytes depend on what is under it.
+fn amber_at(data: &[u8], w: usize, x: f32, y: f32) -> bool {
+    let i = (y as usize * w + x as usize) * 4;
+    let (b, g, r) = (
+        i32::from(data[i]),
+        i32::from(data[i + 1]),
+        i32::from(data[i + 2]),
+    );
+    r > g + 40 && g > b + 60
+}
+
+/// An over-wide preview scrolled sideways keeps each chip where its click zone is: on the
+/// pane's right margin. The chip is painted in the text layer, which GTK shifts by the
+/// horizontal scroll offset, while its hit-box is a pane position; painting at the pane
+/// x unconverted drew the chip that offset to the left of the zone a click must land on.
+#[gtktest::test]
+fn a_chip_stays_under_its_click_zone_when_the_preview_is_scrolled_sideways() {
+    use gtk::subclass::prelude::*;
+    let md = "The {==claim==}{>>note<<} sits at the top.\n\nfiller\n".to_string();
+    let pane = crate::preview::render(
+        None,
+        &md,
+        None,
+        1.0,
+        false,
+        &crate::fold::FoldState::default(),
+    );
+    let view = view_of(pane.clone());
+    let win = gtk::Window::new();
+    win.set_default_size(700, 400);
+    win.set_child(Some(&pane));
+    win.present();
+    settle("the chip to paint", || hitbox_count(&view) > 0);
+
+    let hadj = view
+        .hadjustment()
+        .expect("the preview scrolls horizontally");
+    let centre = || {
+        let r = view.imp().marker_hitboxes.borrow()[0].0;
+        (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0)
+    };
+    let (w, h) = (view.width() as usize, view.height() as usize);
+
+    // Positive control: unscrolled, the chip is under its zone on every build.
+    let (cx, cy) = centre();
+    let before = super::painttest::framebuffer_of(&view, w as f64, h as f64);
+    assert!(
+        amber_at(&before, w, cx, cy),
+        "unscrolled chip not under its zone"
+    );
+
+    // The preview wraps every line it can, and what makes a real document over-wide is
+    // a layout overflow no fixture reproduces on demand, so widen the range by hand. The
+    // view reads the value straight into its scroll offset; nothing re-allocates it
+    // before the frame below is captured.
+    hadj.set_upper(hadj.page_size() + 400.0);
+    crate::saferizer::scrollpos::jump(&hadj, 150.0);
+    // Precondition: the scenario exists. Without it the test passes with the fix deleted.
+    assert_eq!(
+        view.visible_rect().x(),
+        150,
+        "the sideways scroll did not take"
+    );
+    // Captured with no main-loop turn in between: the next layout pass would put the
+    // hand-widened range back and scroll the view home.
+    let after = frame_now(&view);
+    assert_eq!(
+        view.visible_rect().x(),
+        150,
+        "the view scrolled home before the capture"
+    );
+    let (ax, ay) = centre();
+    assert_eq!(
+        (ax, ay),
+        (cx, cy),
+        "the click zone is a pane position and must not move"
+    );
+    assert!(
+        amber_at(&after, w, ax, ay),
+        "scrolled 150px sideways, the chip is no longer painted under its click zone"
+    );
+    crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
+}
