@@ -264,6 +264,8 @@ pub fn run() -> glib::ExitCode {
             rest
         }
         Err(refusal) => {
+            #[cfg(windows)]
+            platform::win32::attach_parent_console();
             eprintln!("scribobulate: {refusal}");
             return glib::ExitCode::FAILURE;
         }
@@ -279,10 +281,14 @@ pub fn run() -> glib::ExitCode {
     // `--help`, answered here for the same reasons: GLib's own help would list none of
     // the switches above, which it never sees (TDD 8.8).
     if app::is_help_request(&argv) {
+        #[cfg(windows)]
+        platform::win32::attach_parent_console();
         print!("{}", app::usage_text());
         return glib::ExitCode::SUCCESS;
     }
     if app::is_version_request(&argv) {
+        #[cfg(windows)]
+        platform::win32::attach_parent_console();
         println!("{}", app::version_line());
         return glib::ExitCode::SUCCESS;
     }

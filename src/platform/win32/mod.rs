@@ -19,6 +19,7 @@
 //! | Child | Cause |
 //! |---|---|
 //! | [`frame`] | The app takes the **native Win32 frame** (`GTK_CSD=0`), so DWM owns the caption and the OS owns the maximize button. Two GTK repairs, one decision. |
+//! | [`console`] | The release build is a **GUI-subsystem** program, so Windows gives it no console and a switch answered in a terminal (`--help`, `--version`) printed into nothing. |
 //! | [`appearance`] | GTK 4.22.4 does not read the Windows light/dark setting **at all**, so the desktop's lightness has no source here unless this supplies one. |
 //! | [`privacy`] | `std::fs` cannot express an owner-only directory on Windows, so the state directory would carry whatever ACL it inherited. |
 //! | [`crash`] | Windows has **no POSIX signals**: a native crash is an unhandled SEH exception or a CRT `abort()`, and without this only Windows Error Reporting sees it. |
@@ -50,6 +51,7 @@
 //! stays satisfiable with no `#[allow]`.
 
 pub(crate) mod appearance;
+pub(crate) mod console;
 pub(crate) mod crash;
 pub(crate) mod device_name;
 pub(crate) mod folder_identity;
@@ -65,6 +67,7 @@ pub(crate) mod unc_monitor;
 // children is therefore a local edit, not a tree-wide rename — which is what keeps the
 // cause-based boundaries above cheap enough to honour.
 pub(crate) use appearance::track_system_dark_mode;
+pub(crate) use console::attach_parent_console;
 pub(crate) use device_name::device_behind_name;
 pub(crate) use folder_identity::folder_identity;
 pub(crate) use frame::{
