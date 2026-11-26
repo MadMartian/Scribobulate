@@ -63,6 +63,7 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
+| D | Windows | Test | `forensics::exception::tests::a_stack_overflow_on_a_thread_rust_did_not_start_is_reported` intermittently fails on Windows CI: the armed child dies of the overflow (`0xc00000fd`) but writes no crash report; green on a re-run of the failed job | Medium |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
@@ -300,6 +301,27 @@ Windows have not been driven.
 **Decision** (operator, 2026-10-24): accepted, no remedy scheduled. The reader can dismiss
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
+
+## D. A raw-thread stack overflow sometimes leaves no crash report on Windows CI
+
+**Severity**: Medium (test-only as seen, but the test guards the crash reporter: a real
+overflow on a thread Rust did not start may sometimes go unreported).
+
+**Symptom**: on Windows CI, `forensics::exception::tests::a_stack_overflow_on_a_thread_rust_did_not_start_is_reported`
+fails at `src/forensics/exception/tests.rs` (`assert_a_reported_death`) with
+`raw-thread-stack-overflow: the armed child died and wrote no report (armed exited
+0xc00000fd, control 0xc0000005)`. The child printed its "about to die" probe line, so it
+reached the overflow armed. Seen once, on 2026-11-26 (run 45792812827, branch
+`feat/add-follow-up`, which touches no forensics code); the failed job passed on re-run.
+Linux and macOS passed the same run, and master's run on the same day passed on all three.
+
+**What is known**: nothing beyond the one sighting. Not reproduced locally; not yet tried on
+the `windows` seat.
+
+**Next step**: have the `windows` seat run the test in a loop (it re-executes the test
+binary per case, so a few hundred runs are cheap) to measure how often the report goes
+missing, and when it does, whether the handler ran at all (its own stderr) or ran and failed
+to write.
 
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
