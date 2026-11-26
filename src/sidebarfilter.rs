@@ -12,6 +12,7 @@
 //! annotation's comment and its quoted text) matches when each word occurs in at least one
 //! of them, and every occurrence of every word is highlighted in whichever field holds it.
 
+use crate::annotate::Suggestion;
 use std::ops::Range;
 
 /// The placeholder a filtered outline shows when no heading matches.
@@ -169,49 +170,60 @@ pub(crate) fn highlight_markup(text: &str, ranges: &[Range<usize>]) -> String {
     out
 }
 
-/// The words a suggested replacement is quoted as, wherever it is quoted — the card, the
-/// annotations viewer's row (and so the text its filter searches) and the export:
-/// `old → new` (TDD 17.72, 20.2).
-pub(crate) fn suggestion_text(old: &str, new: &str) -> String {
-    format!("{old}{SUGGESTION_ARROW}{new}")
+/// The words a suggested edit is quoted as wherever it is quoted in one line — the
+/// viewer's row (and so the text its filter searches) and the export: `old → new` for a
+/// replacement, the text alone for an addition or a deletion (TDD 20.2).
+pub(crate) fn suggestion_text(s: &Suggestion) -> String {
+    match (&s.old, &s.new) {
+        (Some(old), Some(new)) => format!("{old}{SUGGESTION_ARROW}{new}"),
+        (Some(side), None) | (None, Some(side)) => side.clone(),
+        (None, None) => String::new(),
+    }
 }
 
 const SUGGESTION_ARROW: &str = " \u{2192} ";
 
-/// [`suggestion_text`] as Pango markup: the old side struck through, the new side in
-/// bold, so the change reads at a glance (TDD 17.72). `hits` are a filter's matches in
+/// [`suggestion_text`] as Pango markup: what would go struck through, what would come in
+/// italics, so the change reads at a glance (TDD 20.2). `hits` are a filter's matches in
 /// [`suggestion_text`]'s own coordinates and are shown as [`highlight_markup`] shows
-/// them, cut where the two sides meet; a hit across the arrow is dropped rather than
-/// crossing a tag.
-pub(crate) fn suggestion_markup(old: &str, new: &str, hits: &[Range<usize>]) -> String {
-    let arrow_at = old.len();
-    let new_at = arrow_at + SUGGESTION_ARROW.len();
+/// them, cut where a replacement's two sides meet; a hit across the arrow is dropped
+/// rather than crossing a tag.
+pub(crate) fn suggestion_markup(s: &Suggestion, hits: &[Range<usize>]) -> String {
     let within = |lo: usize, hi: usize| -> Vec<Range<usize>> {
         hits.iter()
             .filter(|r| r.start >= lo && r.end <= hi)
             .map(|r| r.start - lo..r.end - lo)
             .collect()
     };
-    format!(
-        "<s>{}</s>{}<b>{}</b>",
-        highlight_markup(old, &within(0, arrow_at)),
-        gtk::glib::markup_escape_text(SUGGESTION_ARROW),
-        highlight_markup(new, &within(new_at, new_at + new.len())),
-    )
+    let old = |text: &str| format!("<s>{}</s>", highlight_markup(text, &within(0, text.len())));
+    match (&s.old, &s.new) {
+        (Some(o), Some(n)) => {
+            let new_at = o.len() + SUGGESTION_ARROW.len();
+            format!(
+                "{}{}<i>{}</i>",
+                old(o),
+                gtk::glib::markup_escape_text(SUGGESTION_ARROW),
+                highlight_markup(n, &within(new_at, new_at + n.len())),
+            )
+        }
+        (Some(o), None) => old(o),
+        (None, Some(n)) => format!("<i>{}</i>", highlight_markup(n, &within(0, n.len()))),
+        (None, None) => String::new(),
+    }
 }
 
-/// A suggested replacement as its margin card spells it out — the drill-down beside the
-/// one-line [`suggestion_markup`] the viewer's row uses — as two lines of markup:
+/// A suggested edit as its margin card spells it out — the drill-down beside the
+/// one-line [`suggestion_markup`] the viewer's row uses — one line of markup per side:
 ///
-/// **Replace:** “~~old~~”
-/// **With:** “*new*”
+/// **Replace:** “~~old~~”, then **With:** “*new*” for a replacement;
+/// **Added:** “*new*” for an addition; **Removed:** “~~old~~” for a deletion.
 ///
-/// Two lines, not one string, because the card caps each in a scroller of its own: under
-/// one shared cap a long old side pushed "With:" out of sight (TDD 17.72). Each side is
-/// quoted, so where the label ends and the text begins is never in doubt; the quotes
-/// themselves are neither struck nor slanted. An empty side reads "(nothing)", unquoted,
-/// so a pure deletion or insertion still says what it does.
-pub(crate) fn suggestion_card_lines(old: &str, new: &str) -> [String; 2] {
+/// One line per side, not one string, because the card caps each in a scroller of its
+/// own: under one shared cap a long old side pushed "With:" out of sight (TDD 17.72). Each
+/// side is quoted, so where the label ends and the text begins is never in doubt; the
+/// quotes themselves are neither struck nor slanted. A replacement's empty side reads
+/// "(nothing)", unquoted, so it still says what it does.
+pub(crate) fn suggestion_card_lines(s: &Suggestion) -> Vec<String> {
     let side = |label: &str, text: &str, tag: &str| {
         let text = if text.is_empty() {
             "(nothing)".to_string()
@@ -223,7 +235,12 @@ pub(crate) fn suggestion_card_lines(old: &str, new: &str) -> [String; 2] {
         };
         format!("<b>{label}:</b> {text}")
     };
-    [side("Replace", old, "s"), side("With", new, "i")]
+    match (&s.old, &s.new) {
+        (Some(old), Some(new)) => vec![side("Replace", old, "s"), side("With", new, "i")],
+        (None, Some(new)) => vec![side("Added", new, "i")],
+        (Some(old), None) => vec![side("Removed", old, "s")],
+        (None, None) => Vec::new(),
+    }
 }
 
 /// The filter bar's match count while its filter is active: `"3 of 40"` — how many rows
@@ -320,34 +337,60 @@ mod tests {
         assert!(query.find_in_fields(&["a note here", "nothing"]).is_none());
     }
 
-    #[test]
-    fn a_suggestion_strikes_its_old_side_and_keeps_filter_hits_on_each_side() {
-        assert_eq!(suggestion_text(",", ":"), ", \u{2192} :");
-        assert_eq!(
-            suggestion_markup("a&b", "c", &[]),
-            "<s>a&amp;b</s> \u{2192} <b>c</b>"
-        );
-        let text = suggestion_text("cat", "dog");
-        let hits = [q("a").find(&text).unwrap(), q("o").find(&text).unwrap()].concat();
-        assert_eq!(
-            suggestion_markup("cat", "dog", &hits),
-            "<s>c<span weight=\"bold\" underline=\"single\">a</span>t</s> \u{2192} \
-             <b>d<span weight=\"bold\" underline=\"single\">o</span>g</b>"
-        );
+    fn sugg(old: Option<&str>, new: Option<&str>) -> Suggestion {
+        Suggestion {
+            old: old.map(str::to_string),
+            new: new.map(str::to_string),
+        }
     }
 
     #[test]
-    fn a_suggestion_card_names_what_it_replaces_and_with_what() {
+    fn a_suggestion_strikes_what_goes_and_slants_what_comes_keeping_filter_hits() {
+        let rep = sugg(Some("cat"), Some("dog"));
+        assert_eq!(suggestion_text(&rep), "cat \u{2192} dog");
         assert_eq!(
-            suggestion_card_lines("a&b", "c"),
+            suggestion_markup(&sugg(Some("a&b"), Some("c")), &[]),
+            "<s>a&amp;b</s> \u{2192} <i>c</i>"
+        );
+        let text = suggestion_text(&rep);
+        let hits = [q("a").find(&text).unwrap(), q("o").find(&text).unwrap()].concat();
+        assert_eq!(
+            suggestion_markup(&rep, &hits),
+            "<s>c<span weight=\"bold\" underline=\"single\">a</span>t</s> \u{2192} \
+             <i>d<span weight=\"bold\" underline=\"single\">o</span>g</i>"
+        );
+        let add = sugg(None, Some("new words"));
+        assert_eq!(suggestion_text(&add), "new words");
+        let hits = q("words").find("new words").unwrap();
+        assert_eq!(
+            suggestion_markup(&add, &hits),
+            "<i>new <span weight=\"bold\" underline=\"single\">words</span></i>"
+        );
+        let del = sugg(Some("old"), None);
+        assert_eq!(suggestion_text(&del), "old");
+        assert_eq!(suggestion_markup(&del, &[]), "<s>old</s>");
+    }
+
+    #[test]
+    fn a_suggestion_card_spells_out_each_kind_of_edit() {
+        assert_eq!(
+            suggestion_card_lines(&sugg(Some("a&b"), Some("c"))),
             [
                 "<b>Replace:</b> \u{201c}<s>a&amp;b</s>\u{201d}",
                 "<b>With:</b> \u{201c}<i>c</i>\u{201d}"
             ]
         );
         assert_eq!(
-            suggestion_card_lines("gone", "")[1],
+            suggestion_card_lines(&sugg(Some("gone"), Some("")))[1],
             "<b>With:</b> (nothing)"
+        );
+        assert_eq!(
+            suggestion_card_lines(&sugg(None, Some("more"))),
+            ["<b>Added:</b> \u{201c}<i>more</i>\u{201d}"]
+        );
+        assert_eq!(
+            suggestion_card_lines(&sugg(Some("less"), None)),
+            ["<b>Removed:</b> \u{201c}<s>less</s>\u{201d}"]
         );
     }
 

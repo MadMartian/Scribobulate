@@ -92,10 +92,9 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
-            // A suggested replacement is quoted as its change, as the card and the
-            // viewer's row quote it.
+            // A suggested edit is quoted as its change, as the viewer's row quotes it.
             claim: match crate::annotate::Suggestion::of(normalised.as_str(), ann) {
-                Some(s) => crate::sidebarfilter::suggestion_text(&s.old, &s.new),
+                Some(s) => crate::sidebarfilter::suggestion_text(&s),
                 None => claim_text(cleaned, hs, he),
             },
         });

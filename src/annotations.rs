@@ -7,10 +7,10 @@
 //!
 //! **Identity, not index.** Each entry carries its `src_span` (its byte span in the
 //! ORIGINAL source), and navigation keys on that span — never on the entry's
-//! position in the list. The list is a *filtered subsequence* of every CriticMarkup
-//! construct (the inert suggested-edit kinds are excluded, TDD 20.2), so a row's
-//! position is generally **not** its margin chip's position. A viewer that navigated by row index would silently open the wrong annotation's
-//! popover on any document containing an excluded construct (GTK4Rs/AP-74).
+//! position in the list. The list can be narrowed by a sidebar filter (TDD 20.24), so a
+//! row's position is generally **not** its margin chip's position. A viewer that
+//! navigated by row index would silently open the wrong annotation's popover whenever
+//! the two orders part (GTK4Rs/AP-74).
 
 use crate::annotate::{extract, AnnKind};
 use crate::span::OriginalByteOffset;
@@ -26,18 +26,18 @@ pub(crate) struct AnnotationEntry {
     /// offset or a cleaned-source byte (the source of past displacement bugs).
     pub(crate) src_span: Range<OriginalByteOffset>,
     /// Which CriticMarkup construct this is (a `Highlight`, with or without a comment, a
-    /// suggested replacement, or a point `Comment`) — the kinds `is_listed` admits.
+    /// suggested edit, or a point `Comment`) — the kinds `is_listed` admits.
     pub(crate) kind: AnnKind,
     /// The comment body text. Empty for a bare highlight, which has no comment yet
     /// (TDD 17.67); non-empty for every other listed annotation.
     pub(crate) comment: String,
     /// The highlighted claim snippet (shown dimmed as secondary text) for a
-    /// `Highlight`; for a suggested replacement, its change as the words `old → new`
-    /// (what the filter searches); `None` for a point comment, which annotates a
+    /// `Highlight`; for a suggested edit, its change as words — `old → new`, or the
+    /// added or removed text (what the filter searches); `None` for a point comment, which annotates a
     /// position, not a span.
     pub(crate) claim: Option<String>,
-    /// A suggested replacement's two sides, for the row to strike the old one through
-    /// (TDD 20.2); `None` for every other kind.
+    /// A suggested edit's sides, for the row to strike what goes through and slant what
+    /// comes (TDD 20.2); `None` for a highlight or a comment.
     pub(crate) suggestion: Option<crate::annotate::Suggestion>,
 }
 
@@ -70,9 +70,11 @@ pub(crate) fn extract_entries(source: &str) -> Vec<AnnotationEntry> {
                 AnnKind::Highlight => Some(crate::annotate::plain_claim(
                     &ex.cleaned[a.cleaned_content.start.raw()..a.cleaned_content.end.raw()],
                 )),
-                AnnKind::Substitution => crate::annotate::Suggestion::of(source, a)
-                    .map(|s| crate::sidebarfilter::suggestion_text(&s.old, &s.new)),
-                _ => None,
+                AnnKind::Substitution | AnnKind::Insertion | AnnKind::Deletion => {
+                    crate::annotate::Suggestion::of(source, a)
+                        .map(|s| crate::sidebarfilter::suggestion_text(&s))
+                }
+                AnnKind::Comment => None,
             },
             suggestion: crate::annotate::Suggestion::of(source, a),
         })
@@ -470,10 +472,23 @@ mod tests {
     }
 
     #[test]
-    fn inert_kinds_are_not_listed() {
-        // Insertion and deletion have no chip and no viewer row (TDD 20.2).
-        let md = "a {++ins++} b {--del--} d";
-        assert!(extract_entries(md).is_empty());
+    fn additions_and_deletions_are_listed_as_their_text_with_their_notes() {
+        // TDD 20.2: no CriticMarkup kind is left out; an addition's row quotes what it
+        // adds, a deletion's what it removes.
+        let es = extract_entries("a {++more++}{>>why<<} b {--less--} d");
+        let rows: Vec<_> = es
+            .iter()
+            .map(|e| (e.kind, e.claim.as_deref(), e.comment.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (AnnKind::Insertion, Some("more"), "why"),
+                (AnnKind::Deletion, Some("less"), "")
+            ]
+        );
+        assert_eq!(es[0].suggestion.as_ref().unwrap().old, None);
+        assert_eq!(es[1].suggestion.as_ref().unwrap().new, None);
     }
 
     #[test]
@@ -490,23 +505,10 @@ mod tests {
         assert_eq!(
             es[1].suggestion,
             Some(crate::annotate::Suggestion {
-                old: "old".into(),
-                new: "new".into()
+                old: Some("old".into()),
+                new: Some("new".into())
             })
         );
-    }
-
-    #[test]
-    fn an_inert_kind_before_a_comment_does_not_shift_membership() {
-        // The membership-vs-position hazard: the insertion is skipped, so the ONE listed
-        // entry is the commented point, and its src_span identity — not its list
-        // position — is what will navigate.
-        let md = "x {++ins++} y {>>real note<<} z";
-        let es = extract_entries(md);
-        assert_eq!(es.len(), 1);
-        assert_eq!(es[0].comment, "real note");
-        // The identity span points at the real annotation, past the insertion.
-        assert!(md[es[0].src_span.start.raw()..es[0].src_span.end.raw()].starts_with("{>>"));
     }
 
     #[test]

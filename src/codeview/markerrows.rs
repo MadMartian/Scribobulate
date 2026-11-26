@@ -51,13 +51,12 @@ pub(super) fn build_annotation_row(
     wheel: &cardscroll::RowWheel,
 ) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    // A suggested replacement shows its change where a claim shows its words, in the
-    // card's fuller form: what it replaces, struck through, and what with (TDD 17.72).
-    // It is the card's subject rather than context for a comment, so it is not dimmed,
-    // and each side is capped on its own, so a long old side cannot push "With:" out of
-    // sight.
+    // A suggested edit shows its change where a claim shows its words, in the card's
+    // fuller form: what goes, struck through, and what comes (TDD 17.72). It is the
+    // card's subject rather than context for a comment, so it is not dimmed, and each
+    // side is capped on its own, so a long old side cannot push "With:" out of sight.
     let quotes: Vec<gtk::Label> = match (&m.suggestion, &m.claim) {
-        (Some(s), _) => crate::sidebarfilter::suggestion_card_lines(&s.old, &s.new)
+        (Some(s), _) => crate::sidebarfilter::suggestion_card_lines(s)
             .iter()
             .map(|markup| {
                 let l = gtk::Label::new(None);
@@ -143,8 +142,8 @@ fn append_edit_remove_controls(
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class("destructive-action");
     btns.append(&edit);
-    // A suggested replacement can also be applied: Accept edit keeps its new side, as
-    // Remove keeps its old (TDD 17.73, 17.74). Both are removals that differ only in
+    // A suggested edit can also be applied: Accept edit keeps its new side, as Remove
+    // keeps its old (TDD 17.73, 17.74) — either may be nothing. Both are removals that differ only in
     // which side survives.
     if m.suggestion.is_some() {
         let accept = gtk::Button::with_label("Accept edit");
@@ -215,7 +214,7 @@ fn append_edit_remove_controls(
     stack.set_visible_child_name("read");
     row.append(&stack);
 
-    // A highlight keeps its claim; a suggested replacement, rejected, keeps its old side;
+    // A highlight keeps its claim; a suggested edit, rejected, keeps its old side;
     // a point comment keeps nothing.
     let kept = match &m.suggestion {
         Some(_) => m.source.src_old.clone(),

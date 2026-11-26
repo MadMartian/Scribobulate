@@ -2814,10 +2814,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** it is shown in the preview
 - **Then** the words "the earth is flat" appear with a coloured highlight background, and neither the `{==…==}`/`{>>…<<}` delimiters nor the comment text appear in the rendered text
 
-### 17.2 Suggested-edit markup renders inert, without braces
+### 17.2 Suggested-edit markup renders without braces
 - **Given** a document containing `{++inserted++}`, `{--deleted--}`, and `{~~old~>new~~}`
 - **When** it is shown in the preview
-- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown; insertions and deletions get no distinct styling, and a replacement's new text is highlighted as a suggested replacement (17.71)
+- **Then** the visible text reads "inserted", "deleted", and "new" respectively, with no CriticMarkup delimiters shown, each highlighted as a suggested edit (17.71)
 
 ### 17.3 A comment is reachable from a margin marker
 - **Given** a rendered document with a highlighted claim that carries a comment
@@ -3238,26 +3238,26 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
 
-### 17.71 A suggested replacement is an annotation with a margin marker
-- **Given** a document containing a suggested replacement — `{~~old~>new~~}`, with or without a note `{>>note<<}` right after it, either side possibly empty
+### 17.71 A suggested edit is an annotation with a margin marker
+- **Given** a document containing a suggested edit — a replacement `{~~old~>new~~}` (either side possibly empty), an addition `{++text++}` or a deletion `{--text--}` — with or without a note `{>>note<<}` right after it
 - **When** it is shown in the preview
-- **Then** the page reads the new text, highlighted like a claim, and its line carries a margin marker that counts it like any other annotation (17.4)
+- **Then** the page reads a replacement's new text, or an addition's or deletion's text, highlighted like a claim (a deletion's text stays, so the reader sees what would go), and its line carries a margin marker that counts it like any other annotation (17.4)
 
-### 17.72 A suggested replacement's card shows the change and offers to accept it
-- **Given** the margin card of a suggested replacement is open
+### 17.72 A suggested edit's card shows the change and offers to accept it
+- **Given** the margin card of a suggested edit is open
 - **When** the reader reads it
-- **Then** it spells the change out on two lines — "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics — followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
+- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
 - **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
 
-### 17.73 Accepting a suggested replacement applies it
-- **Given** a suggested replacement's card is open
+### 17.73 Accepting a suggested edit applies it
+- **Given** a suggested edit's card is open
 - **When** the reader chooses Accept edit
-- **Then** the whole construct, with its note, is replaced in the file by the new text alone, so the annotation and its marker are gone and the page reads the new text unhighlighted; nothing else in the document changes, and Undo restores the construct
+- **Then** the whole construct, with its note, is replaced in the file by what the edit leaves — a replacement's new text, an addition's text, nothing for a deletion — so the annotation and its marker are gone and the page reads the result unhighlighted; nothing else in the document changes, and Undo restores the construct
 
-### 17.74 Removing a suggested replacement rejects it
-- **Given** a suggested replacement's card is open
+### 17.74 Removing a suggested edit rejects it
+- **Given** a suggested edit's card is open
 - **When** the reader chooses Remove
-- **Then** the whole construct, with its note, is replaced in the file by the old text alone, so the annotation and its marker are gone and the page reads the old text; nothing else in the document changes, and Undo restores the construct
+- **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone; nothing else in the document changes, and Undo restores the construct
 
 ## 18. Preview reading themes
 
@@ -3794,11 +3794,11 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** the annotations viewer is shown
 - **Then** it lists one row per annotation in document order, each showing the comment text with the annotated claim as dimmed secondary text (point comments show comment only; a bare highlight shows the claim under an empty comment, 17.67)
 
-### 20.2 Inert kinds are not listed; a bare highlight and a suggested replacement are
-- **Given** a document containing a bare `{==highlight==}` (no comment), a suggested replacement (`{~~a~>b~~}`) and inert kinds (`{++ins++}`, `{--del--}`) alongside real annotations
+### 20.2 Every CriticMarkup annotation is listed, a bare highlight included
+- **Given** a document containing a bare `{==highlight==}` (no comment) and suggested edits (`{~~a~>b~~}`, `{++ins++}`, `{--del--}`) alongside commented annotations
 - **When** the viewer is shown
-- **Then** only highlights (commented or bare, 17.67), point comments and suggested replacements appear — insertions and deletions have no row — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
-- **And** a suggested replacement's row quotes it as the old text struck through, an arrow, then the new text, with its note as the comment
+- **Then** every one has a row — highlights (commented or bare, 17.67), point comments and suggested edits — and the list membership matches exactly the set of chips the preview draws (one shared predicate, no drift)
+- **And** a suggested edit's row quotes its change with what goes struck through and what comes in italics — a replacement's old text, an arrow, then its new text; an addition's text; a deletion's text — with its note as the comment
 
 ### 20.3 An empty or annotation-less document shows a placeholder, not an error
 - **Given** a document with no annotations

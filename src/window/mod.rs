@@ -1421,22 +1421,18 @@ pub(crate) mod gtk_integration_tests {
         });
     }
 
-    /// The annotations viewer lists exactly the highlights and point comments (TDD
-    /// 20.1/20.2, 17.67): a bare highlight is listed beside the commented ones, and the
-    /// inert suggested-edit kinds are excluded, so a document with a commented highlight,
-    /// a bare one, an insertion and a point comment shows three rows.
+    /// The annotations viewer lists every annotation (TDD 20.1/20.2, 17.67): a commented
+    /// highlight, a bare one, each kind of suggested edit and a point comment — six rows.
     #[gtktest::test]
-    fn the_annotations_viewer_lists_highlights_and_comments_but_not_inert_kinds() {
+    fn the_annotations_viewer_lists_every_kind_of_annotation() {
         let app = test_app("com.extollit.scribobulate.integrationtest.annlist");
-        let md = "a {==c1==}{>>note one<<} b {==bare==} c {++ins++} d {>>point<<} e";
+        let md = "a {==c1==}{>>note one<<} b {==bare==} c {++ins++} d {--del--} \
+                  e {~~old~>new~~} f {>>point<<} g";
         let win = new_window(&app, "IT-ann", md, None);
         let ch = winstate::chrome(&win).expect("chrome registered");
         let lv = list_view_of(&ch.annotations_scroller).expect("annotations list is a ListView");
         let n = lv.model().expect("selection model").n_items();
-        assert_eq!(
-            n, 3,
-            "commented highlight, bare highlight and point comment listed; inert kind excluded"
-        );
+        assert_eq!(n, 6, "every annotation in the document has a row");
     }
 
     /// The four-state sidebar rule (TDD 20.9): the two panes toggle independently, and

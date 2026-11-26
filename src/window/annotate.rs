@@ -164,8 +164,9 @@ pub(crate) fn announce_annotation_refused(widget: &impl IsA<gtk::Widget>) {
 pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit) {
     let old = crate::saferizer::BufferText::of(buf).into_string();
     // Whether the page reads the same words after the edit, so no fold key moves. True
-    // of every arm but one: rejecting a suggested replacement, which swaps the new text
-    // the page showed for the old (TDD 17.74).
+    // of every arm but one: settling a suggested edit in a way that changes the words the
+    // page showed — rejecting a replacement or an addition, accepting a deletion (TDD
+    // 17.73, 17.74).
     let mut page_text_kept = true;
     let new = match edit {
         // Both anchored mutations RE-LOCATE their construct in the live source

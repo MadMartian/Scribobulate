@@ -951,33 +951,49 @@ mod tests {
     /// guard that fails when THAT defense alone is taken away.
     #[test]
     fn accepting_or_removing_a_suggestion_keeps_one_side_and_drops_its_note() {
-        // TDD 17.73 / 17.74: the whole construct, note included, becomes one side.
-        for src in [
-            "Dear sir{~~,~>:~~}{>>colon<<} hello",
-            "Dear sir{~~,~>:~~} hello",
-        ] {
-            let ex = super::super::extract(src);
-            let ann = &ex.annotations[0];
-            let (old, new) = super::super::suggestion_sides(ann).unwrap();
+        // TDD 17.73 / 17.74: the whole construct, note included, becomes the side the
+        // choice keeps — accepting keeps what would come, removing keeps what would go.
+        let settle = |src: &str| {
+            let ann = &super::super::extract(src).annotations[0];
+            let sides = super::super::suggestion_sides(ann).unwrap();
             let span = ann.src_span.start.raw()..ann.src_span.end.raw();
-            assert_eq!(
-                remove_annotation(src, span.clone(), Some(new)).as_deref(),
-                Some("Dear sir: hello")
-            );
-            assert_eq!(
-                remove_annotation(src, span, Some(old)).as_deref(),
-                Some("Dear sir, hello")
-            );
+            (
+                remove_annotation(src, span.clone(), sides.new).unwrap(),
+                remove_annotation(src, span, sides.old).unwrap(),
+            )
+        };
+        for (src, accepted, removed) in [
+            (
+                "Dear sir{~~,~>:~~}{>>colon<<} hello",
+                "Dear sir: hello",
+                "Dear sir, hello",
+            ),
+            (
+                "Dear sir{~~,~>:~~} hello",
+                "Dear sir: hello",
+                "Dear sir, hello",
+            ),
+            (
+                "one {++more ++}{>>add<<}thing",
+                "one more thing",
+                "one thing",
+            ),
+            (
+                "one {--less --}{>>cut<<}thing",
+                "one thing",
+                "one less thing",
+            ),
+            // An empty side keeps nothing in place.
+            ("a {~~gone~>~~} b", "a  b", "a gone b"),
+            // A deletion of a whole paragraph takes its line and blank line with it.
+            (
+                "Keep.\n\n{--Drop this.--}\n\nAfter.\n",
+                "Keep.\n\nAfter.\n",
+                "Keep.\n\nDrop this.\n\nAfter.\n",
+            ),
+        ] {
+            assert_eq!(settle(src), (accepted.into(), removed.into()), "{src:?}");
         }
-        // An empty side is kept as nothing, never as the whole construct's removal span.
-        let src = "a {~~gone~>~~} b";
-        let ann = &super::super::extract(src).annotations[0];
-        let (_, new) = super::super::suggestion_sides(ann).unwrap();
-        let span = ann.src_span.start.raw()..ann.src_span.end.raw();
-        assert_eq!(
-            remove_annotation(src, span, Some(new)).as_deref(),
-            Some("a  b")
-        );
     }
 
     #[test]

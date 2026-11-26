@@ -890,15 +890,15 @@ fn build_markers(
         // `.raw()` here. `anchor_cleaned` is a cleaned byte offset (→ buffer offset).
         let mut suggestion = None;
         let (anchor_cleaned, claim, src_content) = match ann.kind {
-            AnnKind::Substitution => {
-                let (Some((_, new_range)), Some(s)) = (
+            AnnKind::Substitution | AnnKind::Insertion | AnnKind::Deletion => {
+                let (Some(sides), Some(s)) = (
                     crate::annotate::suggestion_sides(ann),
                     crate::annotate::Suggestion::of(original, ann),
                 ) else {
                     continue;
                 };
-                suggestion = Some(s);
-                (ann.cleaned_content.end.raw(), None, Some(new_range))
+                suggestion = Some((s, sides.old));
+                (ann.cleaned_content.end.raw(), None, sides.new)
             }
             AnnKind::Highlight => {
                 // The claim is kept verbatim, so its cleaned byte length equals its
@@ -914,9 +914,8 @@ fn build_markers(
                 // here is a process abort — no `catch_unwind` on the app path),
                 // and a range that is merely off a char boundary panics on the
                 // slice. `saturating_sub` + `.get()` make a malformed annotation
-                // render as an empty claim rather than kill the window, which is
-                // the same degradation the `_ => continue` arm below already
-                // applies to kinds it cannot handle.
+                // render as an empty claim rather than kill the window, as a
+                // suggested edit whose sides cannot be read yields no marker above.
                 let cleaned_len = hi.saturating_sub(lo);
                 (
                     hi,
@@ -929,14 +928,13 @@ fn build_markers(
                 )
             }
             AnnKind::Comment => (crate::annotate::chip_anchor(original, ann), None, None),
-            _ => continue,
         };
         // A bare highlight has no comment yet: its comment is empty and its "body" the
         // empty range just past the closing `==}`, where Edit writes `{>>…<<}`
         // (TDD 17.67). Every other listed annotation carries both.
         let (comment, body) = match (ann.comment.clone(), ann.src_comment_body.clone()) {
             (Some(comment), Some(body)) => (comment, body),
-            // A suggested replacement without a note is in the same position.
+            // A suggested edit without a note is in the same position.
             _ if ann.highlights_text() => {
                 let end = ann.src_span.end.raw();
                 (String::new(), end..end)
@@ -963,13 +961,13 @@ fn build_markers(
             anchor: cleaned_offset_to_buf(anchor_cleaned, cleaned, hl_evs),
             comment,
             claim,
-            suggestion,
+            suggestion: suggestion.as_ref().map(|(s, _)| s.clone()),
             source: crate::codeview::MarkerSource {
                 construct,
                 src_content,
                 src_comment_body: body,
                 cleaned_content: ann.cleaned_content.start.raw()..ann.cleaned_content.end.raw(),
-                src_old: ann.src_old.clone(),
+                src_old: suggestion.and_then(|(_, old)| old),
             },
             cell_widget: None,
             cell_table_anchor: None,
@@ -1264,8 +1262,8 @@ mod pure_tests {
         assert_eq!(
             m.suggestion,
             Some(crate::annotate::Suggestion {
-                old: ",".into(),
-                new: ":".into()
+                old: Some(",".into()),
+                new: Some(":".into())
             })
         );
         let src = |r: &Option<std::ops::Range<usize>>| &original[r.clone().unwrap()];
