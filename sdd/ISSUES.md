@@ -68,8 +68,13 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | H | Any | Production | A window restored squeezed below its sidebar sections' minimum and left a while before being grown keeps the squeezed sidebar split, and quitting then saves it over the one the reader chose | Low |
+| J | Mac | Test | A macOS lifecycle test's positive control (`a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen`) intermittently finds GDK already reading the zoomed window as maximized; green on re-run | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
+| K | Mac, Linux | Test | The GTK suite on CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV or SIGABRT — four sightings (three macOS, one Linux), in four unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
+| L | Linux | Test | The XInclude screen's linear-time test intermittently fails under coverage instrumentation on CI: 10× the time for 4× the input, read as "grows faster than linear" | Low |
+| M | Windows | Test | `verify-licenses.ps1` run on an installed tree always flags the three files the installer itself adds (`scribobulate.ico`, `unins000.dat`, `unins000.exe`), so its result there needs reading by hand | Low |
+| N | Mac | Production | The editor's syntax colours do not follow a live macOS light/dark switch: the title bar flips, the editor's colours stay as they were until relaunch | Low |
+| O | Any | Production | After pasting over a select-all, the status bar shows a stale selection count ("167 of 8 words") | Low |
 
 ## Closed issues
 
@@ -316,8 +321,14 @@ reached the overflow armed. Seen once, on 2026-11-26 (run 45792812827, branch
 `feat/add-follow-up`, which touches no forensics code); the failed job passed on re-run.
 Linux and macOS passed the same run, and master's run on the same day passed on all three.
 
-**What is known**: nothing beyond the one sighting. Not reproduced locally; not yet tried on
-the `windows` seat.
+**Second sighting** (2026-11-26, run 45876597815, the merge of two v1.0.1 fixes onto
+master, neither touching forensics): same test, same assertion, but with the exit codes
+the other way round — `armed exited 0xc0000005, control 0xc00000fd`. Passed on re-run.
+
+**What is known**: two sightings in one day on unrelated trees. The swapped codes in the
+second may only mean the two children's labels differ from what the message assumes; read
+`assert_a_reported_death` before reading anything into them. Not reproduced locally; not yet
+tried on the `windows` seat.
 
 **Next step**: have the `windows` seat run the test in a loop (it re-executes the test
 binary per case, so a few hundred runs are cheap) to measure how often the report goes
@@ -445,8 +456,10 @@ about 15 s before growing, it keeps the squeezed position (divider at y 588 of 9
 of 707), and the next quit writes that fraction (`sidebar_split = 0.633`) over the chosen
 one (0.785), so the choice is lost. 3 of 3 runs with the long wait, 0 of 3 with the short
 one. The same shrink-and-grow inside one session, with no restart, restores correctly.
-Filed `Any` because the split's bookkeeping is shared code; Windows and macOS have not been
-driven.
+Reproduced on Windows (2026-11-26, GTK 4.24.1, twice: squeezed to 0.67, quit saved 0.78,
+relaunched and grown to 900 px → divider stayed 0.67 and the next quit saved 0.6708) and on
+macOS (same day: quit kept 0.6416, grown after relaunch → about 0.55, saved 0.5495). On both,
+the same shrink-and-grow inside one session restores correctly, as on Linux.
 
 **Suspected mechanism** (not measured): only a divider move the reader makes is stored, and
 a move that arrives with a sidebar height change is taken for GTK's clamp. After a restore
@@ -460,6 +473,27 @@ the reader's and is stored.
 - Store the reader's fraction only from the divider's own drag gesture, never from a
   position notify.
 - Accept: the case needs a restart at a squeezed size and a wait before growing.
+
+## J. A macOS lifecycle test's positive control sometimes reads the zoomed window as maximized
+
+**Severity**: Low (test-only; the run passes on a re-run of the failed job).
+
+**Symptom**: on macOS CI, packaging run 45803820136 (2026-11-26, the `release/1.0.1` head of that day's
+second fix round, runner GTK 4.24.2), the GTK suite's
+`window::lifecycle::tests::a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen`
+failed its **positive control** at `src/window/lifecycle.rs` ("GDK reads the zoomed window as
+not maximized while the sibling's Space is current"), with `GDK_IS_MACOS_SURFACE` criticals
+logged; 891 others passed. The same commit passed macOS in its push run (45798764638), and the
+failed job passed on re-run. `lifecycle.rs` is unchanged since v1.0.0.
+
+**What is known**: one sighting. The control asserts what GDK reports while a sibling
+window's full-screen Space is current, which depends on AppKit's Space transition having
+finished; a slow runner may read it before or after.
+
+**Mitigation options**:
+- Wait for the Space transition (or poll the control's reading with a bound) before
+  asserting it, so the control measures the state rather than the race.
+- Accept: re-run on failure, and look again if it recurs.
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
@@ -501,7 +535,7 @@ the operator to file.
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
 
-## K. The GTK suite on macOS CI intermittently dies on a finalized-object ref
+## K. The GTK suite on CI intermittently dies on a finalized-object ref
 
 **Severity**: Medium (test-only, but two of six macOS CI runs on near-identical trees; each
 costs a re-run of the gate, and a release gate that goes red one time in three is a
@@ -524,6 +558,20 @@ tests (`gtk_suite` runs each module in a child process of its own, so the histor
 matters is the module's, not the suite's). The runner's
 GTK is Homebrew 4.24.1, the same version the Mac seat's 0-of-43 was measured on.
 
+**Third sighting** (2026-11-26, push run 45876516033 on `release/1.0.1`, runner GTK 4.24.2):
+`gtk_suite::window::find::bartests::a_scoped_replace_all_is_one_undo_step`, same critical,
+then `FAILED (killed by signal 11)`; 891 others passed and the failed job passed on re-run.
+Its tree's two parents had each passed macOS on their own branches. A third unrelated
+`window::` test, so the holder is still in the shared window build-and-teardown.
+
+**First sighting on Linux** (2026-11-26, run 45876597815 attempt 1, the merge of two v1.0.1
+fixes onto master, in the coverage pass of the GTK suite, GTK 4.6.9):
+`gtk_suite::window::editbar::focusgate::gtk_integration_tests::switching_back_to_a_tab_whose_editor_had_focus_keeps_format_enabled`
+logged the same `object_ref: assertion '!object_already_finalized' failed` and was
+`killed by signal 6`; 887 others passed, and the failed job passed on re-run. The same test
+passed in the plain (non-coverage) pass of that very run. So this is **not macOS-specific**:
+two platforms, two GTK lines (4.6.9 and 4.24.x), four unrelated `window::` tests.
+
 **What is known**: the same tree passed macOS in push run 42966560560 minutes earlier and in
 42963000129 (the branch head it merged, identical tree) before that, so it is intermittent. A finalized-object
 `ref` followed by a segfault is a dangling GObject pointer, not a timing miss: something in the
@@ -541,6 +589,69 @@ next fires there, keep the run's log and the child's crash report, which names t
 holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
+
+## L. The XInclude screen's linear-time test sometimes fails under coverage on CI
+
+**Severity**: Low (test-only; passes on re-run and in the plain test pass).
+
+**Symptom**: on Linux CI, run 45862532313 (2026-11-26, a fix branch touching no image code),
+the coverage pass's `imagedecode::xinclude::tests::cap_sized_runs_of_declarations_are_screened_in_bounded_time`
+failed: `xml declarations with no '?>': 2.408747649s at a quarter of the cap, 25.362460429s at
+the cap — grows faster than linear`. The test allows `quarter × 9 + 0.5 s`; this was about
+10.5×. The failed job passed on re-run. Coverage runs on Linux only (`scripts/pipeline.steps`
+declares it non-applicable on Windows), so whether macOS would show it is unknowable today.
+
+**What is known**: one sighting, inside coverage instrumentation, which slows the code
+unevenly and shares the runner with the rest of the suite. A real quadratic regression
+would fail the plain pass as well, and it did not.
+
+**Mitigation options**:
+- Run the ratio check only outside coverage (it is a performance claim, and instrumented
+  timings are not the product's), keeping the absolute 120 s bound in both.
+- Take the best of a few timings for each size, so one stall on a shared runner cannot
+  decide it.
+
+## M. The licence check flags the installer's own files on an installed Windows tree
+
+**Severity**: Low (tooling; nothing is missing from the licences).
+
+**Symptom**: `packaging/windows/verify-licenses.ps1`, run on an installed tree during the
+v1.0.1 release pass (2026-11-26), passed every row of the licence table but reported its
+"Condition 1" (a file with no matching row) for `scribobulate.ico`, `unins000.dat` and
+`unins000.exe`. All three are written by Inno Setup at install time, not by the build, so
+the staged tree the script is written for does not have them.
+
+**Mitigation options**:
+- Teach the script the installer's own files, and say in its output which tree it judged.
+- Document it as a staged-tree tool and have release gate 6 run it on the staged tree only.
+
+## N. The editor's syntax colours do not follow a live macOS appearance switch
+
+**Severity**: Low (colours are correct after a relaunch).
+
+**Observed** (2026-11-26, macOS, v1.0.1 release pass, MANUAL-TEST 4.2a): switching macOS
+between light and dark while the app runs flips the window's title bar, but the editor's
+syntax colours stay those of the appearance it was launched under. Launched under the new
+appearance, they are correct. Linux and Windows not yet checked for the same live switch;
+Windows' 4.2a pass flipped the app mode and found the colours correct, which suggests the
+macOS appearance notification is the path that misses the editor.
+
+**Mitigation options**:
+- Find where the editor's style scheme is chosen and make it follow the same appearance
+  signal the title bar does.
+
+## O. The status bar keeps a stale selection count after pasting over a select-all
+
+**Severity**: Low (a cosmetic count; the document is right).
+
+**Observed** (2026-11-26, macOS, v1.0.1 release pass): select all in the editor and paste
+over it; the status bar then reads "167 of 8 words" — a selection count from before the
+paste, against the new document's total. Seen on macOS only so far; filed `Any` because
+the word count and its selection tracking are shared code.
+
+**Mitigation options**:
+- Recount the selection on the buffer change that replaces it, not only on a
+  selection-bounds change.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
