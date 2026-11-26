@@ -1192,13 +1192,12 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
             .clone()
             .expect("the card exists once opened");
 
-        let quote = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
-            .expect("the card spells out the change with its old side struck through");
-        assert_eq!(
-            quote.text(),
-            "Replace: \u{201c},\u{201d}\nWith: \u{201c}:\u{201d}"
-        );
-        assert!(quote.uses_markup());
+        let old = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
+            .expect("the card spells out what it replaces, struck through");
+        let new = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<i>"))
+            .expect("the card spells out what with, in italics");
+        assert_eq!(old.text(), "Replace: \u{201c},\u{201d}");
+        assert_eq!(new.text(), "With: \u{201c}:\u{201d}");
         assert!(
             find_button(&card, "Edit").is_some(),
             "the note stays editable (17.72)"
@@ -1239,4 +1238,66 @@ fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
         .expect("a cell carries the annotation highlight");
     assert_eq!(cell.text(), "say hello there");
     crate::testpump::destroy_after_tooltip_delay(&win, || ());
+}
+
+/// TDD 17.72: however long the text a suggestion replaces, its card still shows "With:"
+/// without the reader scrolling. Each side is capped on its own; under one shared cap a
+/// long old side pushed the new one out of sight.
+#[gtktest::test]
+fn a_long_suggestion_still_shows_what_it_is_replaced_with() {
+    use gtk::subclass::prelude::*;
+    let long = "We are hoping to maybe deliver the export feature sometime next week, \
+                or possibly the week after, depending on how the testing goes and \
+                whether anything else comes up in the meantime that needs attention";
+    let src = format!("{{~~{long}~>Friday~~}} it is.\n");
+    let pane = crate::preview::render(
+        None,
+        &src,
+        None,
+        1.0,
+        false,
+        &crate::fold::FoldState::default(),
+    );
+    let view = view_of(pane.clone());
+    let win = gtk::Window::new();
+    win.set_default_size(700, 400);
+    win.set_child(Some(&pane));
+    win.present();
+    settle("the suggestion's chip to paint", || {
+        hitbox_count(&view) == 1
+    });
+    view.set_annotation_sink(std::rc::Rc::new(|_e: AnnotationEdit| {}));
+    assert!(view.open_stepped_marker_popover(0, Direction::Next));
+    settle("the card to open", || view.has_open_marker_popover());
+    let card = view
+        .imp()
+        .marker_card
+        .borrow()
+        .clone()
+        .expect("the card exists once opened");
+    let old = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<s>"))
+        .expect("the old side is shown");
+    let new = find_descendant_where::<gtk::Label>(&card, |l| l.label().contains("<i>"))
+        .expect("the new side is shown");
+    settle("the card to lay out", || {
+        new.height() > 0 && old.height() > 0
+    });
+    let scroller = |l: &gtk::Label| {
+        l.ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .expect("each side is capped in a scroller")
+    };
+    // precondition: the old side really is long enough to be capped
+    let old_sw = scroller(&old);
+    assert!(
+        old_sw.vadjustment().upper() > old_sw.vadjustment().page_size(),
+        "the fixture's old side must overflow its cap"
+    );
+    let new_sw = scroller(&new);
+    assert_ne!(old_sw, new_sw, "each side has a cap of its own");
+    assert!(
+        new_sw.vadjustment().upper() <= new_sw.vadjustment().page_size(),
+        "\"With:\" is shown whole, unscrolled"
+    );
+    crate::testpump::destroy_after_tooltip_delay(&win, || view.popdown_marker_popover());
 }

@@ -201,30 +201,29 @@ pub(crate) fn suggestion_markup(old: &str, new: &str, hits: &[Range<usize>]) -> 
 }
 
 /// A suggested replacement as its margin card spells it out — the drill-down beside the
-/// one-line [`suggestion_markup`] the viewer's row uses:
+/// one-line [`suggestion_markup`] the viewer's row uses — as two lines of markup:
 ///
 /// **Replace:** “~~old~~”
 /// **With:** “*new*”
 ///
-/// Each side is quoted, so where the label ends and the text begins is never in doubt; the
-/// quotes themselves are neither struck nor slanted. An empty side reads "(nothing)",
-/// unquoted, so a pure deletion or insertion still says what it does (TDD 17.72).
-pub(crate) fn suggestion_card_markup(old: &str, new: &str) -> String {
-    let side = |text: &str, tag: &str| {
-        if text.is_empty() {
+/// Two lines, not one string, because the card caps each in a scroller of its own: under
+/// one shared cap a long old side pushed "With:" out of sight (TDD 17.72). Each side is
+/// quoted, so where the label ends and the text begins is never in doubt; the quotes
+/// themselves are neither struck nor slanted. An empty side reads "(nothing)", unquoted,
+/// so a pure deletion or insertion still says what it does.
+pub(crate) fn suggestion_card_lines(old: &str, new: &str) -> [String; 2] {
+    let side = |label: &str, text: &str, tag: &str| {
+        let text = if text.is_empty() {
             "(nothing)".to_string()
         } else {
             format!(
                 "\u{201c}<{tag}>{}</{tag}>\u{201d}",
                 gtk::glib::markup_escape_text(text)
             )
-        }
+        };
+        format!("<b>{label}:</b> {text}")
     };
-    format!(
-        "<b>Replace:</b> {}\n<b>With:</b> {}",
-        side(old, "s"),
-        side(new, "i")
-    )
+    [side("Replace", old, "s"), side("With", new, "i")]
 }
 
 /// The filter bar's match count while its filter is active: `"3 of 40"` — how many rows
@@ -340,12 +339,15 @@ mod tests {
     #[test]
     fn a_suggestion_card_names_what_it_replaces_and_with_what() {
         assert_eq!(
-            suggestion_card_markup("a&b", "c"),
-            "<b>Replace:</b> \u{201c}<s>a&amp;b</s>\u{201d}\n<b>With:</b> \u{201c}<i>c</i>\u{201d}"
+            suggestion_card_lines("a&b", "c"),
+            [
+                "<b>Replace:</b> \u{201c}<s>a&amp;b</s>\u{201d}",
+                "<b>With:</b> \u{201c}<i>c</i>\u{201d}"
+            ]
         );
         assert_eq!(
-            suggestion_card_markup("gone", ""),
-            "<b>Replace:</b> \u{201c}<s>gone</s>\u{201d}\n<b>With:</b> (nothing)"
+            suggestion_card_lines("gone", "")[1],
+            "<b>With:</b> (nothing)"
         );
     }
 

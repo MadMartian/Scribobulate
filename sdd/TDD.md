@@ -3247,6 +3247,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** the margin card of a suggested replacement is open
 - **When** the reader reads it
 - **Then** it spells the change out on two lines — "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics — followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
+- **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
 
 ### 17.73 Accepting a suggested replacement applies it
 - **Given** a suggested replacement's card is open

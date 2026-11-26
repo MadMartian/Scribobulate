@@ -53,23 +53,26 @@ pub(super) fn build_annotation_row(
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     // A suggested replacement shows its change where a claim shows its words, in the
     // card's fuller form: what it replaces, struck through, and what with (TDD 17.72).
-    // It is the card's subject rather than context for a comment, so it is not dimmed.
-    let quote = match (&m.suggestion, &m.claim) {
-        (Some(s), _) => {
-            let l = gtk::Label::new(None);
-            l.set_markup(&crate::sidebarfilter::suggestion_card_markup(
-                &s.old, &s.new,
-            ));
-            Some(l)
-        }
+    // It is the card's subject rather than context for a comment, so it is not dimmed,
+    // and each side is capped on its own, so a long old side cannot push "With:" out of
+    // sight.
+    let quotes: Vec<gtk::Label> = match (&m.suggestion, &m.claim) {
+        (Some(s), _) => crate::sidebarfilter::suggestion_card_lines(&s.old, &s.new)
+            .iter()
+            .map(|markup| {
+                let l = gtk::Label::new(None);
+                l.set_markup(markup);
+                l
+            })
+            .collect(),
         (None, Some(claim)) => {
             let l = gtk::Label::new(Some(&format!("\u{201c}{claim}\u{201d}")));
             l.add_css_class("dim-label");
-            Some(l)
+            vec![l]
         }
-        (None, None) => None,
+        (None, None) => Vec::new(),
     };
-    if let Some(cl) = quote {
+    for cl in quotes {
         cl.set_xalign(0.0);
         cl.set_wrap(true);
         cl.set_max_width_chars(34);
