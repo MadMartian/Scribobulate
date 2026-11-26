@@ -13,7 +13,7 @@ models), and live-reloads files the instant an agent changes them on disk.
 
 ![Scribobulate](data/icons/scalable/apps/com.extollit.scribobulate.svg "Scribobulate")
 
-> **Status: released — v1.0.0** ([downloads](https://github.com/MadMartian/Scribobulate/releases/latest):
+> **Status: released — v1.0.1** ([downloads](https://github.com/MadMartian/Scribobulate/releases/latest):
 > `.deb`, `.rpm`, `.dmg`, Windows installer). Rendering, the editing pane (with live
 > split-preview), live reload, and conflict handling are all in —
 > Scribobulate opens and displays full-fidelity Markdown (tables,
@@ -173,8 +173,8 @@ Download the package from the [latest release](https://github.com/MadMartian/Scr
 and install it — no Rust toolchain, no development libraries:
 
 ```bash
-sudo apt install ./scribobulate_1.0.0_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./scribobulate-1.0.0-1.x86_64.rpm  # Fedora, RHEL
+sudo apt install ./scribobulate_1.0.1_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./scribobulate-1.0.1-1.x86_64.rpm  # Fedora, RHEL
 ```
 
 Or build from source, which is what you want if you intend to change it:
