@@ -4,9 +4,11 @@
 //! Redirected output was never affected, because a redirect hands the process real
 //! standard handles.
 //!
-//! [`attach_parent_console`] joins the console of the process that launched this one,
-//! and only when a standard handle is unset — so a redirect or pipe is left exactly as
-//! it was. It is called only on the paths that print and then exit: a process that
+//! [`attach_parent_console`] joins the console of the process that launched this one
+//! when a standard handle is unset, and puts back any handle that was set: attaching
+//! resets all three standard handles to the console, so without that a redirected
+//! stream (`--help > f.txt`, `2> e.txt`) went to the screen and its file stayed empty
+//! (MEASURED on the `windows` seat, conhost and ConPTY). It is called only on the paths that print and then exit: a process that
 //! stays running must not hold the terminal's console, or closing that terminal would
 //! end the app with it.
 
@@ -22,6 +24,7 @@ const STD_ERROR_HANDLE: u32 = -12i32 as u32;
 extern "system" {
     fn AttachConsole(process_id: u32) -> i32;
     fn GetStdHandle(which: u32) -> *mut c_void;
+    fn SetStdHandle(which: u32, handle: *mut c_void) -> i32;
 }
 
 /// Is this standard handle absent — null (a GUI process's default) or
@@ -30,15 +33,26 @@ fn unset(handle: *mut c_void) -> bool {
     handle.is_null() || handle as isize == -1
 }
 
-/// Join the launching terminal's console so what follows reaches it. Does nothing when
-/// both standard handles are already set (redirected or piped), or when the parent has
-/// no console (launched from Explorer): `AttachConsole` then fails, harmlessly.
+/// Join the launching terminal's console so what follows reaches it, keeping every
+/// standard handle that was already set (redirected or piped). Does nothing when both
+/// are set, or when the parent has no console (launched from Explorer): `AttachConsole`
+/// then fails, harmlessly.
 pub(crate) fn attach_parent_console() {
-    // SAFETY: both calls take plain integers and return a handle or a BOOL; neither
-    // reads memory this process owns.
+    // SAFETY: every call takes plain integers or a handle this process was given, and
+    // returns a handle or a BOOL; none reads memory this process owns.
     unsafe {
-        if unset(GetStdHandle(STD_OUTPUT_HANDLE)) || unset(GetStdHandle(STD_ERROR_HANDLE)) {
-            AttachConsole(ATTACH_PARENT_PROCESS);
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        let err = GetStdHandle(STD_ERROR_HANDLE);
+        if !unset(out) && !unset(err) {
+            return;
+        }
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for (which, kept) in [(STD_OUTPUT_HANDLE, out), (STD_ERROR_HANDLE, err)] {
+            if !unset(kept) {
+                SetStdHandle(which, kept);
+            }
         }
     }
 }
