@@ -43,6 +43,8 @@ A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
 - **Linux (GTK below 4.7, e.g. Ubuntu 22.04).** Preview prose breaks at the spaces
   between words again, rather than mid-word; only a paragraph holding a run too long to
   fit wraps by character.
+- **Windows.** `--help` and `--version` print into the terminal they were typed in;
+  before, the prompt came back with nothing printed. Redirected output is unchanged.
 - **Windows.** Which filenames count as devices (`nul.md`, `con.md`) is asked of
   Windows, so a Windows release that treats them as ordinary files opens them.
 - **macOS.** Opening and closing windows no longer keeps each closed window's menu tree
