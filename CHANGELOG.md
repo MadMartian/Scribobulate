@@ -26,6 +26,8 @@ A patch release: fixes to behaviour 1.0.0 already had, and nothing new.
 - **File patterns on the command line.** A pattern such as `*.md` that no shell expanded
   opens every file it matches, and one that matches nothing says so in the window,
   instead of opening a new document under that literal name.
+- **Command-line help.** `scribobulate --help` lists the files and switches the app
+  takes, instead of the toolkit's generic help, which named none of them.
 - **Editor highlighting.** A link is highlighted as exactly itself, no longer from the
   first bracket earlier on its line (a task checkbox, say).
 - **Navigation.** Ctrl+End in the preview reaches the true end of a document that is
