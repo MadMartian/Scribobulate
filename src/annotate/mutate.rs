@@ -133,6 +133,22 @@ fn insert_point_comment(source: &str, slot: &super::landing::Slot, comment: &str
     out
 }
 
+/// Insert a follow-up — a point comment `{>>comment<<}` — directly after the annotation
+/// construct occupying `construct` in `source`, so it shares that annotation's marker and
+/// reads as its reply (TDD 17.76). `None` when `construct` is not a slice of `source`.
+pub(crate) fn insert_follow_up(
+    source: &str,
+    construct: Range<usize>,
+    comment: &str,
+) -> Option<String> {
+    source.get(construct.clone())?;
+    Some(insert_point_comment(
+        source,
+        &super::landing::Slot::bare(construct.end),
+        comment,
+    ))
+}
+
 /// Remove the annotation construct occupying `span` in `source`. For a
 /// highlight+comment, pass `keep_inner` = the byte range of the highlighted text
 /// (a sub-range of `span`, in original-source coordinates) so the claim survives
@@ -949,6 +965,52 @@ mod tests {
     /// the anchored resolution upstream also rejects a vanished construct, so an
     /// end-to-end test passes even with this floor removed. Each defense needs a
     /// guard that fails when THAT defense alone is taken away.
+    #[test]
+    fn a_follow_up_is_a_point_comment_written_right_after_its_annotation() {
+        // TDD 17.76: after the annotation and its comment, before anything that follows —
+        // including an earlier follow-up, so a reply to a reply lands under it.
+        for (src, construct, out) in [
+            (
+                "a {==c==}{>>one<<} b",
+                "{==c==}{>>one<<}",
+                "a {==c==}{>>one<<}{>>two<<} b",
+            ),
+            (
+                "a {>>one<<}{>>x<<} b",
+                "{>>one<<}",
+                "a {>>one<<}{>>two<<}{>>x<<} b",
+            ),
+            (
+                "a {++c++}{>>why<<}",
+                "{++c++}{>>why<<}",
+                "a {++c++}{>>why<<}{>>two<<}",
+            ),
+        ] {
+            let at = src.find(construct).unwrap();
+            assert_eq!(
+                insert_follow_up(src, at..at + construct.len(), " two ").as_deref(),
+                Some(out),
+                "{src:?}"
+            );
+        }
+        // The follow-up's own text cannot close it early, and it re-reads as its own
+        // point comment after the annotation it answers.
+        let out = insert_follow_up("a {>>one<<} b", 2..11, "x <<} y").unwrap();
+        let kinds: Vec<_> = super::super::extract(&out)
+            .annotations
+            .iter()
+            .map(|a| (a.kind, a.comment.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (super::super::AnnKind::Comment, Some("one".into())),
+                (super::super::AnnKind::Comment, Some("x << } y".into()))
+            ]
+        );
+        assert_eq!(insert_follow_up("a", 0..9, "x"), None);
+    }
+
     #[test]
     fn accepting_or_removing_a_suggestion_keeps_one_side_and_drops_its_note() {
         // TDD 17.73 / 17.74: the whole construct, note included, becomes the side the

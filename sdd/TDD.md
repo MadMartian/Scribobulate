@@ -2845,6 +2845,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** an annotation's popover is open with Edit available
 - **When** the user edits the comment text and saves
 - **Then** the comment body in the file is replaced with the new text and nothing else in the document changes
+- **And** the card stays open, showing the saved comment and every control it now offers, without being closed and reopened
 
 ### 17.8 An annotation can be removed
 - **Given** an annotation's popover is open with Remove available
@@ -3235,7 +3236,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.70 A changed comment closes only when the reader says so
 - **Given** an annotation card with its comment field open — a new annotation from the preview or the editor, or an Edit of an existing one — and the reader has changed the text from what the card opened with (empty for a new one, the stored comment for an Edit)
 - **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
-- **Then** the card stays open with the changed text, and closes only on Escape, the corner ×, Cancel, or a commit with Enter or Save
+- **Then** the card stays open with the changed text, and closes only on Escape while the card has focus, the corner ×, Cancel, or a commit with Enter or Save (a committed Edit then shows what was saved, 17.7)
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
 
 ### 17.71 A suggested edit is an annotation with a margin marker
@@ -3259,6 +3260,18 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a suggested edit's card is open
 - **When** the reader chooses Remove
 - **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
+
+### 17.75 An annotation with a comment offers Add Follow-up
+- **Given** an annotation card is open
+- **When** the reader reads an annotation in it
+- **Then** each annotation that carries a comment — a highlight with one, a point comment, a suggested edit with a note — offers Add Follow-up; a bare highlight or a suggested edit with no note does not, since Edit writes its first comment
+- **And** once Edit saves that first comment, the card left open (17.7) offers Add Follow-up without being reopened
+
+### 17.76 Add Follow-up writes a point comment straight after the annotation it answers
+- **Given** an annotation card offering Add Follow-up
+- **When** the reader chooses it, types a follow-up and saves
+- **Then** the card turns into a new-comment form quoting the comment being answered; on Save the file gains the follow-up as a point comment directly after that annotation and its comment (after an earlier follow-up only when that is the one being answered), the margin marker counts one more, and the card comes back listing the follow-up directly beneath the annotation it answers; one Undo removes it
+- **And** Cancel, or a Save with nothing typed, writes nothing and brings the card back as it was; Escape or the corner × closes the card and writes nothing; a typed follow-up keeps the card up against an outside click, as any typed comment does (17.70)
 
 ### 17.77 Copying a suggested edit copies it as accepted
 - **Given** a selection on the page that covers suggested edits, or a whole-document copy

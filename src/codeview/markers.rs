@@ -118,6 +118,12 @@ pub(crate) enum AnnotationEdit {
     },
     /// Create a new annotation (from the preview selection overlay, Part C).
     Create(CreateAnnotation),
+    /// Write a follow-up — a point comment holding `text` — directly after `construct`,
+    /// the annotation it answers (TDD 17.76).
+    FollowUp {
+        construct: crate::docref::AnchoredSpan,
+        text: String,
+    },
     /// Flip a task-list checkbox's `[ ]`↔`[x]` state character. `span` is the
     /// marker's byte range in the ORIGINAL
     /// source (the editor buffer's raw text — the render records it in CLEANED

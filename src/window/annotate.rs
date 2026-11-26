@@ -210,6 +210,16 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 None => return,
             }
         }
+        AnnotationEdit::FollowUp { construct, text } => {
+            // Re-located in the live source first, as Edit and Remove are.
+            let Some(at) = construct.resolve(&old) else {
+                return;
+            };
+            match crate::annotate::insert_follow_up(&old, at, &text) {
+                Some(new) => new,
+                None => return,
+            }
+        }
         AnnotationEdit::Create(CreateAnnotation::Highlight { target, comment }) => {
             // Re-located in the live source first, exactly as the two mutations above
             // are: the card was raised against an earlier state of the document and has
@@ -301,13 +311,31 @@ fn splice_minimal(buf: &gtk::TextBuffer, old: &str, new: &str) {
         .take(old_tail.min(new_tail))
         .take_while(|(a, b)| a == b)
         .count();
-    let start = p as i32;
-    let end = (old_len - s) as i32;
-    let insertion: String = new.chars().skip(p).take(new_tail - s).collect();
+    let (mut start, mut end) = (p, old_len - s);
+    // A pure insertion takes one neighbouring character with it, deleted and written
+    // back. GTK closes an undo step with a boundary only after a user action that
+    // recorded two changes; a lone insert is instead folded into the step before it, and
+    // merges with an earlier insert it continues (no space, no newline). So a comment
+    // written straight after one just saved — a follow-up, an Edit beside it — would
+    // undo together with it. The delete it now records is the second change; the
+    // document text is the same either way (gtktexthistory.c `end_user_action`,
+    // `action_chain`; GTK4Rs/AP-397).
+    if start == end && old_len > 0 {
+        if start > 0 {
+            start -= 1;
+        } else {
+            end += 1;
+        }
+    }
+    let insertion: String = new
+        .chars()
+        .skip(start)
+        .take(new_len - start - (old_len - end))
+        .collect();
+    let (start, end) = (start as i32, end as i32);
 
-    // One discrete undo step, with the redo-merge barrier flushed before it — see
-    // `window::undo::UndoGroup`. Held to the end of scope so the edit below is
-    // recorded inside its user action; `Drop` closes it.
+    // One discrete undo step — see `window::undo::UndoGroup`. Held to the end of scope so
+    // the edit below is recorded inside its user action; `Drop` closes it.
     let _grp = crate::window::undo::UndoGroup::new(buf);
     let mut a = buf.iter_at_offset(start);
     let mut b = buf.iter_at_offset(end);
@@ -800,6 +828,41 @@ mod gtk_integration_tests {
             text_of(&b),
             "the earth is {==flat==}{>>citation needed<<} here"
         );
+    }
+
+    /// Two edits, the second written exactly where the first ended, are two undo steps.
+    /// GTK folds a user action that recorded a single insert into an earlier insert it
+    /// continues, so without the neighbouring character `splice_minimal` rewrites, one
+    /// Undo took both — a follow-up saved after the comment it answers (TDD 17.76) undid
+    /// that comment too. At the document's start as well, where the character taken is
+    /// the one after.
+    #[gtktest::test]
+    fn adjacent_insertions_undo_one_at_a_time() {
+        for (text, first, second) in [
+            (
+                "A {==c==} x",
+                "A {==c==}{>>first<<} x",
+                "A {==c==}{>>first<<}{>>second<<} x",
+            ),
+            ("x", "{>>first<<}x", "{>>first<<}{>>second<<}x"),
+        ] {
+            let b = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+            b.set_enable_undo(true);
+            b.begin_irreversible_action();
+            b.set_text(text);
+            b.end_irreversible_action();
+            splice_minimal(&b, text, first);
+            splice_minimal(&b, first, second);
+            assert_eq!(text_of(&b), second);
+            b.undo();
+            assert_eq!(
+                text_of(&b),
+                first,
+                "{text:?}: one Undo takes only the second"
+            );
+            b.undo();
+            assert_eq!(text_of(&b), text, "{text:?}: the next takes the first");
+        }
     }
 
     #[gtktest::test]

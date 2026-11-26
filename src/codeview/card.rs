@@ -218,7 +218,7 @@ impl AnnotationCard {
     }
 
     /// The view this card points into, or `None` once torn down.
-    fn view(&self) -> Option<CodePreviewView> {
+    pub(super) fn view(&self) -> Option<CodePreviewView> {
         self.anchor()
             .and_then(|p| p.downcast::<CodePreviewView>().ok())
     }
