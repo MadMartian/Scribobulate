@@ -68,7 +68,7 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | H | Any | Production | A window restored squeezed below its sidebar sections' minimum and left a while before being grown keeps the squeezed sidebar split, and quitting then saves it over the one the reader chose | Low |
-| J | Mac | Test | A macOS lifecycle test's positive control (`a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen`) intermittently finds GDK already reading the zoomed window as maximized; green on re-run | Low |
+| J | Mac | Test | A macOS lifecycle test's positive control (`a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen`) intermittently finds GDK already reading the zoomed window as maximized — twice on 2026-11-26; green on re-run | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac, Linux | Test | The GTK suite on CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV or SIGABRT — four sightings (three macOS, one Linux), in four unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | L | Linux | Test | The XInclude screen's linear-time test intermittently fails under coverage instrumentation on CI: 10× the time for 4× the input, read as "grows faster than linear" | Low |
@@ -502,7 +502,13 @@ not maximized while the sibling's Space is current"), with `GDK_IS_MACOS_SURFACE
 logged; 891 others passed. The same commit passed macOS in its push run (45798764638), and the
 failed job passed on re-run. `lifecycle.rs` is unchanged since v1.0.0.
 
-**What is known**: one sighting. The control asserts what GDK reports while a sibling
+**Second sighting** (2026-11-26, run 45917977540, the no-change merge of the release
+branch onto master): same test, same positive-control panic at `lifecycle.rs`, with
+`gdk_frame_timings_presented() called on skipped frame` just before; 898 others passed,
+master's own run on the identical tree had passed, and the failed job passed on re-run.
+
+**What is known**: two sightings in one day, both on CI, both on identical trees that
+passed elsewhere. The control asserts what GDK reports while a sibling
 window's full-screen Space is current, which depends on AppKit's Space transition having
 finished; a slow runner may read it before or after.
 
