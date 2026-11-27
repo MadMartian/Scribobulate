@@ -29,7 +29,7 @@ pub(crate) use commands::{
 };
 pub(crate) use menubar::{
     build_menubar, build_reading_theme_toolbar_menu, defer_live_menu_mutation,
-    update_format_menu_labels,
+    update_format_menu_labels, ANNOTATE_SUBMENU,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use menubar::{build_top_level_menus, TopLevelMenus};

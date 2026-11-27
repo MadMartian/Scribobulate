@@ -22,6 +22,9 @@ use super::*;
 /// closed the menu and showed nothing (TDD 17.23). A higher priority orders the two by
 /// what they are rather than by which was queued first. `HIGH_IDLE` is still an idle,
 /// outside the event dispatch the deferral exists to leave.
+/// The document context menu's Annotate ▸ page.
+const ANNOTATE_PAGE: &str = "annotate";
+
 fn dismiss_context_popover(po: &gtk::Popover) {
     let po = po.clone();
     gtk::glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
@@ -372,24 +375,49 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         }
         main_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-        // Annotate — same editor section as the Edit menu. Bind by NAME
-        // so GTK drives activation AND sensitivity from the single `win.annotate`
-        // action (POLICY SSOT / ScrAP-9). Accel hint from the INLINE_ACCEL
-        // table so the shown shortcut matches Ctrl+Alt+M.
-        let annotate_marked = crate::app::mnem("Annotate");
-        let annotate_hint = crate::app::inline_accel("win.annotate")
-            .and_then(crate::app::accel_hint)
-            .unwrap_or_default();
-        let annotate_btn = keyed_btn(&annotate_marked, &annotate_hint, "main");
-        annotate_btn.set_action_name(Some("win.annotate"));
+        // Annotate ▸ — the same submenu as the Edit menu's (TDD 17.79): Comment and the
+        // three suggested edits, on a page of their own like Change Case. The row binds
+        // `win.annotate-available`, the handler-less twin enabled with its items, so it
+        // greys with them; activating the twin does nothing and `clicked` slides to the
+        // page. Each item binds its action by NAME (and target), so GTK drives activation
+        // AND sensitivity from the single action (POLICY SSOT / ScrAP-9).
+        let annotate_marked = format!("{} \u{25b8}", crate::app::mnem("Annotate"));
+        let annotate_btn = keyed_btn(&annotate_marked, "", "main");
+        annotate_btn.set_action_name(Some(&format!("win.{}", crate::window::ANNOTATE_AVAILABLE)));
         annotate_btn.connect_clicked(glib::clone!(
-            #[weak(rename_to = po)]
-            popover,
-            move |_| {
-                dismiss_context_popover(&po);
-            }
+            #[weak]
+            stack,
+            move |_| stack.set_visible_child_name(ANNOTATE_PAGE)
         ));
         main_box.append(&annotate_btn);
+        let annotate_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let (back_btn, back_lbl) = make_text_btn("");
+        back_lbl.set_text("\u{25c0} Back");
+        back_btn.connect_clicked(glib::clone!(
+            #[weak]
+            stack,
+            move |_| stack.set_visible_child_name("main")
+        ));
+        annotate_box.append(&back_btn);
+        annotate_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        for (label, action, target) in crate::app::ANNOTATE_SUBMENU {
+            let hint = target
+                .is_none()
+                .then(|| crate::app::inline_accel(action).and_then(crate::app::accel_hint))
+                .flatten()
+                .unwrap_or_default();
+            let btn = keyed_btn(&crate::app::mnem(label), &hint, ANNOTATE_PAGE);
+            btn.set_action_name(Some(action));
+            if let Some(target) = target {
+                btn.set_action_target_value(Some(&target.to_variant()));
+            }
+            btn.connect_clicked(glib::clone!(
+                #[weak(rename_to = po)]
+                popover,
+                move |_| dismiss_context_popover(&po)
+            ));
+            annotate_box.append(&btn);
+        }
 
         let emoji_marked = crate::app::mnem("Insert Emoji");
         let emoji_btn = keyed_btn(&emoji_marked, "", "main");
@@ -467,12 +495,12 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             case_box.append(&btn);
         }
 
-        // Left arrow returns from the submenu to the main page (Back's keyboard peer).
+        // Left arrow returns from either submenu to the main page (Back's keyboard peer).
         {
             let sw = stack.downgrade();
             let action = gtk::CallbackAction::new(move |_, _| {
                 if let Some(s) = sw.upgrade() {
-                    if s.visible_child_name().as_deref() == Some("change-case") {
+                    if s.visible_child_name().as_deref() != Some("main") {
                         s.set_visible_child_name("main");
                         return gtk::glib::Propagation::Stop;
                     }
@@ -487,6 +515,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
 
         stack.add_named(&main_box, Some("main"));
         stack.add_named(&case_box, Some("change-case"));
+        stack.add_named(&annotate_box, Some(ANNOTATE_PAGE));
         stack.set_visible_child_name("main");
 
         let at = view.translate_coordinates(&host, x, y).unwrap_or((x, y));

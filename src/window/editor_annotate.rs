@@ -21,7 +21,7 @@
 use crate::codeview::AnnotationEdit;
 use crate::preview::annotate::{
     capture_editor_selection, follow_scroll_after_paint, position_card, position_card_at,
-    AfterPaintSlot, PendingTarget,
+    AfterPaintSlot, AnnotateKind, Opening, PendingTarget,
 };
 use crate::widgets::comment_entry::CommentEntry;
 use gtk::glib;
@@ -38,7 +38,7 @@ use std::rc::Rc;
 pub(crate) fn wire_editor_annotate_card(
     overlay: &gtk::Overlay,
     editor: &sourceview::View,
-) -> Rc<dyn Fn()> {
+) -> crate::codeview::AnnotateTrigger {
     // The card: a comment entry + Save, hidden until the action raises it. Same shape and
     // CSS (`.annotation-entry`) as the preview card so the two panes look identical.
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -59,6 +59,8 @@ pub(crate) fn wire_editor_annotate_card(
     // landed, or a Replace All has run while they were typing the comment.
     let entry_open = Rc::new(Cell::new(false));
     let pending: Rc<RefCell<Option<PendingTarget>>> = Rc::new(RefCell::new(None));
+    // What the card was raised for — a comment or a suggested edit — read at commit.
+    let kind = Rc::new(Cell::new(AnnotateKind::Comment));
 
     //
     // `hide` is reached from controllers and handlers that live ON `bar` (the focus-leave
@@ -110,6 +112,7 @@ pub(crate) fn wire_editor_annotate_card(
         let editor = editor.downgrade();
         let pending = pending.clone();
         let dismiss = dismiss.clone();
+        let kind = kind.clone();
         move |text: &str| {
             let Some(editor) = editor.upgrade() else {
                 return;
@@ -118,7 +121,7 @@ pub(crate) fn wire_editor_annotate_card(
             let create = pending
                 .borrow_mut()
                 .take()
-                .and_then(|target| target.with_comment(text));
+                .and_then(|target| target.with_text(kind.get(), text));
             dismiss();
             if let Some(create) = create {
                 glib::idle_add_local_once(move || {
@@ -129,6 +132,7 @@ pub(crate) fn wire_editor_annotate_card(
     });
     card.style_as_card();
     let entry = card.field.clone();
+    let hint = card.hint();
     bar.append(&card.area);
     bar.append(&card.save);
     bar.append(&card.close);
@@ -143,21 +147,26 @@ pub(crate) fn wire_editor_annotate_card(
     let anchor: Rc<Cell<Option<(i32, i32)>>> = Rc::new(Cell::new(None));
     follow_scroll_with_card(editor, overlay, &bar, &entry_open, &anchor);
 
-    // The trigger: capture the editor selection, reveal + position the card, focus it.
-    let show: Rc<dyn Fn()> = Rc::new({
+    // The trigger: capture the editor selection, then — as the shared decision
+    // (`PendingTarget::opening`) says for the kind asked for — refuse it with a notice,
+    // write it at once (a deletion), or reveal + position the card and focus it.
+    let show: crate::codeview::AnnotateTrigger = Rc::new({
         let editor = editor.downgrade();
         let overlay = overlay.downgrade();
         let bar = bar.downgrade();
         let entry = entry.downgrade();
+        let hint = hint.downgrade();
         let entry_open = entry_open.clone();
         let pending = pending.clone();
         let anchor = anchor.clone();
-        move || {
-            let (Some(editor), Some(overlay), Some(bar), Some(entry)) = (
+        let kind = kind.clone();
+        move |asked: AnnotateKind| {
+            let (Some(editor), Some(overlay), Some(bar), Some(entry), Some(hint)) = (
                 editor.upgrade(),
                 overlay.upgrade(),
                 bar.upgrade(),
                 entry.upgrade(),
+                hint.upgrade(),
             ) else {
                 return;
             };
@@ -166,48 +175,53 @@ pub(crate) fn wire_editor_annotate_card(
             };
             let buf = editor.buffer();
             let source = crate::saferizer::BufferText::of(&buf).into_string();
-            *pending.borrow_mut() = capture_editor_selection(&source, a.offset(), b.offset());
-            anchor.set(Some((a.offset(), b.offset())));
-            // A selection wholly inside an existing comment is not annotatable: say so
-            // rather than raising a card whose commit would write nothing (TDD 17.59).
-            if pending
-                .borrow()
-                .as_ref()
-                .is_some_and(|target| target.is_refused(&source))
-            {
-                pending.borrow_mut().take();
-                crate::window::announce_annotation_refused(&editor);
+            let target = capture_editor_selection(&source, a.offset(), b.offset());
+            let Some(opening) = target.as_ref().map(|t| t.opening(asked, &source)) else {
                 return;
-            }
-            // Pre-populate with the comments this annotation is about to MERGE, so a
-            // destructive merge is visible and user-controlled instead of silent
-            // (the preview-side sibling of this card does the same). `insert_or_extend_highlight`
-            // extends rather than nests: it replaces every intersecting construct — its
-            // `{>>comment<<}` included — with the union carrying the comment committed here.
-            // Handing it only the newly typed text destroys the reviewer's earlier remarks
-            // with no prompt and no trace.
-            //
-            // The CAPTURED target is the same reference the commit acts on, and
-            // `merged_comment_for` shares the merge decision with the mutation that does
-            // the merging — so the card and the mutation cannot disagree about what
-            // will be merged. A second predicate here would be free to drift.
-            let existing = pending
-                .borrow()
-                .as_ref()
-                .filter(|target| !target.is_point())
-                .and_then(|target| {
-                    crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
-                })
-                .unwrap_or_default();
-            crate::widgets::comment_entry::open_comment(&entry, &existing);
+            };
+            // A comment opens pre-populated with the comments it is about to MERGE, so a
+            // destructive merge is visible and user-controlled instead of silent (the
+            // preview-side sibling of this card does the same): `insert_or_extend_highlight`
+            // replaces every intersecting construct, its `{>>comment<<}` included. The
+            // decision is made from the CAPTURED target, the same reference the commit acts
+            // on, and `merged_comment_for` shares the merge rule with the mutation — so the
+            // card and the mutation cannot disagree about what will be merged.
+            let (prefill, hint_text, field_name) = match opening {
+                // Refused — a comment wholly inside a comment (TDD 17.59), a suggestion
+                // where none can be written (TDD 17.79): say so rather than raising a card
+                // whose commit would write nothing.
+                Opening::Refused(notice) => {
+                    crate::window::announce_annotation_refused(&editor, notice);
+                    return;
+                }
+                Opening::Write(create) => {
+                    // Deferred, as the card's commit is (GTK4Rs/AP-30).
+                    glib::idle_add_local_once(move || {
+                        crate::window::apply_annotation_edit(&buf, AnnotationEdit::Create(create));
+                    });
+                    return;
+                }
+                Opening::Card {
+                    prefill,
+                    hint,
+                    name,
+                } => (prefill, hint, name),
+            };
+            *pending.borrow_mut() = target;
+            kind.set(asked);
+            anchor.set(Some((a.offset(), b.offset())));
+            hint.set_label(hint_text);
+            crate::a11y::name_field(&entry, field_name);
+            crate::widgets::comment_entry::open_comment(&entry, &prefill);
             entry_open.set(true);
             // Show BEFORE positioning — `position_card` measures the card, and a hidden
             // widget measures 0 (GTK4Rs/AP-85); a stale margin also inflates the re-measure
             // (GTK4Rs/AP-87), both handled inside `position_card`.
             bar.set_visible(true);
             position_card(&editor, &overlay, bar.upcast_ref());
-            // Caret to the END, unselected: the merged comment is being AMENDED, and a
-            // field that opened with it selected would lose it to the first keystroke.
+            // Caret to the END, unselected: a merged comment or a replacement's text is
+            // being AMENDED, and a field that opened with it selected would lose it to the
+            // first keystroke.
             crate::widgets::comment_entry::focus_at_end(&entry);
         }
     });
@@ -324,7 +338,7 @@ mod gtk_integration_tests {
         let show = wire_editor_annotate_card(&overlay, &editor);
 
         buf.select_range(&buf.iter_at_offset(a), &buf.iter_at_offset(b));
-        show();
+        show(crate::preview::AnnotateKind::Comment);
 
         // Walk the overlay for the card's entry rather than plumbing it out of the
         // builder: the test must see what the user sees.
@@ -424,7 +438,7 @@ mod gtk_integration_tests {
         );
 
         buf.select_range(&buf.iter_at_offset(a), &buf.iter_at_offset(b));
-        show();
+        show(crate::preview::AnnotateKind::Comment);
         for _ in 0..50 {
             glib::MainContext::default().iteration(false);
         }
@@ -576,7 +590,7 @@ mod gtk_integration_tests {
         let mut end = line;
         end.forward_chars(4);
         buf.select_range(&line, &end);
-        show();
+        show(crate::preview::AnnotateKind::Comment);
         for _ in 0..50 {
             glib::MainContext::default().iteration(false);
         }

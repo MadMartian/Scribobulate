@@ -271,6 +271,13 @@ impl AnchoredSpan {
         Some(abs.start - self.at.start..abs.end - self.at.start)
     }
 
+    /// The captured text at a relative sub-range (from [`relative`](Self::relative)) —
+    /// the words the construct held when it was captured, for pre-filling a field that
+    /// rewrites them. `None` when `rel` is not a slice of the captured text.
+    pub(crate) fn captured_text(&self, rel: &Range<usize>) -> Option<&str> {
+        self.text.get(rel.clone())
+    }
+
     /// Map a relative sub-range (from [`relative`](Self::relative)) back onto a
     /// resolved location.
     pub(crate) fn absolute(resolved: &Range<usize>, rel: &Range<usize>) -> Range<usize> {

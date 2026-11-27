@@ -281,7 +281,11 @@ fn a_card_already_up_stays_up_and_is_re_pinned_on_map() {
 fn noise_under_the_open_entry_owes_no_raise_once_it_closes() {
     let rig = Rig::present(BODY_MD);
     rig.select_body(0, 9);
-    assert!(rig.view.trigger_annotate(), "the Annotate trigger is wired");
+    assert!(
+        rig.view
+            .trigger_annotate(crate::preview::AnnotateKind::Comment),
+        "the Annotate trigger is wired"
+    );
     until(
         Clock::Frame,
         "the comment entry to take the card's place",

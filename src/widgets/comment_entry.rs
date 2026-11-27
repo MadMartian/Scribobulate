@@ -186,13 +186,20 @@ impl CommentEntry {
     /// The Edit popover skips this: it opens pre-filled (so a placeholder can never show)
     /// inside a popover that sets its own width request, which a fixed width would fight.
     pub(crate) fn style_as_card(&self) {
-        self.placeholder.set_label("Add a comment\u{2026}");
+        self.placeholder
+            .set_label(crate::preview::annotate::COMMENT_HINT);
         // Beside a field three rows tall, a Save that filled the row's height would read
         // as a second field; it keeps its own height at the top instead.
         self.save.set_valign(gtk::Align::Start);
         let metrics = self.field.pango_context().metrics(None, None);
         let char_px = metrics.approximate_char_width() / gtk::pango::SCALE;
         self.field.set_size_request(char_px.max(1) * 34, -1);
+    }
+
+    /// The hint shown over the empty field, for a card that says what it asks for per
+    /// opening (a comment, the text to add, the replacement).
+    pub(crate) fn hint(&self) -> gtk::Label {
+        self.placeholder.clone()
     }
 
     /// Wire both cancel routes to `cancel`: Escape anywhere in `root`'s subtree, and the

@@ -25,6 +25,7 @@
 pub(crate) mod landing;
 pub(crate) mod mutate;
 pub(crate) mod scan;
+pub(crate) mod suggest;
 mod written;
 
 pub(crate) use landing::Landing;

@@ -58,7 +58,10 @@ fn an_open_comment_card_moves_with_its_text_when_the_preview_scrolls() {
         .expect("the paragraph rendered");
     buf.select_range(&word, &word_end);
     drain_for(Clock::Frame, Duration::from_millis(200));
-    assert!(view.trigger_annotate(), "the annotate trigger is wired");
+    assert!(
+        view.trigger_annotate(crate::preview::AnnotateKind::Comment),
+        "the annotate trigger is wired"
+    );
 
     let card = || {
         let mut child = overlay.first_child();

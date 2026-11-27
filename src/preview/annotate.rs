@@ -128,8 +128,8 @@ impl PendingTarget {
             })
     }
 
-    /// True when this target merges nothing: a point comment inserts a new construct
-    /// rather than replacing any.
+    /// True when this target is a point comment, written after a cross-block selection.
+    #[cfg(test)]
     pub(crate) fn is_point(&self) -> bool {
         self.point
     }
@@ -151,6 +151,100 @@ impl PendingTarget {
                 comment,
             }
         })
+    }
+}
+
+/// What the reader asked a selection to become: a comment, or one of the three
+/// suggested edits. One value carried from the command (`win.annotate`, `win.suggest`, a
+/// popover button) to the card that writes it, so both panes' cards decide alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AnnotateKind {
+    Comment,
+    Suggest(crate::annotate::suggest::SuggestKind),
+}
+
+/// What a card does once its selection is captured ([`PendingTarget::opening`]).
+pub(crate) enum Opening {
+    /// Nothing is written; the status bar says why (one of `winstate::statusbar`'s notices).
+    Refused(&'static str),
+    /// Written at once, with no card: a deletion has nothing to type.
+    Write(CreateAnnotation),
+    /// The card opens with `prefill` in its field, `hint` shown while it is empty, and
+    /// the field named `name` to assistive technology.
+    Card {
+        prefill: String,
+        hint: &'static str,
+        name: &'static str,
+    },
+}
+
+/// The field's hint for each kind of card.
+pub(crate) const COMMENT_HINT: &str = "Add a comment\u{2026}";
+const ADD_HINT: &str = "Text to add\u{2026}";
+const REPLACE_HINT: &str = "Replace with\u{2026}";
+
+impl PendingTarget {
+    /// What a card raised over this target for `kind` does, decided against the live
+    /// `source`. A comment is refused only wholly inside a comment (TDD 17.59), and opens
+    /// with the comments it will merge (so a merge is never silent); a suggestion is
+    /// refused wherever it cannot be written ([`crate::annotate::suggest::landing`]) or
+    /// across blocks, and a replacement opens with the text it replaces (TDD 17.79).
+    pub(crate) fn opening(&self, kind: AnnotateKind, source: &str) -> Opening {
+        use crate::annotate::suggest::{landing, SuggestKind};
+        let kind = match kind {
+            AnnotateKind::Comment => {
+                if self.is_refused(source) {
+                    return Opening::Refused(crate::winstate::statusbar::COMMENT_NOT_ANNOTATABLE);
+                }
+                let prefill = (!self.point)
+                    .then(|| crate::annotate::merged_comment_for(source, self.resolve(source)?))
+                    .flatten()
+                    .unwrap_or_default();
+                return Opening::Card {
+                    prefill,
+                    hint: COMMENT_HINT,
+                    name: "Comment",
+                };
+            }
+            AnnotateKind::Suggest(kind) => kind,
+        };
+        let landed = (!self.point)
+            .then(|| landing(source, self.resolve(source)?))
+            .flatten();
+        let Some(landed) = landed else {
+            return Opening::Refused(crate::winstate::statusbar::SUGGESTION_NOT_PLACEABLE);
+        };
+        match kind {
+            SuggestKind::Delete => Opening::Write(CreateAnnotation::Suggest {
+                target: self.span.clone(),
+                kind,
+                text: String::new(),
+            }),
+            SuggestKind::Replace => Opening::Card {
+                prefill: source.get(landed).unwrap_or_default().to_string(),
+                hint: REPLACE_HINT,
+                name: "Replacement text",
+            },
+            SuggestKind::Add => Opening::Card {
+                prefill: String::new(),
+                hint: ADD_HINT,
+                name: "Text to add",
+            },
+        }
+    }
+
+    /// Pair the target with what the reader typed into a card of `kind`. `None` for an
+    /// empty comment; a suggestion's own rules are the mutation's
+    /// ([`crate::annotate::suggest::insert_suggestion`]).
+    pub(crate) fn with_text(self, kind: AnnotateKind, text: &str) -> Option<CreateAnnotation> {
+        match kind {
+            AnnotateKind::Comment => self.with_comment(text),
+            AnnotateKind::Suggest(kind) => (!self.point).then(|| CreateAnnotation::Suggest {
+                target: self.span,
+                kind,
+                text: text.to_string(),
+            }),
+        }
     }
 }
 
@@ -308,5 +402,7 @@ pub(crate) fn bar_placement(
     (x, y)
 }
 
+#[cfg(test)]
+mod opening_tests;
 #[cfg(test)]
 mod tests;

@@ -2692,6 +2692,9 @@ mod gtk_integration_tests {
                     let slot = crate::annotate::landing::for_point(md, at);
                     crate::annotate::insert_landed_point(md, slot, &comment)
                 }
+                Some(crate::codeview::CreateAnnotation::Suggest { .. }) => {
+                    unreachable!("a comment's create is never a suggestion")
+                }
                 None => panic!("{md:?}: a selection in the block captures"),
             };
             let at = out.find("{>>note<<}").expect("the comment is written");

@@ -205,7 +205,8 @@ fn enter_commits_in_the_marker_edit_popover() {
         .clone()
         .expect("the card exists once opened");
 
-    let edit = find_button(&popover, "Edit").expect("the popover offers an Edit button");
+    let edit = find_button(&popover, crate::codeview::markerrows::EDIT_NOTE)
+        .expect("the popover offers an Edit button");
     edit.emit_clicked();
 
     let entry = find_descendant::<sourceview::View>(&popover)
@@ -274,7 +275,7 @@ fn the_edit_field_opens_unscrolled_however_often_the_card_is_reopened() {
             .borrow()
             .clone()
             .expect("the card exists once opened");
-        find_button(&popover, "Edit")
+        find_button(&popover, crate::codeview::markerrows::EDIT_NOTE)
             .expect("the card offers Edit")
             .emit_clicked();
         let field = find_descendant::<sourceview::View>(&popover)
@@ -334,7 +335,7 @@ fn open_edit_field(view: &CodePreviewView) -> sourceview::View {
         .borrow()
         .clone()
         .expect("the card exists once opened");
-    find_button(&card, "Edit")
+    find_button(&card, crate::codeview::markerrows::EDIT_NOTE)
         .expect("the card offers Edit")
         .emit_clicked();
     let field =
@@ -1224,7 +1225,7 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
                 assert!(markup.contains(tag), "{src:?}: {markup}");
             }
             assert!(
-                find_button(&card, "Edit").is_some(),
+                find_button(&card, crate::codeview::markerrows::EDIT_NOTE).is_some(),
                 "the note stays editable (17.72)"
             );
 
@@ -1360,7 +1361,7 @@ fn saving_an_edit_leaves_the_card_open_on_the_saved_comment() {
             .clone()
             .expect("the card exists once opened")
     };
-    find_button(&card(), "Edit")
+    find_button(&card(), crate::codeview::markerrows::EDIT_NOTE)
         .expect("a bare highlight offers Edit")
         .emit_clicked();
     let entry = {
@@ -1423,7 +1424,9 @@ fn add_follow_up_appears_once_there_is_a_comment_and_writes_a_reply_beneath_it()
     );
 
     // Its first comment, through Edit: the card stays open and now offers Add Follow-up.
-    find_button(&card(), "Edit").unwrap().emit_clicked();
+    find_button(&card(), crate::codeview::markerrows::EDIT_NOTE)
+        .unwrap()
+        .emit_clicked();
     let field = field_of("the edit field");
     crate::widgets::comment_entry::set_comment_text(&field, "first");
     crate::widgets::comment_entry::press_key(&field, gtk::gdk::Key::Return);
@@ -1485,3 +1488,6 @@ fn add_follow_up_appears_once_there_is_a_comment_and_writes_a_reply_beneath_it()
         view.popdown_marker_popover()
     });
 }
+
+/// The suggested-edit card's editors (TDD 17.72, 17.78).
+mod suggestion_edit_tests;

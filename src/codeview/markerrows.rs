@@ -137,11 +137,16 @@ fn append_edit_remove_controls(
     card: &AnnotationCard,
     sink: AnnotationSink,
 ) {
-    let btns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let edit = gtk::Button::with_label("Edit");
+    // A suggested edit's controls come in two rows — what settles or rewrites the
+    // suggestion, then what edits or answers its note — so the card does not widen to fit
+    // five buttons in one. Any other annotation has one row.
+    let btns = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let note_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let change_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let edit = gtk::Button::with_label(EDIT_NOTE);
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class("destructive-action");
-    btns.append(&edit);
+    note_row.append(&edit);
     // A suggested edit can also be applied: Accept edit keeps its new side, as Remove
     // keeps its old (TDD 17.73, 17.74) — either may be nothing. Both are removals that differ only in
     // which side survives.
@@ -149,9 +154,13 @@ fn append_edit_remove_controls(
         let accept = gtk::Button::with_label("Accept edit");
         accept.add_css_class("suggested-action");
         wire_removal(&accept, card, &sink, m, m.source.src_content.clone());
-        btns.append(&accept);
+        change_row.append(&accept);
+        change_row.append(&remove);
+        btns.append(&change_row);
+    } else {
+        note_row.append(&remove);
     }
-    btns.append(&remove);
+    btns.append(&note_row);
     // A follow-up answers a comment, so only an annotation that has one offers it. A bare
     // highlight's or note-less suggestion's comment "body" is the empty point just past
     // the construct, and a `{>>…<<}` written there would become its first comment —
@@ -174,69 +183,21 @@ fn append_edit_remove_controls(
                 show_follow_up_form(&card, sink, construct, &comment);
             });
         });
-        btns.append(&follow_up);
+        note_row.append(&follow_up);
     }
 
-    // The edit page, built NOW (not lazily on click) so the stack can measure it from the
-    // start. The shared `CommentEntry` wires the commit to Enter AND Save — hand-rolling it
-    // only into `save.connect_clicked` was the original "Enter is inert here" bug, and
-    // taking the wiring from the shared constructor makes that omission unrepresentable. No
-    // `style_as_card()`: this entry opens pre-filled inside a popover that sets its own
-    // width request, so the card's placeholder and 34-char width don't apply.
-    // Both mutations address the construct through its anchor, and locate their
-    // sub-range (comment body / kept claim) RELATIVE to it — so the pair travels as
-    // one unit and cannot be resolved against different positions. `relative`
-    // returns `None` only if the scan produced a sub-range outside its own
-    // construct, in which case the button is left inert rather than wired to a
-    // mutation nobody can place.
+    // The edit pages, built NOW (not lazily on click) so the stack can measure them from
+    // the start. Both mutations address the construct through its anchor, and locate
+    // their sub-range (comment body / added side / kept claim) RELATIVE to it — so the
+    // pair travels as one unit and cannot be resolved against different positions.
+    // `relative` returns `None` only if the scan produced a sub-range outside its own
+    // construct, in which case the commit is left inert rather than wired to a mutation
+    // nobody can place.
     let construct = m.source.construct.clone();
     let body_rel = construct.relative(m.source.src_comment_body.clone());
-    let ce = CommentEntry::new(&m.comment, {
-        let sink = sink.clone();
-        let construct = construct.clone();
-        let body_rel = body_rel.clone();
-        let card = card.clone();
-        move |text: &str| {
-            let text = text.to_string();
-            let view = card.view();
-            card.dismiss();
-            let Some(body) = body_rel.clone() else { return };
-            if !text.trim().is_empty() {
-                // Defer the re-render off the active press gesture (see the Remove handler
-                // below — avoids "Broken accounting of active state").
-                let sink = sink.clone();
-                let construct = construct.clone();
-                glib::idle_add_local_once(move || {
-                    // The construct's start does not move when its comment is rewritten,
-                    // so it names the same annotation in the render the edit produces.
-                    let start = construct.captured_at().start;
-                    sink(AnnotationEdit::EditComment {
-                        construct,
-                        body,
-                        text,
-                    });
-                    // Saving an edit leaves the card open on what was saved (TDD 17.7):
-                    // the reader sees the new comment, and the controls a comment brings
-                    // (Add Follow-up), without reopening. The render the edit triggered
-                    // has already installed its markers, so the card is opened afresh on
-                    // them in the same turn, before a frame can show it closed.
-                    if let Some(view) = view {
-                        view.reopen_marker_card_on(start);
-                    }
-                });
-            }
-        }
-    });
-    let cancel = gtk::Button::with_label("Cancel");
-    let ebtns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    ebtns.append(&ce.save);
-    ebtns.append(&cancel);
-    let edit_page = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    edit_page.append(&ce.area);
-    edit_page.append(&ebtns);
 
-    // `vhomogeneous` (below) sizes BOTH pages to the taller of the two, so the read page
-    // keeps its comment and buttons together at the top rather than stretching them apart.
+    // `vhomogeneous` (below) sizes EVERY page to the tallest, so the read page keeps its
+    // comment and buttons together at the top rather than stretching them apart.
     let read_page = gtk::Box::new(gtk::Orientation::Vertical, 4);
     read_page.set_valign(gtk::Align::Start);
     read_page.append(comment);
@@ -245,9 +206,53 @@ fn append_edit_remove_controls(
     let stack = gtk::Stack::new();
     stack.set_hhomogeneous(true);
     stack.set_vhomogeneous(true);
-    stack.add_named(&read_page, Some("read"));
-    stack.add_named(&edit_page, Some("edit"));
-    stack.set_visible_child_name("read");
+    stack.add_named(&read_page, Some(READ_PAGE));
+
+    let note_field = add_edit_page(&stack, NOTE_PAGE, &m.comment, card, sink.clone(), {
+        let construct = construct.clone();
+        move |text: String| {
+            let body = body_rel.clone()?;
+            // An empty note writes nothing; Remove is how a comment goes.
+            (!text.trim().is_empty()).then(|| AnnotationEdit::EditComment {
+                construct: construct.clone(),
+                body,
+                text,
+            })
+        }
+    });
+    wire_open_page(&edit, &stack, NOTE_PAGE, &note_field);
+
+    // A suggested addition or replacement can have what it adds rewritten (TDD 17.78),
+    // pre-filled with the Markdown as written, not as the card quotes it, so formatting in
+    // it survives an edit that does not touch it. A deletion adds nothing.
+    let added = m
+        .suggestion
+        .as_ref()
+        .and_then(|s| s.new.as_ref())
+        .and(m.source.src_content.clone())
+        .and_then(|side| construct.relative(side));
+    if let Some(side) = added {
+        let written = construct
+            .captured_text(&side)
+            .unwrap_or_default()
+            .to_string();
+        let edit_suggestion = gtk::Button::with_label(EDIT_SUGGESTION);
+        // First in the suggestion's row: it changes the suggestion short of settling it.
+        change_row.prepend(&edit_suggestion);
+        let field = add_edit_page(&stack, SUGGESTION_PAGE, &written, card, sink.clone(), {
+            let construct = construct.clone();
+            move |text: String| {
+                Some(AnnotationEdit::EditSuggestion {
+                    construct: construct.clone(),
+                    side: side.clone(),
+                    text,
+                })
+            }
+        });
+        crate::a11y::name_field(&field, "Suggested text");
+        wire_open_page(&edit_suggestion, &stack, SUGGESTION_PAGE, &field);
+    }
+    stack.set_visible_child_name(READ_PAGE);
     row.append(&stack);
 
     // A highlight keeps its claim; a suggested edit, rejected, keeps its old side;
@@ -257,49 +262,119 @@ fn append_edit_remove_controls(
         None => m.source.src_content.clone(),
     };
     wire_removal(&remove, card, &sink, m, kept);
-    {
-        let stack = stack.clone();
-        let entry = ce.field.clone();
-        edit.connect_clicked(move |_| {
-            // Defer off the active press gesture (GTK4Rs/AP-30): flipping the stack still mutates
-            // this button's own ancestor mid-click. Focus the entry so typing (and the
-            // popover's Escape controller) reach it.
-            let stack = stack.clone();
-            let entry = entry.clone();
+}
+
+/// The card's read page, and its two in-place editors: the note, and what a suggestion
+/// adds.
+const READ_PAGE: &str = "read";
+const NOTE_PAGE: &str = "edit";
+const SUGGESTION_PAGE: &str = "edit-suggestion";
+/// The label of the control that edits an annotation's comment — "Note", not a bare
+/// "Edit", since a suggested edit's card also offers to edit the suggestion itself.
+pub(crate) const EDIT_NOTE: &str = "Edit Note";
+/// The label of the control that rewrites what a suggested addition or replacement adds.
+pub(crate) const EDIT_SUGGESTION: &str = "Edit Suggestion";
+
+/// Add an in-place editor page named `name` to `stack`, pre-filled with `initial`: the
+/// field with Save / Cancel under it. `build` turns the typed text into the edit to make,
+/// or `None` to write nothing. Returns the field, for the control that opens the
+/// page to focus.
+///
+/// Save (or Enter — the shared `CommentEntry` wires both, so neither can be forgotten)
+/// closes the card, performs the edit, and leaves the card open on what was saved (TDD
+/// 17.7): the render the edit triggered has already installed its markers, so the card is
+/// opened afresh on them in the same turn, before a frame can show it closed. The edit is
+/// deferred off the active press gesture (GTK4Rs/AP-30). The construct's start does not
+/// move when its comment or added side is rewritten, so it names the same annotation in
+/// the new render.
+///
+/// No `style_as_card()`: the field opens pre-filled inside a popover that sets its own
+/// width request, so the card's placeholder and 34-char width don't apply.
+///
+/// Cancel ABORTS THE EDIT, it does not close the card: the stack goes back to the read
+/// page and the card stays open on the annotation the user was looking at. Dismissing
+/// there conflated "I don't want this edit" with "I'm done with this annotation", and
+/// answered both with the more destructive one. Escape and the corner × remain the ways
+/// to say the other thing. The field is restored to `initial` on the way out, so an
+/// abandoned draft does not greet the user the next time they open the page — that is
+/// what makes this an abort rather than a postponement.
+fn add_edit_page(
+    stack: &gtk::Stack,
+    name: &str,
+    initial: &str,
+    card: &AnnotationCard,
+    sink: AnnotationSink,
+    build: impl Fn(String) -> Option<AnnotationEdit> + 'static,
+) -> sourceview::View {
+    let ce = CommentEntry::new(initial, {
+        let card = card.clone();
+        move |text: &str| {
+            let view = card.view();
+            card.dismiss();
+            let Some(edit) = build(text.to_string()) else {
+                return;
+            };
+            let start = match &edit {
+                AnnotationEdit::EditComment { construct, .. }
+                | AnnotationEdit::EditSuggestion { construct, .. } => construct.captured_at().start,
+                _ => return,
+            };
+            let sink = sink.clone();
             glib::idle_add_local_once(move || {
-                stack.set_visible_child_name("edit");
-                crate::widgets::comment_entry::focus_at_end(&entry);
+                sink(edit);
+                if let Some(view) = view {
+                    view.reopen_marker_card_on(start);
+                }
             });
-        });
-    }
+        }
+    });
+    let cancel = gtk::Button::with_label("Cancel");
+    let ebtns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    ebtns.append(&ce.save);
+    ebtns.append(&cancel);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    page.append(&ce.area);
+    page.append(&ebtns);
+    stack.add_named(&page, Some(name));
     {
-        // Cancel ABORTS THE EDIT, it does not close the card: the stack goes back to the
-        // read page and the card stays open on the annotation the user was looking at.
-        // Dismissing here conflated two different intentions — "I don't want this edit"
-        // and "I'm done with this annotation" — and answered both with the more
-        // destructive one, so backing out of an accidental Edit cost the reader their
-        // place and a second click to get back to it. Escape and the corner × remain the
-        // ways to say the other thing.
-        //
-        // The entry is restored to the stored comment on the way out, so the abandoned
-        // draft does not survive to greet the user the next time they press Edit — that is
-        // what makes this an abort rather than a postponement.
         let stack = stack.clone();
         let entry = ce.field.clone();
-        let original = m.comment.clone();
+        let original = initial.to_string();
         cancel.connect_clicked(move |_| {
-            // Deferred for the same reason the Edit handler defers (GTK4Rs/AP-30): flipping the
-            // stack mutates this button's own ancestor while its press gesture is still
-            // active, which GTK reports as "Broken accounting of active state".
+            // Deferred (GTK4Rs/AP-30): flipping the stack mutates this button's own
+            // ancestor while its press gesture is still active, which GTK reports as
+            // "Broken accounting of active state".
             let stack = stack.clone();
             let entry = entry.clone();
             let original = original.clone();
             glib::idle_add_local_once(move || {
                 crate::widgets::comment_entry::open_comment(&entry, &original);
-                stack.set_visible_child_name("read");
+                stack.set_visible_child_name(READ_PAGE);
             });
         });
     }
+    ce.field
+}
+
+/// Wire `button` to show the editor page `name` and focus its `field`, so typing (and the
+/// popover's Escape controller) reach it. Deferred off the active press gesture
+/// (GTK4Rs/AP-30): flipping the stack mutates this button's own ancestor mid-click.
+fn wire_open_page(
+    button: &gtk::Button,
+    stack: &gtk::Stack,
+    name: &'static str,
+    field: &sourceview::View,
+) {
+    let stack = stack.clone();
+    let field = field.clone();
+    button.connect_clicked(move |_| {
+        let stack = stack.clone();
+        let field = field.clone();
+        glib::idle_add_local_once(move || {
+            stack.set_visible_child_name(name);
+            crate::widgets::comment_entry::focus_at_end(&field);
+        });
+    });
 }
 
 /// Wire `button` to remove `m`'s construct from the document, keeping the ORIGINAL-source

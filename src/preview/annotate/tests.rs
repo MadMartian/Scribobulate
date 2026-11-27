@@ -85,7 +85,7 @@ fn two_para_tree_between(between: &str) -> (CopyTree, String) {
 fn editor_highlight(src: &str, a: i32, b: i32) -> Option<std::ops::Range<usize>> {
     match capture_editor_selection(src, a, b)?.with_comment("note")? {
         CreateAnnotation::Highlight { target, .. } => target.resolve(src),
-        CreateAnnotation::Point { .. } => None,
+        CreateAnnotation::Point { .. } | CreateAnnotation::Suggest { .. } => None,
     }
 }
 

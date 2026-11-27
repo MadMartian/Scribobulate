@@ -305,7 +305,9 @@ pub(crate) fn update_annotate_action_state(window: &ApplicationWindow) {
                     .any(|l| l.selection_bounds().is_some())
             })
         });
-    set_action_enabled(window, "annotate", editor_sel || preview_sel);
+    for action in ["annotate", "suggest", super::annotate::ANNOTATE_AVAILABLE] {
+        set_action_enabled(window, action, editor_sel || preview_sel);
+    }
 }
 /// Recompute the enabled state of the editor-only `win.cut` / `win.delete`
 /// actions.  They are meaningful only when the editor is visible (edit or split

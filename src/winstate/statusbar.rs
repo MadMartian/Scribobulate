@@ -25,6 +25,11 @@ pub(crate) const DOCUMENT_COPIED: &str = "Document copied";
 pub(crate) const COMMENT_NOT_ANNOTATABLE: &str =
     "A comment's text can't be annotated: select the text it comments on";
 
+/// A suggested edit refused: the selection crosses blocks, reaches into code, math, front
+/// matter or an HTML block, or touches an existing annotation (TDD 17.79).
+pub(crate) const SUGGESTION_NOT_PLACEABLE: &str =
+    "A suggested edit can't go here: select text within one paragraph, outside code and other annotations";
+
 /// Confirmation for Copy Link Location (TDD 16.15).
 pub(crate) const LINK_LOCATION_COPIED: &str = "Link location copied";
 

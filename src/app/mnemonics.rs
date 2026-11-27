@@ -38,6 +38,8 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Select All", "Select _All"), ("Find", "_Find"),
     ("Find & Replace", "Find & Re_place"), ("Insert Emoji", "Insert _Emoji"),
     ("Annotate", "A_nnotate"), ("Change Case", "Chan_ge Case"),
+    // The Annotate submenu — its own popover, so its keys need only be unique there.
+    ("Comment", "_Comment"), ("Add", "_Add"), ("Replace", "_Replace"),
     // The annotation walk (INLINE_ACCEL_CMDS, not an EDIT_CMDS row). `x`/`v` mirror
     // View's Ne_xt Tab / Pre_vious Tab, and N/P are taken here (Annotate, Replace).
     ("Next Annotation", "Ne_xt Annotation"),

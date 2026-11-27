@@ -25,12 +25,12 @@ use super::written::{as_written, blank_lines, in_code};
 use crate::span::{CleanedByteOffset, OriginalByteOffset};
 use std::ops::Range;
 
-const INS_OPEN: &str = "{++";
-const INS_CLOSE: &str = "++}";
-const DEL_OPEN: &str = "{--";
-const DEL_CLOSE: &str = "--}";
-const SUB_OPEN: &str = "{~~";
-const SUB_CLOSE: &str = "~~}";
+pub(super) const INS_OPEN: &str = "{++";
+pub(super) const INS_CLOSE: &str = "++}";
+pub(super) const DEL_OPEN: &str = "{--";
+pub(super) const DEL_CLOSE: &str = "--}";
+pub(super) const SUB_OPEN: &str = "{~~";
+pub(super) const SUB_CLOSE: &str = "~~}";
 pub(super) const SUB_ARROW: &str = "~>";
 
 /// Every opener/closer pair the pass recognises, as ONE table.

@@ -88,7 +88,7 @@ mod imp {
         /// selection. Wired once in `new` onto `editor_overlay`;
         /// the `win.annotate` action calls it via [`super::SplitView::trigger_editor_annotate`]
         /// when the editor is the active pane. Captures only weak refs (no cycle, GTK4Rs/AP-63).
-        pub(super) editor_annotate_trigger: RefCell<Option<Rc<dyn Fn()>>>,
+        pub(super) editor_annotate_trigger: RefCell<Option<crate::codeview::AnnotateTrigger>>,
         pub(super) preview_holder: OnceCell<gtk::Box>,
         pub(super) divider: OnceCell<gtk::Separator>,
         /// Current mode — `Cell<ViewMode>`'s `Default` is `Preview` (matching
@@ -398,10 +398,10 @@ impl SplitView {
     /// Returns `false` (a no-op) if the trigger isn't wired.
     /// The `win.annotate` action calls this when the editor is the active pane; the card
     /// then writes the created annotation into the editor source buffer.
-    pub(crate) fn trigger_editor_annotate(&self) -> bool {
+    pub(crate) fn trigger_editor_annotate(&self, kind: crate::preview::AnnotateKind) -> bool {
         let trigger = self.imp().editor_annotate_trigger.borrow().clone();
         if let Some(trigger) = trigger {
-            trigger();
+            trigger(kind);
             true
         } else {
             false

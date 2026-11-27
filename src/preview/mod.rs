@@ -26,6 +26,7 @@
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod altsuppression;
 pub(crate) mod annotate;
+pub(crate) use annotate::AnnotateKind;
 pub(crate) mod build;
 mod cells;
 mod css;

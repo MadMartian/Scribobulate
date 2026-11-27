@@ -107,6 +107,15 @@ pub(crate) enum AnnotationEdit {
         body: std::ops::Range<usize>,
         text: String,
     },
+    /// Rewrite the side a suggested addition or replacement would add (TDD 17.78).
+    ///
+    /// Anchored on the whole construct, as `EditComment` is; `side` is RELATIVE to the
+    /// construct's start.
+    EditSuggestion {
+        construct: crate::docref::AnchoredSpan,
+        side: std::ops::Range<usize>,
+        text: String,
+    },
     /// Remove a construct, keeping the highlighted content (`keep_inner = Some`)
     /// or deleting it whole (a point comment, `None`).
     ///
@@ -159,6 +168,12 @@ pub(crate) enum CreateAnnotation {
         target: crate::docref::AnchoredSpan,
         comment: String,
     },
+    /// A suggested edit of `kind` over the target, proposing `text` (TDD 17.79).
+    Suggest {
+        target: crate::docref::AnchoredSpan,
+        kind: crate::annotate::suggest::SuggestKind,
+        text: String,
+    },
 }
 
 /// The sink the window installs to perform an [`AnnotationEdit`] on the document.
@@ -168,7 +183,7 @@ pub(crate) type AnnotationSink = std::rc::Rc<dyn Fn(AnnotationEdit)>;
 /// selection. The create overlay ([`crate::preview::annotate`]) stores it so the
 /// `win.annotate` action can raise the very same card the selection popover's
 /// **Annotate** button does — one code path behind both surfaces (SSOT).
-pub(crate) type AnnotateTrigger = std::rc::Rc<dyn Fn()>;
+pub(crate) type AnnotateTrigger = std::rc::Rc<dyn Fn(crate::preview::AnnotateKind)>;
 
 impl CodePreviewView {
     /// Set this render's CriticMarkup comment markers and
@@ -223,11 +238,11 @@ impl CodePreviewView {
     /// Raise the comment-entry card over the current selection via the stored
     /// trigger. Returns `false` (a no-op) when no trigger is installed (e.g. before
     /// the create overlay wired this render) — the caller can then do nothing.
-    pub(crate) fn trigger_annotate(&self) -> bool {
+    pub(crate) fn trigger_annotate(&self, kind: crate::preview::AnnotateKind) -> bool {
         use gtk::subclass::prelude::*;
         let trigger = self.imp().annotate_trigger.borrow().clone();
         if let Some(trigger) = trigger {
-            trigger();
+            trigger(kind);
             true
         } else {
             false

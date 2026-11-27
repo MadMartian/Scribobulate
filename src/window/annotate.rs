@@ -8,6 +8,7 @@
 use super::*;
 use crate::annotations::Direction;
 use crate::codeview::{AnnotationEdit, CreateAnnotation};
+use crate::preview::AnnotateKind;
 
 /// Register the `win.annotate` action — a first-class command so annotation is
 /// reachable from a keyboard accelerator (and, later, the menu bar and toolbar),
@@ -34,13 +35,46 @@ pub(super) fn register_annotate_action(window: &ApplicationWindow) {
             let win = win.clone();
             glib::idle_add_local_once(move || {
                 if let Some(w) = win.upgrade() {
-                    trigger_annotate_in_active_pane(&w);
+                    trigger_annotate_in_active_pane(&w, AnnotateKind::Comment);
                 }
             });
         }
     });
     window.add_action(&action);
+
+    // `win.suggest::add|replace|delete` — the suggested-edit siblings of `win.annotate`
+    // (TDD 17.79). One parameterised action, like `win.format`, gated with
+    // `win.annotate` in `update_annotate_action_state`, and deferred for the same reason.
+    let suggest = SimpleAction::new("suggest", Some(glib::VariantTy::STRING));
+    suggest.set_enabled(false);
+    suggest.connect_activate({
+        let win = window.downgrade();
+        move |_, param| {
+            let Some(kind) = param
+                .and_then(|p| p.str())
+                .and_then(crate::annotate::suggest::SuggestKind::from_target)
+            else {
+                return;
+            };
+            let win = win.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(w) = win.upgrade() {
+                    trigger_annotate_in_active_pane(&w, AnnotateKind::Suggest(kind));
+                }
+            });
+        }
+    });
+    window.add_action(&suggest);
+    // The Annotate submenu row's twin: no parameter and no handler, enabled with the
+    // two actions above, so the row greys with its items (as `change-case-available` does
+    // for Change Case).
+    let available = SimpleAction::new(ANNOTATE_AVAILABLE, None);
+    available.set_enabled(false);
+    window.add_action(&available);
 }
+
+/// The no-parameter twin backing the Annotate submenu row's sensitivity.
+pub(crate) const ANNOTATE_AVAILABLE: &str = "annotate-available";
 
 /// Register `win.next-annotation` and `win.prev-annotation` — the **accessibility**
 /// counterpart to `win.annotate`. The margin-marker design puts the comment on a
@@ -98,7 +132,7 @@ fn register_annotation_step(window: &ApplicationWindow, name: &str, direction: D
 /// preview card resolves the selection through the render maps. A no-op when neither pane
 /// has an annotatable selection — but the action is gated to exactly that condition
 /// (`update_annotate_action_state`), so an enabled activation always finds a target.
-fn trigger_annotate_in_active_pane(window: &ApplicationWindow) {
+fn trigger_annotate_in_active_pane(window: &ApplicationWindow, kind: AnnotateKind) {
     let Some(st) = state(window) else { return };
     let editor_sel = current_mode(window).is_editor_visible() && st.editor_buf.has_selection();
     let preview = preview_text_view(window)
@@ -122,11 +156,11 @@ fn trigger_annotate_in_active_pane(window: &ApplicationWindow) {
     // `&&`/`||` short-circuit: fire the preferred pane if it has a usable selection,
     // otherwise the other; each trigger returns whether it actually ran.
     let _fired = if prefer_editor {
-        (editor_sel && st.split.trigger_editor_annotate())
-            || preview.as_ref().is_some_and(|v| v.trigger_annotate())
+        (editor_sel && st.split.trigger_editor_annotate(kind))
+            || preview.as_ref().is_some_and(|v| v.trigger_annotate(kind))
     } else {
-        preview.as_ref().is_some_and(|v| v.trigger_annotate())
-            || (editor_sel && st.split.trigger_editor_annotate())
+        preview.as_ref().is_some_and(|v| v.trigger_annotate(kind))
+            || (editor_sel && st.split.trigger_editor_annotate(kind))
     };
 }
 
@@ -149,15 +183,12 @@ pub(crate) fn document_source(window: &ApplicationWindow) -> Option<String> {
     Some(crate::saferizer::BufferText::of(buf).into_string())
 }
 
-/// Tell the reader why Annotate did nothing: the selection lies wholly inside an existing
-/// comment, whose text is not annotatable (TDD 17.59). A quiet-command notice (Status-
-/// notice CAM row 5), retracted against the stack that showed it.
-pub(crate) fn announce_annotation_refused(widget: &impl IsA<gtk::Widget>) {
+/// Tell the reader why Annotate or a suggestion did nothing — `notice` is the reason
+/// (TDD 17.59, 17.79). A quiet-command notice (Status-notice CAM row 5), retracted
+/// against the stack that showed it.
+pub(crate) fn announce_annotation_refused(widget: &impl IsA<gtk::Widget>, notice: &'static str) {
     if let Some(chrome) = host_window(widget).and_then(|w| winstate::chrome(&w)) {
-        chrome.push_timed_notice(
-            crate::winstate::statusbar::COMMENT_NOT_ANNOTATABLE,
-            super::toast::INFO_STATUS_TIME,
-        );
+        chrome.push_timed_notice(notice, super::toast::INFO_STATUS_TIME);
     }
 }
 
@@ -188,6 +219,22 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
             };
             let body = crate::docref::AnchoredSpan::absolute(&at, &body);
             match crate::annotate::edit_comment(&old, body, &text) {
+                Some(new) => new,
+                None => return,
+            }
+        }
+        AnnotationEdit::EditSuggestion {
+            construct,
+            side,
+            text,
+        } => {
+            let Some(at) = construct.resolve(&old) else {
+                return;
+            };
+            let side = crate::docref::AnchoredSpan::absolute(&at, &side);
+            // The page reads the added side, so rewriting it changes the words.
+            page_text_kept = false;
+            match crate::annotate::suggest::edit_added_side(&old, at.start, side, &text) {
                 Some(new) => new,
                 None => return,
             }
@@ -250,6 +297,19 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 crate::annotate::landing::for_point(&old, at),
                 &comment,
             )
+        }
+        AnnotationEdit::Create(CreateAnnotation::Suggest { target, kind, text }) => {
+            // Re-located in the live source first, as every create is.
+            let Some(range) = target.resolve(&old) else {
+                return;
+            };
+            // A deletion leaves the page's words where they were, struck through; an
+            // addition or replacement changes them.
+            page_text_kept = kind == crate::annotate::suggest::SuggestKind::Delete;
+            match crate::annotate::suggest::insert_suggestion(&old, range, kind, &text) {
+                Some(new) => new,
+                None => return,
+            }
         }
         // Task checkbox toggle: a single `[ ]`↔`[x]`
         // state-char flip located in the LIVE source (`old`). Pure `&str -> String`

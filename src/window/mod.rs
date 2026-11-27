@@ -49,6 +49,8 @@ mod reload;
 mod rename;
 mod save;
 mod scrollsync;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod suggest_tests;
 #[cfg(test)]
 pub(crate) mod testkit;
 mod zoom;
@@ -79,6 +81,7 @@ pub(crate) use annotate::announce_annotation_refused;
 pub(crate) use annotate::apply_annotation_edit;
 pub(crate) use annotate::document_source;
 pub(crate) use annotate::refresh_preview_after_annotation;
+pub(crate) use annotate::ANNOTATE_AVAILABLE;
 use annotate::{register_annotate_action, register_annotation_step_actions};
 pub(crate) use annotations_nav::{reconcile_sidebar_visibility, refresh_annotations};
 pub(crate) use chrome::render_and_wire_preview;

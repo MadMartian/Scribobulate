@@ -2848,7 +2848,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 17.5 A reader can annotate a selected claim, saved into the file
 - **Given** the document is shown in the preview and the reader selects a claim
-- **When** they choose Annotate, type a comment, and Save
+- **When** they choose Comment (in the Annotate pop-up, or Annotate elsewhere), type a comment, and Save
 - **Then** the selected text becomes highlighted with a margin marker, and the underlying Markdown file gains `{==<claim>==}{>>comment<<}` around exactly the selected span (the buffer is marked unsaved until saved to disk)
 - **And** the Annotate pop-up appears for the first selection made after a mouse-wheel scroll too, not only from the second one on, and a scroll that moves the text dismisses it
 
@@ -2858,7 +2858,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** instead of a highlight, a point comment `{>>comment<<}` is inserted at the end of the selection, and its marker appears on that line
 
 ### 17.7 An existing comment can be edited in place
-- **Given** an annotation's popover is open with Edit available
+- **Given** an annotation's popover is open with Edit Note available
 - **When** the user edits the comment text and saves
 - **Then** the comment body in the file is replaced with the new text and nothing else in the document changes
 - **And** the card stays open, showing the saved comment and every control it now offers, without being closed and reopened
@@ -2944,8 +2944,9 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 17.23 Annotate is a first-class command reachable from several surfaces, gated on a selection
 - **Given** a document open in the editor or preview
-- **When** the user consults the ways to annotate — the keyboard accelerator (Ctrl+Alt+M), the Edit menu's Annotate item, the Annotate toolbar button, and the right-click context menu's Annotate item
+- **When** the user consults the ways to annotate — the keyboard accelerator (Ctrl+Alt+M), the Edit menu's Annotate ▸ Comment item, the Annotate toolbar button, and the right-click context menu's Annotate ▸ Comment item
 - **Then** all four drive the one `win.annotate` command and are enabled exactly when the active pane has a non-empty selection (disabled otherwise), never diverging from one another
+- **And** the Annotate submenu row, in the Edit menu and the context menu alike, is greyed exactly when its items are
 
 ### 17.24 The editor pane can annotate its own selection into the source
 - **Given** the editor pane (edit or split mode) with a span of source text selected
@@ -2989,7 +2990,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.31 A cell marker opens its comment popover, and the create overlay dismisses with the cell selection
 - **Given** a table containing an annotated cell (a margin marker chip) and, optionally, a live cell-text selection showing the 💬 create pop-up
 - **When** the user clicks the cell's margin marker chip
-- **Then** that marker's comment popover opens (claim + comment + Edit/Remove) — never the create card — and any showing create pop-up is dismissed rather than left stacked over the same table
+- **Then** that marker's comment popover opens (claim + comment + Edit Note/Remove) — never the create card — and any showing create pop-up is dismissed rather than left stacked over the same table
 - **And when** the user clears the cell selection (clicks an empty area of the preview, which does not itself clear a `GtkLabel`'s sticky selection)
 - **Then** the create pop-up dismisses and the cell selection clears — the overlay accounts for cell-selection state (driven off the primary-clipboard `changed`), not only buffer-selection changes which never fire for a cell selection
 
@@ -3061,7 +3062,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the comment entry is empty — the pre-population never invents a comment where none is at risk
 
 ### 17.43 Enter commits on every annotation comment field
-- **Given** any annotation comment field — the editor Create card, the preview Create card, or the marker-chip Edit popover
+- **Given** any annotation comment field — the editor Create card, the preview Create card, or the marker-chip Edit Note popover
 - **When** the reader presses Enter
 - **Then** the comment is committed, identically to clicking Save. All three surfaces route through one shared field so the two commit paths cannot diverge — a test that only clicks Save passes while Enter is inert
 
@@ -3075,13 +3076,13 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.45 An annotation card acts on its own annotation after the document moves
 - **Given** an open annotation card for `{==beta==}{>>note<<}` in `alpha {==beta==}{>>note<<} gamma`
 - **And given** the document then changes underneath it — the reader types earlier in the document, an undo lands, or the split-mode live re-render re-scans the source — so every byte offset the card captured when it was built now addresses different text
-- **When** the reader clicks **Remove** (or commits an **Edit**) on that still-open card
+- **When** the reader clicks **Remove** (or commits an **Edit Note**) on that still-open card
 - **Then** the mutation applies to **its own** annotation at its current position, leaving every other character of the document untouched — because the card re-locates its construct by the text it captured, never by the offsets alone
 - **And** where the document contains several identical annotations, the one nearest the card's original position is chosen, so a shifted document resolves to the same annotation rather than a different copy of it
 
 ### 17.46 An annotation card whose annotation is gone does nothing at all
 - **Given** an open annotation card whose construct has since been deleted from the document — by hand, by an undo, or by a reload
-- **When** the reader clicks **Remove** or commits an **Edit**
+- **When** the reader clicks **Remove** or commits an **Edit Note**
 - **Then** the document is left **exactly** as it was: no text is removed, no markup is spliced, and the application does not terminate
 - **And** this holds when the document is now *shorter* than the offsets the card captured, which is the case that previously aborted the process rather than failing (a panic in a GTK signal handler takes unsaved work with it)
 
@@ -3108,9 +3109,9 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** an open annotation card
 - **When** the reader clicks anywhere outside it — on the document, the toolbar, the editor pane, or the sidebar
 - **Then** the card dismisses, and the click still reaches whatever it was aimed at
-- **And** clicking the card's own Edit, Remove, Save or Cancel controls activates that control instead, never dismissing the card out from under the click
+- **And** clicking the card's own Edit Note, Edit Suggestion, Remove, Save or Cancel controls activates that control instead, never dismissing the card out from under the click
 - **And** clicking a margin chip while a card is open leaves the reader with the card for that chip, rather than dismissing and losing an in-progress edit
-- **But** a card whose Edit holds a changed comment stays open (17.70)
+- **But** a card whose Edit Note holds a changed comment stays open (17.70)
 
 ### 17.50 Activating another annotation moves the card to it
 - **Given** an open annotation card, and a second annotation elsewhere in the document
@@ -3126,13 +3127,13 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** an open annotation card
 - **When** the reader clicks the **×** in its top-right corner
 - **Then** the card closes, exactly as Escape or a click outside it would
-- **And** opening a card still puts the keyboard on its first action (Edit), never on the × — so a reader who opens a card and presses Space acts on the annotation rather than dismissing it
+- **And** opening a card still puts the keyboard on its first action (Edit Note; on a suggested edit, Edit Suggestion, or Accept edit for a deletion), never on the × — so a reader who opens a card and presses Space acts on the annotation rather than dismissing it
 
 ### 17.53 Cancel abandons the edit, not the annotation
-- **Given** an annotation card whose Edit has been activated, with the comment part-rewritten
+- **Given** an annotation card whose Edit Note has been activated, with the comment part-rewritten
 - **When** the reader clicks **Cancel**
-- **Then** the card returns to its read state — claim, stored comment, Edit and Remove — and stays open on the same annotation; the reader does not lose their place over an edit they backed out of
-- **And** the document is unchanged, and pressing Edit again offers the **stored** comment, not the abandoned draft
+- **Then** the card returns to its read state — claim, stored comment, Edit Note and Remove — and stays open on the same annotation; the reader does not lose their place over an edit they backed out of
+- **And** the document is unchanged, and pressing Edit Note again offers the **stored** comment, not the abandoned draft
 
 ### 17.54 The annotation walk advances, and it goes back
 - **Given** a document holding several comment-bearing annotations
@@ -3151,7 +3152,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** in a document with no annotations at all, Next Annotation and Previous Annotation are both disabled (greyed out in the Edit menu, their shortcuts inert), and they become enabled as soon as the document gains one — whether by annotating, editing the source, undo/redo, reload, or switching to a tab that has one
 
 ### 17.56 A comment is typed into a wrapping field, and stays one line
-- **Given** any annotation comment field — the editor Create card, the preview Create card, or the card's Edit
+- **Given** any annotation comment field — the editor Create card, the preview Create card, or the card's Edit Note or Edit Suggestion
 - **When** the reader types a comment longer than the field is wide
 - **Then** the text wraps onto the next row and the caret stays in view; the field is a fixed few rows tall and scrolls beyond that, so it never grows the card while the reader types
 - **And** Enter commits (17.43) and never inserts a line break, except while an input method is composing, where Enter confirms the composition as usual
@@ -3160,9 +3161,9 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** the field takes the desktop's colours, light or dark, so its hint and the typed text are both legible on either
 - **And** Select All and Undo/Redo act on the field while it has focus, never on the document — including when the document has undo history of its own, where an Undo that reached the document would revert the reader's last edit, possibly a whole annotation
 
-### 17.57 Edit replaces the comment in place
+### 17.57 Edit Note replaces the comment in place
 - **Given** an open annotation card showing a comment
-- **When** the reader clicks **Edit**
+- **When** the reader clicks **Edit Note**
 - **Then** the comment text is replaced, in the same place, by the comment field pre-filled with it, with Save and Cancel beneath; the comment is never shown twice, as fixed text and as a field below it
 - **And** the caret rests at the end of the comment with nothing selected
 - **And** the card does not change size or close as the page switches, however long the comment
@@ -3189,7 +3190,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.60 A long annotation keeps its controls on the card
 - **Given** an annotation whose annotated text or comment is too long to fit in its pane — or several such annotations on one line, which share one card — in a window of any height
 - **When** its card opens
-- **Then** the whole card is inside its pane, and each annotation's Edit / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
+- **Then** the whole card is inside its pane, and each annotation's Edit Note / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
 - **And** the long text scrolls inside the card rather than growing it; where several annotations share the card and still do not fit, their rows scroll together so every one stays reachable — the card never runs past the pane's edge and never closes itself because of its size
 
 ### 17.61 CriticMarkup written as code shows as code
@@ -3219,7 +3220,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 17.65 The cards over the preview are one colour
 - **Given** a reading theme that colours the page (Pixel Quest, Sepia, …)
-- **When** the reader selects preview text and the Annotate pop-up shows, then clicks Annotate and the comment entry opens
+- **When** the reader selects preview text and the Annotate pop-up shows, then clicks Comment and the comment entry opens
 - **Then** both cards are the same colour, the desktop's, as are the formatting bar and a comment card: the reading theme colours the document, not the cards floating over it (18.7)
 
 ### 17.66 The wheel over an annotation's text reaches the card's list
@@ -3251,9 +3252,9 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** the viewer's filter (20.24) matches and highlights within that same text
 
 ### 17.70 A changed comment closes only when the reader says so
-- **Given** an annotation card with its comment field open — a new annotation from the preview or the editor, or an Edit of an existing one — and the reader has changed the text from what the card opened with (empty for a new one, the stored comment for an Edit)
+- **Given** an annotation card with its comment field open — a new annotation from the preview or the editor, or an Edit Note or Edit Suggestion on an existing one — and the reader has changed the text from what the card opened with (empty for a new one, the stored comment for an Edit)
 - **When** focus moves elsewhere, the reader clicks outside the card, or selects different text in the document
-- **Then** the card stays open with the changed text, and closes only on Escape while the card has focus, the corner ×, Cancel, or a commit with Enter or Save (a committed Edit then shows what was saved, 17.7)
+- **Then** the card stays open with the changed text, and closes only on Escape while the card has focus, the corner ×, Cancel, or a commit with Enter or Save (a committed Edit Note or Edit Suggestion then shows what was saved, 17.7)
 - **And** a card whose text is unchanged closes on those events as before (17.16, 17.39, 17.49)
 
 ### 17.71 A suggested edit is an annotation with a margin marker
@@ -3265,7 +3266,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.72 A suggested edit's card shows the change and offers to accept it
 - **Given** the margin card of a suggested edit is open
 - **When** the reader reads it
-- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Remove, and the note can be written or edited like any comment (17.7, 17.67)
+- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Remove — and Edit Suggestion for an addition or a replacement (17.78) — on one row, with Edit Note, which writes or edits the note like any comment (17.7, 17.67), on the row beneath
 - **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
 
 ### 17.73 Accepting a suggested edit applies it
@@ -3281,8 +3282,8 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.75 An annotation with a comment offers Add Follow-up
 - **Given** an annotation card is open
 - **When** the reader reads an annotation in it
-- **Then** each annotation that carries a comment — a highlight with one, a point comment, a suggested edit with a note — offers Add Follow-up; a bare highlight or a suggested edit with no note does not, since Edit writes its first comment
-- **And** once Edit saves that first comment, the card left open (17.7) offers Add Follow-up without being reopened
+- **Then** each annotation that carries a comment — a highlight with one, a point comment, a suggested edit with a note — offers Add Follow-up; a bare highlight or a suggested edit with no note does not, since Edit Note writes its first comment
+- **And** once Edit Note saves that first comment, the card left open (17.7) offers Add Follow-up without being reopened
 
 ### 17.76 Add Follow-up writes a point comment straight after the annotation it answers
 - **Given** an annotation card offering Add Follow-up
@@ -3294,6 +3295,21 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a selection on the page that covers suggested edits, or a whole-document copy
 - **When** the reader copies it
 - **Then** the clipboard holds the text as it would read once every covered edit were accepted: added and new text in, deleted and old text out
+
+### 17.78 Edit Suggestion rewrites what a suggested edit adds
+- **Given** the card of a suggested addition `{++text++}` or replacement `{~~old~>new~~}` is open
+- **When** the reader chooses Edit Suggestion
+- **Then** the added text becomes a field in the card's place holding it as written in the file — formatting marks included — with Save and Cancel beneath; on Save the file's added text (`text`, or `new`) is replaced by what was typed and nothing else changes — the old side, the note and the rest of the document are untouched — the page shows the new text, and the card stays open on the edited suggestion; one Undo restores it
+- **And** what was typed cannot end the construct early: a typed closer (`++}`, `~~}`) is written so it no longer closes, and a line break is written as a space; a replacement saved empty proposes nothing (`{~~old~>~~}`), while an addition saved empty writes nothing
+- **And** Cancel writes nothing and brings the card back as it was; a deletion and a highlight offer no Edit Suggestion
+
+### 17.79 A selection can become a suggested addition, replacement or deletion
+- **Given** a selection in the preview or the editor
+- **When** the reader looks at the pop-up over a preview selection, or at Annotate in the Edit menu or the right-click menu
+- **Then** the pop-up is titled "Annotate" and offers Comment, Add, Replace and Delete; the Edit menu's and the right-click menu's Annotate is a submenu of the same four, each enabled exactly when Comment is (17.23)
+- **And when** the reader chooses Delete, the selection is wrapped `{--selection--}` at once, with no card; when they choose Replace, a card opens holding the selection as written in the file, and on Save it becomes `{~~selection~>typed~~}`; when they choose Add, an empty card opens, and on Save `{++typed++}` is written straight after the selection — each a suggested edit as in 17.71, with Undo removing it in one step
+- **And** a selection touching an inline construct (`**bold**`, a code span, a link) takes all of it, as a highlight does (17.39); what is typed cannot end the construct early (17.78), and an addition with nothing typed writes nothing
+- **But** a selection across blocks, into a code block, front matter, an HTML block or math, or touching an existing annotation, writes nothing, and the status bar says a suggested edit cannot go there — CriticMarkup does not nest
 
 ## 18. Preview reading themes
 

@@ -435,7 +435,8 @@ mod gtk_integration_tests {
 
     /// The card's height and its pane's, once its first Edit button is allocated.
     fn card_and_pane_heights(card: &AnnotationCard) -> (i32, i32) {
-        let edit = find_button(card, "Edit").expect("the card offers Edit");
+        let edit = find_button(card, crate::codeview::markerrows::EDIT_NOTE)
+            .expect("the card offers Edit");
         crate::testpump::until(
             crate::testpump::Clock::Frame,
             "Edit to be allocated",

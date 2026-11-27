@@ -451,6 +451,15 @@ fn assemble_view_menu(parts: &ViewSections) -> (Menu, Menu) {
     (outer, documents_menu)
 }
 
+/// The Annotate submenu, shared by the Edit menu and the document context menu so the
+/// two list the same items in the same order: label, action, and the action's target.
+pub(crate) const ANNOTATE_SUBMENU: [(&str, &str, Option<&str>); 4] = [
+    ("Comment", "win.annotate", None),
+    ("Add", "win.suggest", Some("add")),
+    ("Replace", "win.suggest", Some("replace")),
+    ("Delete", "win.suggest", Some("delete")),
+];
+
 /// Edit menu: the EDIT_CMDS commands and an editor section mirroring the GtkSourceView
 /// context menu — Insert Emoji and a Change Case submenu. All menu-only (not in
 /// EDIT_CMDS, so no toolbar buttons). The find bar's option toggles have no menu item:
@@ -462,7 +471,22 @@ fn build_edit_menu() -> Menu {
     // Annotate — an inline-accel command (Ctrl+Alt+M), menu-only here
     // (its toolbar/overlay button lives in the shared Format row); the accel hint is set
     // from the SSOT inline table, like Go To Line / Outline.
-    editor_section.append_item(&item("Annotate", "win.annotate"));
+    // Annotate ▸ — Comment and the three suggested edits (TDD 17.79). The row names the
+    // handler-less `win.annotate-available` so it greys with its items, as Change Case's
+    // row does (see there).
+    let annotate = Menu::new();
+    for (label, action, target) in ANNOTATE_SUBMENU {
+        let menu_item = MenuItem::new(Some(&mnem(label)), None);
+        menu_item
+            .set_action_and_target_value(Some(action), target.map(|t| t.to_variant()).as_ref());
+        annotate.append_item(&menu_item);
+    }
+    let annotate_row = MenuItem::new_submenu(Some(&mnem("Annotate")), &annotate);
+    annotate_row.set_attribute_value(
+        "action",
+        Some(&format!("win.{}", crate::window::ANNOTATE_AVAILABLE).to_variant()),
+    );
+    editor_section.append_item(&annotate_row);
     // The annotation walk, beside the command that creates one. Menu items are how a
     // reader FINDS a keyboard command — a shortcut nobody can discover is reachable
     // only by the people who already knew — and the Action CAM owes every command a
@@ -1116,40 +1140,69 @@ mod tests {
             .into_iter()
             .find_map(|(title, menu)| (title == "_Edit").then_some(menu))
             .expect("the Edit menu");
-        let mut row = None;
-        for i in 0..edit.n_items() {
-            let Some(section) = edit.item_link(i, "section") else {
-                continue;
-            };
-            let section: Menu = section.downcast().expect("a section link is a Menu");
-            for j in 0..section.n_items() {
-                if section.item_link(j, "submenu").is_some()
-                    && section
-                        .item_attribute_value(j, "label", None)
-                        .and_then(|v| v.str().map(str::to_string))
-                        .as_deref()
-                        == Some("Chan_ge Case")
-                {
-                    row = Some((section.clone(), j));
-                }
-            }
-        }
-        let (section, j) = row.expect("Edit has a Change Case submenu row");
-        let attr = |name: &str| {
-            section
-                .item_attribute_value(j, name, None)
+        let label_of = |menu: &Menu, j: i32| {
+            menu.item_attribute_value(j, "label", None)
                 .and_then(|v| v.str().map(str::to_string))
         };
-        assert_eq!(
-            attr("action").as_deref(),
-            Some("win.change-case-available"),
-            "the Change Case row must name an action, or GTK draws it enabled over greyed items"
-        );
-        assert_eq!(
-            attr("hidden-when"),
-            None,
-            "the row greys; it is never hidden"
-        );
+        // The Annotate row (TDD 17.79) is built the same way, for the same reason.
+        let annotate_available = format!("win.{}", crate::window::ANNOTATE_AVAILABLE);
+        for (label, twin) in [
+            ("Chan_ge Case", "win.change-case-available"),
+            ("A_nnotate", annotate_available.as_str()),
+        ] {
+            let mut row = None;
+            for i in 0..edit.n_items() {
+                let Some(section) = edit.item_link(i, "section") else {
+                    continue;
+                };
+                let section: Menu = section.downcast().expect("a section link is a Menu");
+                for j in 0..section.n_items() {
+                    if section.item_link(j, "submenu").is_some()
+                        && label_of(&section, j).as_deref() == Some(label)
+                    {
+                        row = Some((section.clone(), j));
+                    }
+                }
+            }
+            let (section, j) = row.unwrap_or_else(|| panic!("Edit has a {label} submenu row"));
+            let attr = |name: &str| {
+                section
+                    .item_attribute_value(j, name, None)
+                    .and_then(|v| v.str().map(str::to_string))
+            };
+            assert_eq!(
+                attr("action").as_deref(),
+                Some(twin),
+                "the {label} row must name an action, or GTK draws it enabled over greyed items"
+            );
+            assert_eq!(
+                attr("hidden-when"),
+                None,
+                "the row greys; it is never hidden"
+            );
+            if label == "A_nnotate" {
+                let sub: Menu = section
+                    .item_link(j, "submenu")
+                    .and_downcast()
+                    .expect("a submenu link is a Menu");
+                let items: Vec<_> = (0..sub.n_items())
+                    .map(|k| {
+                        let action = sub
+                            .item_attribute_value(k, "action", None)
+                            .and_then(|v| v.str().map(str::to_string));
+                        let target = sub
+                            .item_attribute_value(k, "target", None)
+                            .and_then(|v| v.str().map(str::to_string));
+                        (label_of(&sub, k), action, target)
+                    })
+                    .collect();
+                let expected: Vec<_> = ANNOTATE_SUBMENU
+                    .iter()
+                    .map(|(l, a, t)| (Some(mnem(l)), Some(a.to_string()), t.map(str::to_string)))
+                    .collect();
+                assert_eq!(items, expected, "Comment, Add, Replace, Delete");
+            }
+        }
     }
 }
 

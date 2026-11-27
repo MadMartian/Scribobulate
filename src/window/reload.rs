@@ -1417,7 +1417,10 @@ mod gtk_integration_tests {
             let a = ptext[..byte].chars().count() as i32;
             let b = a + word.chars().count() as i32;
             buf.select_range(&buf.iter_at_offset(a), &buf.iter_at_offset(b));
-            assert!(view.trigger_annotate(), "annotate trigger fired");
+            assert!(
+                view.trigger_annotate(crate::preview::AnnotateKind::Comment),
+                "annotate trigger fired"
+            );
             // Reuse the module-level depth-first entry finder to reach the card's GtkEntry.
             let entry = find_entry(&overlay).expect("card entry");
             crate::widgets::comment_entry::set_comment_text(&entry, comment);

@@ -11,7 +11,8 @@
 //! the parent module's pure, unit-tested `bar_placement` helper and the shared
 //! `saferizer::ViewportRect` anchor gate.
 
-use super::{bar_placement, capture_selection, PendingTarget};
+use super::{bar_placement, capture_selection, AnnotateKind, Opening, PendingTarget};
+use crate::annotate::suggest::SuggestKind;
 use crate::codeview::CodePreviewView;
 use crate::preview::cell_copymap;
 use crate::preview::qdata::RenderData;
@@ -504,6 +505,46 @@ enum AnchorSel {
     Cell(Label, i32, i32),
 }
 
+/// The selection popover's title.
+pub(crate) const POPOVER_TITLE: &str = "Annotate";
+
+/// The selection popover's buttons, in order, and what each raises (TDD 17.79).
+pub(crate) const POPOVER_ACTIONS: [(&str, AnnotateKind); 4] = [
+    ("\u{1f4ac} Comment", AnnotateKind::Comment),
+    ("Add", AnnotateKind::Suggest(SuggestKind::Add)),
+    ("Replace", AnnotateKind::Suggest(SuggestKind::Replace)),
+    ("Delete", AnnotateKind::Suggest(SuggestKind::Delete)),
+];
+
+/// Hand a new annotation to `v`'s sink. The sink mutates the editor buffer and
+/// REBUILDS the preview widget tree, so it runs on an idle turn: running it inside a
+/// button's "clicked" handler tears down and re-creates widgets while the press gesture
+/// is still active, so GTK loses track of the active state up the
+/// ScribCodePreviewView→…→window ancestor chain ("Broken accounting of active state for
+/// widget …" — GTK4Rs/AP-30).
+///
+/// The preview selection is collapsed first, so the new annotation's wash is visible at
+/// once: the sink re-tags the preview IN PLACE (never touching its selection), and GTK
+/// paints the opaque selection OVER tag backgrounds, so a lingering selection masks the
+/// just-applied annotation and makes it look as if it did not render. A cell annotation
+/// has no buffer selection, so that is a no-op there.
+fn send_create(v: &CodePreviewView, create: crate::codeview::CreateAnnotation) {
+    let buf = v.buffer();
+    if let Some((_, end)) = buf.selection_bounds() {
+        buf.place_cursor(&end);
+    }
+    // Weak-capture the view across the idle hop (GTK4Rs/AP-63 parity).
+    glib::idle_add_local_once(glib::clone!(
+        #[weak]
+        v,
+        move || {
+            if let Some(sink) = v.annotation_sink() {
+                sink(crate::codeview::AnnotationEdit::Create(create));
+            }
+        }
+    ));
+}
+
 /// Wire the create overlay onto a freshly rendered preview `view` (called once per
 /// render, like the copy/link wiring). Two coordinated pieces:
 ///
@@ -543,12 +584,27 @@ pub(crate) fn wire_annotation_overlay(
     // Held by the view so opening a marker card can close it (the overlay owns it).
     view.store_overlay_popover(&pop);
 
-    // A horizontal button box so future preview-selection actions can join Annotate.
+    // Titled "Annotate", with what a selection can become: a comment, or a suggested
+    // addition, replacement or deletion (TDD 17.79). Each button raises its card through
+    // the one trigger below, as the `win.annotate` / `win.suggest` actions do.
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let title = gtk::Label::new(Some(POPOVER_TITLE));
+    title.add_css_class("heading");
+    title.set_xalign(0.0);
+    title.set_margin_start(6);
+    content.append(&title);
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    let annotate_btn = gtk::Button::with_label("\u{1f4ac} Annotate");
-    annotate_btn.set_has_frame(false);
-    actions.append(&annotate_btn);
-    pop.set_child(Some(&actions));
+    let kind_buttons: Vec<(gtk::Button, AnnotateKind)> = POPOVER_ACTIONS
+        .iter()
+        .map(|&(label, kind)| {
+            let button = gtk::Button::with_label(label);
+            button.set_has_frame(false);
+            actions.append(&button);
+            (button, kind)
+        })
+        .collect();
+    content.append(&actions);
+    pop.set_child(Some(&content));
 
     // ── 2. comment entry bar (in-surface GtkOverlay child) ───────────────────────
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -591,6 +647,8 @@ pub(crate) fn wire_annotation_overlay(
     // "what does Save write to?", which is an instruction to edit the document and must
     // survive the document moving.
     let anchor_sel: Rc<RefCell<Option<AnchorSel>>> = Rc::new(RefCell::new(None));
+    // What the card was raised for — a comment or a suggested edit — read at commit.
+    let kind = Rc::new(Cell::new(AnnotateKind::Comment));
     let timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
 
     // Cancel any pending ~40 ms selection timer when the view unrealizes, so a torn-down
@@ -654,6 +712,7 @@ pub(crate) fn wire_annotation_overlay(
         let view = view.downgrade();
         let pending = pending.clone();
         let dismiss_entry = dismiss_entry.clone();
+        let kind = kind.clone();
         move |text: &str| {
             let Some(v) = view.upgrade() else { return };
             // The selection was resolved into source space when the card was RAISED, so
@@ -664,7 +723,7 @@ pub(crate) fn wire_annotation_overlay(
             let create = pending
                 .borrow_mut()
                 .take()
-                .and_then(|target| target.with_comment(text));
+                .and_then(|target| target.with_text(kind.get(), text));
             // Dismiss the bar now (cheap; touches no document widgets), but DEFER the
             // sink — which mutates the buffer and REBUILDS the preview widget tree
             // (set_buffer + re-render) — to an idle turn. Running that rebuild
@@ -676,177 +735,139 @@ pub(crate) fn wire_annotation_overlay(
             // too and is deferred identically.)
             dismiss_entry();
             if let Some(create) = create {
-                // Collapse the preview selection so the freshly-created highlight's amber
-                // wash is visible immediately. The sink edits the EDITOR buffer and
-                // re-tags the preview IN PLACE (never touching the preview buffer's
-                // selection), and GTK paints the opaque selection OVER tag backgrounds —
-                // so a lingering selection masks the just-applied highlight, making the
-                // annotation look like it didn't render.
-                // A cell annotation has no buffer selection (`selection_bounds` → None),
-                // so this is a no-op there.
-                let buf = v.buffer();
-                if let Some((_, end)) = buf.selection_bounds() {
-                    buf.place_cursor(&end);
-                }
-                // Weak-capture the view across the idle hop (GTK4Rs/AP-63 parity; the sink edits
-                // the editor buffer + re-tags the preview, all surface-independent, so this
-                // is not a crash class).
-                glib::idle_add_local_once(glib::clone!(
-                    #[weak]
-                    v,
-                    move || {
-                        if let Some(sink) = v.annotation_sink() {
-                            sink(crate::codeview::AnnotationEdit::Create(create));
-                        }
-                    }
-                ));
+                send_create(&v, create);
             }
         }
     });
     card.style_as_card();
     let entry = card.field.clone();
+    let hint = card.hint();
     bar.append(&card.area);
     bar.append(&card.save);
     bar.append(&card.close);
 
-    // Raise the comment-entry card over the CURRENT preview selection: capture the
-    // selection offsets, dismiss the popover, reveal + position the entry, focus it.
-    // Stored on the view as the annotate trigger AND called by the popover's Annotate
-    // button, so the `win.annotate` action (keyboard/menu/toolbar) and the button share
-    // one code path (SSOT). View + overlay are captured WEAK (the
-    // view OWNS this closure via `set_annotate_trigger`, so a strong self/ancestor
-    // capture would be an uncollectable cycle — GTK4Rs/AP-63); pop/bar/entry are captured weak
-    // too and upgraded inside.
-    let show_entry: Rc<dyn Fn()> = Rc::new({
+    // Raise the card over the CURRENT preview selection for the kind asked for: capture
+    // the selection, then — as the shared decision (`PendingTarget::opening`) says —
+    // refuse it with a notice, write it at once (a deletion), or reveal + position the
+    // card and focus it. Stored on the view as the annotate trigger AND called by the
+    // popover's buttons, so the `win.annotate` / `win.suggest` actions (keyboard, menu,
+    // toolbar) and the buttons share one code path (SSOT). View + overlay are captured
+    // WEAK (the view OWNS this closure via `set_annotate_trigger`, so a strong
+    // self/ancestor capture would be an uncollectable cycle — GTK4Rs/AP-63);
+    // pop/bar/entry/hint are captured weak too and upgraded inside.
+    let show_entry: crate::codeview::AnnotateTrigger = Rc::new({
         let view = view.downgrade();
         let overlay = overlay.downgrade();
         let pop = pop.downgrade();
         let bar = bar.downgrade();
         let entry = entry.downgrade();
+        let hint = hint.downgrade();
         let entry_open = entry_open.clone();
         let pending = pending.clone();
         let anchor_sel = anchor_sel.clone();
+        let kind = kind.clone();
         let render_data = render_data.clone();
-        move || {
-            let (Some(v), Some(ov), Some(pop), Some(bar), Some(entry)) = (
+        move |asked: AnnotateKind| {
+            let (Some(v), Some(ov), Some(pop), Some(bar), Some(entry), Some(hint)) = (
                 view.upgrade(),
                 overlay.upgrade(),
                 pop.upgrade(),
                 bar.upgrade(),
                 entry.upgrade(),
+                hint.upgrade(),
             ) else {
                 return;
             };
-            // Prefer buffer selection; fall back to a table-cell label selection (table-cell annotation).
+            // Prefer buffer selection; fall back to a table-cell label selection (table-cell
+            // annotation). Either is crossed into SOURCE space HERE, against this render's
+            // own map — the map the commit used to consult, at the one moment it is
+            // certainly the map the reader is looking at.
             let cell = selected_cell_label(&v);
             let buffer_sel = v.buffer().selection_bounds().filter(|(a, b)| a != b);
-            if buffer_sel.is_none() && cell.is_none() {
-                return;
-            }
-            if let Some((label, a, b)) = cell {
-                *anchor_sel.borrow_mut() = Some(AnchorSel::Cell(label.clone(), a, b));
-                // Crossed into SOURCE space HERE, against this render's own cell
-                // copymap — the map the commit used to consult, at the one moment it is
-                // certainly the map the reader is looking at.
-                *pending.borrow_mut() = {
-                    let rd = render_data.borrow();
-                    cell_copymap(&label).and_then(|tree| {
-                        capture_selection(&tree, &rd.shifts, &rd.md_owned, &rd.original_owned, a, b)
-                    })
-                };
-                pop.popdown();
-                crate::widgets::comment_entry::open_comment(&entry, "");
-                entry_open.set(true);
-                bar.set_visible(true);
-                position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b);
-                crate::widgets::comment_entry::focus_at_end(&entry);
-                return;
-            }
-            let Some((a, b)) = buffer_sel else {
-                return;
-            };
-            *anchor_sel.borrow_mut() = Some(AnchorSel::Body(a.offset(), b.offset()));
-            *pending.borrow_mut() = {
+            let (target, raised_over) = {
                 let rd = render_data.borrow();
-                capture_selection(
-                    &rd.copymap,
-                    &rd.shifts,
-                    &rd.md_owned,
-                    &rd.original_owned,
-                    a.offset(),
-                    b.offset(),
-                )
+                if let Some((label, a, b)) = cell {
+                    let target = cell_copymap(&label).and_then(|tree| {
+                        capture_selection(&tree, &rd.shifts, &rd.md_owned, &rd.original_owned, a, b)
+                    });
+                    (target, AnchorSel::Cell(label, a, b))
+                } else if let Some((a, b)) = buffer_sel {
+                    let target = capture_selection(
+                        &rd.copymap,
+                        &rd.shifts,
+                        &rd.md_owned,
+                        &rd.original_owned,
+                        a.offset(),
+                        b.offset(),
+                    );
+                    (target, AnchorSel::Body(a.offset(), b.offset()))
+                } else {
+                    return;
+                }
             };
+            // Decided against the LIVE source — what the commit will act on — falling
+            // back to the render's own when the view has no window's document (a bare
+            // render). Reading the render's offsets against the editor's text would be a
+            // second answer to one question, and the two disagree while the reader types.
+            let source = crate::window::host_window(&v)
+                .and_then(|w| crate::window::document_source(&w))
+                .unwrap_or_else(|| render_data.borrow().original_owned.clone());
+            let Some(target) = target else { return };
+            let (prefill, hint_text, field_name) = match target.opening(asked, &source) {
+                Opening::Refused(notice) => {
+                    pop.popdown();
+                    crate::window::announce_annotation_refused(&v, notice);
+                    return;
+                }
+                Opening::Write(create) => {
+                    pop.popdown();
+                    send_create(&v, create);
+                    return;
+                }
+                // A comment opens with the comment(s) it will MERGE:
+                // `insert_or_extend_highlight` replaces every intersecting construct,
+                // `{>>comment<<}` included, with the union carrying the new comment.
+                // Showing them makes the merge visible and user-controlled — what the
+                // reader sees is what is written back. A replacement opens with the text
+                // it replaces, to be amended.
+                Opening::Card {
+                    prefill,
+                    hint,
+                    name,
+                } => (prefill, hint, name),
+            };
+            *pending.borrow_mut() = Some(target);
+            kind.set(asked);
+            hint.set_label(hint_text);
+            crate::a11y::name_field(&entry, field_name);
             pop.popdown();
-            // Kept out of existing comments, as the editor card is (TDD 17.59). A preview
-            // selection cannot normally reach a comment's text, which the preview does
-            // not show; this keeps the two cards on one rule.
-            let refused = crate::window::host_window(&v)
-                .and_then(|w| crate::window::document_source(&w))
-                .is_some_and(|source| {
-                    pending
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|target| target.is_refused(&source))
-                });
-            if refused {
-                pending.borrow_mut().take();
-                crate::window::announce_annotation_refused(&v);
-                return;
-            }
-            // Pre-populate with the comment(s) this annotation will MERGE.
-            // `insert_or_extend_highlight` deliberately extends rather than nests — it
-            // replaces every intersecting construct, `{>>comment<<}` included, with the
-            // union carrying the new comment. The union of the SPANS is intended; the
-            // silent loss of the existing COMMENTS was not. Showing them here makes the
-            // merge visible and user-controlled at the moment it happens: the user sees the
-            // prior text, edits or prunes it, and what they see is what is written back.
-            //
-            // Resolved through the SAME `selection_target` the commit uses, and the same
-            // merge decision the mutation uses (`merged_comment_for`), so the card can never show one set of comments
-            // while the commit destroys another.
-            let existing = crate::window::host_window(&v)
-                .and_then(|w| crate::window::document_source(&w))
-                .and_then(|source| {
-                    let pending = pending.borrow();
-                    let target = pending.as_ref()?;
-                    // A point comment inserts a NEW construct rather than replacing any,
-                    // so it merges nothing and destroys nothing.
-                    if target.is_point() {
-                        return None;
-                    }
-                    // Through the CAPTURED target, re-resolved against the live source —
-                    // the same reference the commit will act on, resolved the same way.
-                    // Reading the render's offsets against the editor's text was a
-                    // second answer to one question, and the two disagree exactly while
-                    // the reader is typing.
-                    crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
-                })
-                .unwrap_or_default();
-            crate::widgets::comment_entry::open_comment(&entry, &existing);
+            crate::widgets::comment_entry::open_comment(&entry, &prefill);
             entry_open.set(true);
             // Show the card BEFORE positioning it. `position_card` centers the card on the
             // selection midpoint via `bar.preferred_size()`, but `gtk_widget_measure`
             // early-returns 0 for a NOT-visible widget — so measuring while hidden yields
-            // width 0, the centering `anchor - bw/2` collapses to `anchor`, and the card's
-            // LEFT edge (not its centre) lands on the midpoint (it sits to the right,
-            // "not aligned at all"). Measure needs visibility, not allocation, so
-            // set_visible(true) first gives a real natural size to centre against (GTK4Rs/AP-85 /
-            // GTK4Rs/T-2 family). The selection is intact and on-screen (the popover was
-            // showing), so position_card succeeds; show regardless of its return.
+            // width 0 and the card's LEFT edge (not its centre) lands on the midpoint
+            // (GTK4Rs/AP-85 / GTK4Rs/T-2 family). Measure needs visibility, not allocation.
             bar.set_visible(true);
-            position_card(&v, &ov, bar.upcast_ref());
-            // Caret to the END, unselected: with the pre-population above, a field that
-            // opened with the merged comment selected would lose it to the first
-            // keystroke — the data loss walking back in through the door the fix opened.
+            match &raised_over {
+                AnchorSel::Cell(label, a, b) => {
+                    position_card_on_cell(&v, &ov, bar.upcast_ref(), label, *a, *b);
+                }
+                AnchorSel::Body(..) => {
+                    position_card(&v, &ov, bar.upcast_ref());
+                }
+            }
+            *anchor_sel.borrow_mut() = Some(raised_over);
+            // Caret to the END, unselected: a field that opened with the merged comment
+            // (or the replaced text) selected would lose it to the first keystroke.
             crate::widgets::comment_entry::focus_at_end(&entry);
         }
     });
     view.set_annotate_trigger(show_entry.clone());
-    annotate_btn.connect_clicked({
+    for (button, asked) in kind_buttons {
         let show_entry = show_entry.clone();
-        move |_| show_entry()
-    });
+        button.connect_clicked(move |_| show_entry(asked));
+    }
 
     // Escape on the entry bar, or its corner ×, dismisses it and returns focus to the
     // preview (an in-surface overlay child has no popover autohide, so this is wired
@@ -1359,6 +1380,9 @@ mod resizeflip_tests;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod entryscroll_tests;
 
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod popover_tests;
+
 /// The action card wired onto `view`, for tests.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 fn action_card_of(view: &CodePreviewView) -> Option<FloatingCard> {
@@ -1455,7 +1479,10 @@ mod jjj_tests {
             ctx.iteration(false);
             std::thread::sleep(std::time::Duration::from_millis(4));
         }
-        assert!(view.trigger_annotate(), "the annotate trigger is wired");
+        assert!(
+            view.trigger_annotate(crate::preview::AnnotateKind::Comment),
+            "the annotate trigger is wired"
+        );
 
         let entry = pump_find_entry(&pane).expect("the card's entry appears");
         (pane, view, entry)

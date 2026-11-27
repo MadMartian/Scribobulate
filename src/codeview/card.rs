@@ -1070,7 +1070,7 @@ mod gtk_integration_tests {
             settle("the card to reopen with Edit/Remove", || card.is_open());
             let stack = find_descendant::<gtk::Stack>(&card).expect("the row hosts a GtkStack");
             let entry = find_descendant::<sourceview::View>(&card).expect("the edit page");
-            find_button(&card, "Edit")
+            find_button(&card, crate::codeview::markerrows::EDIT_NOTE)
                 .expect("the card offers Edit")
                 .emit_clicked();
             settle("Edit to put the card on the edit page", || {
@@ -1118,7 +1118,7 @@ mod gtk_integration_tests {
         let entry = find_descendant::<sourceview::View>(&card).expect("the edit page is prebuilt");
         let original = crate::widgets::comment_entry::comment_text(&entry);
 
-        find_button(&card, "Edit")
+        find_button(&card, crate::codeview::markerrows::EDIT_NOTE)
             .expect("the card offers Edit")
             .emit_clicked();
         // Precondition: Edit put the card on the edit page. The page swap is deferred to
