@@ -144,6 +144,9 @@ find_hl_all_color = "#d9c04a"
 find_hl_current_color = "#c86428"
 addition_fg     = "#4f7a28"      # suggested edit, added text — olive
 deletion_fg     = "#a33a1f"      # suggested edit, removed text — brick — warm inks for an old-paper page
+addition_bg     = "#6aa84f_2e"   # a faint green wash behind added text — the olive ink alone was too
+                                 # faint on the light page
+deletion_bg     = "#d4553a_2e"   # a faint red wash behind removed text, for the same reason
 mark_bg         = "#d8a98a_66"   # warm tan-rose highlighter — distinct from the amber/yellow
                                  # find & annotation washes, and legible on the cream page
 
