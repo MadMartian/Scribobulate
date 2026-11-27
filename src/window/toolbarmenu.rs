@@ -241,7 +241,11 @@ mod gtk_integration_tests {
                 .map(|r| r.action_name().map(|n| n.to_string()).unwrap_or_default())
                 .collect();
             let submenu = view_toolbar_submenu_actions();
-            assert_eq!(submenu.len(), 7, "precondition: Show plus six sections");
+            assert_eq!(
+                submenu.len(),
+                1 + crate::app::TBTN_SECTION_COUNT,
+                "precondition: Show plus one toggle per section"
+            );
             assert_eq!(
                 bound, submenu,
                 "the two surfaces must offer the same toggles"
@@ -280,7 +284,12 @@ mod gtk_integration_tests {
             }
             win.present();
             let zoom = toolbarchrome::section_action("zoom");
-            let zoom_items = winstate::chrome(&win).expect("chrome").toolbar_sections[5].clone();
+            let zoom_at = crate::app::TBTN_SECTION_IDS
+                .iter()
+                .position(|id| *id == "zoom")
+                .expect("a zoom section");
+            let zoom_items =
+                winstate::chrome(&win).expect("chrome").toolbar_sections[zoom_at].clone();
             let (_, popover) = open(&win);
             let zoom_row = row_for(&popover, &zoom);
 

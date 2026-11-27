@@ -749,7 +749,7 @@ fn build_window(
 fn build_window_chrome_state(
     chrome: &Chrome,
     toolbar: crate::widgets::wrapbox::ToolbarWrapBox,
-    toolbar_sections: [Vec<gtk::Widget>; 6],
+    toolbar_sections: [Vec<gtk::Widget>; crate::app::TBTN_SECTION_COUNT],
     tb_edit_btns: Vec<(FmtInsertKind, gtk::Button)>,
     documents_btn: gtk::MenuButton,
     theme_btn: gtk::MenuButton,

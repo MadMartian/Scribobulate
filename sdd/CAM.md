@@ -1261,6 +1261,14 @@ rule.
   every surface binds the single `win.annotate` action, whose enabled state
   remains the sole source of truth.
 
+  Its siblings Add, Replace and Delete (`win.suggest`, targets `add` / `replace` /
+  `delete`) and Comment itself also have a toolbar section of their own, **Annotate**
+  (`app.show-tbtn-annotate`, hidden by default), rather than buttons in the Edit
+  section (operator, 2026-11-27): the four are one family and are toggled as one. Its
+  buttons are built from `app::ANNOTATE_SUBMENU`, the table the Edit ▸ Annotate submenu
+  and the context menu's Annotate page are built from, so the three surfaces cannot
+  list different commands, and each button binds its item's action and target.
+
 - **Sidebar filter commands** (`win.filter-outline`, `win.filter-annotations`, group
   `View`) — **GRANTED (operator, 2026-10-02).** Two Action CAM cells deviate, both by
   design:

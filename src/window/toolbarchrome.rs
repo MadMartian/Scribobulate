@@ -1,5 +1,5 @@
 //! The TOOLBAR LAYOUT — whether the bar is shown (`app.show-toolbar`) and which of
-//! its six sections are (`app.show-tbtn-<id>`) — is ONE app-wide preference (TDD
+//! its sections are (`app.show-tbtn-<id>`) — is ONE app-wide preference (TDD
 //! 9.17, 9.22): every window shows the same bar, and a change made in any window
 //! applies everywhere at once. It was once scoped to a window, and since a window
 //! is short-lived the layout never felt saved — the same reasoning that moved the
@@ -34,7 +34,7 @@
 //! |---|-----------|-------|
 //! | I1 | every window's toolbar has `visible == T` | [`apply_to`] |
 //! | I2 | every widget in every window's `toolbar_sections[i]` has `visible == S_i` | [`apply_to`] |
-//! | I3 | `show-tbtn-<i>.enabled == T` (all six, derived) | [`apply_everywhere`] |
+//! | I3 | `show-tbtn-<i>.enabled == T` (every section, derived) | [`apply_everywhere`] |
 //! | I4 | `show-tbtn-<i>.state == S_i`; never written by the reconcile | the item's own toggle |
 //! | I5 | every window's min-width reflects `T` and `{S_i}` | [`apply_to`] (derived) |
 //! | I6 | every *command* action's `enabled` is a function of mode/focus/zoom-ladder ONLY, never of `T`/`S_i` | the command-action machinery; chrome never touches it |
@@ -67,7 +67,7 @@ pub(crate) fn section_action(id: &str) -> String {
     crate::app::toolbar_section_action(id)
 }
 
-/// The live app-wide toolbar layout: the whole-bar toggle and the six section flags.
+/// The live app-wide toolbar layout: the whole-bar toggle and the section flags.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ToolbarLayout {
     /// `T` — whether the bar is shown at all.
@@ -214,7 +214,7 @@ pub(crate) fn for_window(window: &ApplicationWindow) -> ToolbarLayout {
 pub(crate) fn seed_window(
     window: &ApplicationWindow,
     toolbar: &ToolbarWrapBox,
-    section_boxes: &[Vec<gtk::Widget>; 6],
+    section_boxes: &[Vec<gtk::Widget>; crate::app::TBTN_SECTION_COUNT],
 ) {
     apply_to(&for_window(window), toolbar, section_boxes, window);
 }
@@ -293,7 +293,7 @@ fn apply_everywhere(app: &Application) {
 fn apply_to(
     layout: &ToolbarLayout,
     toolbar: &ToolbarWrapBox,
-    section_boxes: &[Vec<gtk::Widget>; 6],
+    section_boxes: &[Vec<gtk::Widget>; crate::app::TBTN_SECTION_COUNT],
     window: &ApplicationWindow,
 ) {
     toolbar.set_visible(layout.shown); // I1
@@ -406,7 +406,7 @@ mod tests {
         });
     }
 
-    /// I3: the six section actions are disabled — but keep their ticks (I4) — while
+    /// I3: the section actions are disabled — but keep their ticks (I4) — while
     /// the whole bar is hidden. App-scoped now, so this is one bit rather than one
     /// per window.
     #[gtktest::test]

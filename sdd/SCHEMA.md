@@ -41,7 +41,7 @@ member. For a stateful action the work is driven by `change-state`, not
 | `app.split-swap` | — | `b` | Whether the split panes are swapped, for every tab of every window. |
 | `app.split-orientation` | — | `b` | Whether the split is stacked vertically, for every tab of every window. |
 | `app.show-toolbar` | — | `b` | Whether the toolbar is shown, in every window. |
-| `app.show-tbtn-<id>` | — | `b` | Whether one toolbar section is shown, in every window. Six actions, `<id>` ∈ `file`, `edit`, `format`, `view`, `split`, `zoom`. Each is *enabled* only while `app.show-toolbar` is on, and unticking the last still-shown section turns `app.show-toolbar` off rather than changing its own state, so no empty bar is reachable. |
+| `app.show-tbtn-<id>` | — | `b` | Whether one toolbar section is shown, in every window. Seven actions, `<id>` ∈ `file`, `edit`, `format`, `annotate`, `view`, `split`, `zoom`. Each is *enabled* only while `app.show-toolbar` is on, and unticking the last still-shown section turns `app.show-toolbar` off rather than changing its own state, so no empty bar is reachable. |
 
 ### Window-scoped actions (`win.`)
 

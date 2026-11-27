@@ -451,8 +451,9 @@ fn assemble_view_menu(parts: &ViewSections) -> (Menu, Menu) {
     (outer, documents_menu)
 }
 
-/// The Annotate submenu, shared by the Edit menu and the document context menu so the
-/// two list the same items in the same order: label, action, and the action's target.
+/// The Annotate commands, shared by the Edit menu, the document context menu and the
+/// toolbar's Annotate section so all three list the same items in the same order: label,
+/// action, and the action's target.
 pub(crate) const ANNOTATE_SUBMENU: [(&str, &str, Option<&str>); 4] = [
     ("Comment", "win.annotate", None),
     ("Add", "win.suggest", Some("add")),

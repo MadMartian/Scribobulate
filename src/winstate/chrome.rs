@@ -17,14 +17,14 @@ pub(crate) struct WindowChrome {
     /// reads it — the whole-bar `:visible` is the app action's to set (invariant
     /// I1), never a per-window decision.
     pub(crate) toolbar: crate::widgets::wrapbox::ToolbarWrapBox,
-    /// The six toolbar sections' item lists, in canonical
+    /// The toolbar sections' item lists, in canonical
     /// [`crate::app::TBTN_SECTION_IDS`] order (invariant I7). A section is a LIST of
     /// individually-wrappable pack items rather than one container — that is what
     /// lets the toolbar wrap per button (`window::toolbar`) — so hiding a section
     /// means hiding every widget in its list, its leading separator included
     /// (invariant I2). Held for the same app-wide reason as
     /// [`toolbar`](Self::toolbar).
-    pub(crate) toolbar_sections: [Vec<gtk::Widget>; 6],
+    pub(crate) toolbar_sections: [Vec<gtk::Widget>; crate::app::TBTN_SECTION_COUNT],
     /// The outline sidebar's scroller (the first section of the sidebar `GtkPaned`).
     /// Its inner
     /// child (the heading tree / "No headings" placeholder) is rebuilt whenever

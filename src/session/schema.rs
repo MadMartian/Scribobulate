@@ -178,7 +178,7 @@ fn lenient_place<'de, D: serde::Deserializer<'de>>(d: D) -> Result<winplace::Pla
 /// section IDs (`crate::app::TBTN_SECTION_IDS`) — keep the two in sync.
 ///
 /// Default (operator decision, 2026-07-21): **`file`, `edit`, `view` shown;
-/// `format`, `split`, `zoom` hidden.** A fresh profile opens with a short toolbar
+/// `format`, `annotate`, `split`, `zoom` hidden.** A fresh profile opens with a short toolbar
 /// carrying the commands most workflows use, and the user opts the rest in via
 /// `View ▸ Toolbar` — most users enable only the sections meaningful to them, so
 /// starting minimal beats starting maximal. This is safe for `format` even though
@@ -193,6 +193,7 @@ pub(crate) struct ToolbarSections {
     pub file: bool,
     pub edit: bool,
     pub format: bool,
+    pub annotate: bool,
     pub view: bool,
     pub split: bool,
     pub zoom: bool,
@@ -204,6 +205,7 @@ impl Default for ToolbarSections {
             file: true,
             edit: true,
             format: false,
+            annotate: false,
             view: true,
             split: false,
             zoom: false,
@@ -212,13 +214,14 @@ impl Default for ToolbarSections {
 }
 
 impl ToolbarSections {
-    /// The six flags in canonical `TBTN_SECTION_IDS` order. Used to seed the
+    /// The flags in canonical `TBTN_SECTION_IDS` order. Used to seed the
     /// section-box visibilities / action states at window build.
-    pub fn to_array(self) -> [bool; 6] {
+    pub fn to_array(self) -> [bool; crate::app::TBTN_SECTION_COUNT] {
         [
             self.file,
             self.edit,
             self.format,
+            self.annotate,
             self.view,
             self.split,
             self.zoom,
@@ -233,6 +236,7 @@ impl ToolbarSections {
             "file" => self.file = on,
             "edit" => self.edit = on,
             "format" => self.format = on,
+            "annotate" => self.annotate = on,
             "view" => self.view = on,
             "split" => self.split = on,
             "zoom" => self.zoom = on,
@@ -479,6 +483,7 @@ pub(super) fn sample_session() -> Session {
             file: true,
             edit: false,
             format: true,
+            annotate: true,
             view: true,
             split: false,
             zoom: true,
@@ -629,7 +634,7 @@ mod tests {
         // Default (operator decision): file/edit/view shown; format/split/zoom hidden.
         assert_eq!(
             ToolbarSections::default().to_array(),
-            [true, true, false, true, false, false]
+            [true, true, false, false, true, false, false]
         );
 
         // A file with no `toolbar_sections` table inherits that default (a file
@@ -651,7 +656,10 @@ mod tests {
         let mut ts = ToolbarSections::default();
         ts.set("edit", false); // was default-shown
         ts.set("format", true); // was default-hidden
-        assert_eq!(ts.to_array(), [true, false, true, true, false, false]);
+        assert_eq!(
+            ts.to_array(),
+            [true, false, true, false, true, false, false]
+        );
         let text = toml::to_string(&Session {
             show_toolbar: false,
             toolbar_sections: ts,
@@ -812,6 +820,7 @@ mod tests {
             file: false,
             edit: false,
             format: false,
+            annotate: false,
             view: false,
             split: false,
             zoom: false,

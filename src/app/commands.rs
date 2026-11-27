@@ -241,7 +241,7 @@ pub(crate) const VIEW_CMDS: [ViewCmd; 3] = [
     },
 ];
 
-/// The six per-section toolbar groups, in canonical left-to-right order. The
+/// The seven per-section toolbar groups, in canonical left-to-right order. The
 /// single source of these stable strings for: the `app.show-tbtn-<id>` action
 /// names (`window/toolbarchrome.rs`), the `View ▸ Toolbar` submenu build
 /// (`build_menubar` below), the section-box array order (`window/toolbar.rs`),
@@ -250,7 +250,12 @@ pub(crate) const VIEW_CMDS: [ViewCmd; 3] = [
 /// class of bug the codebase has already been bitten by). Order here IS the
 /// canonical toolbar order (invariant I7); never
 /// reorder without reordering the section boxes to match.
-pub(crate) const TBTN_SECTION_IDS: [&str; 6] = ["file", "edit", "format", "view", "split", "zoom"];
+pub(crate) const TBTN_SECTION_IDS: [&str; TBTN_SECTION_COUNT] = [
+    "file", "edit", "format", "annotate", "view", "split", "zoom",
+];
+
+/// How many toolbar sections there are: the length of every per-section array.
+pub(crate) const TBTN_SECTION_COUNT: usize = 7;
 
 /// `show-toolbar` — the whole-bar toggle's action name (`app.` scope, unprefixed).
 pub(crate) const TOOLBAR_SHOW_ACTION: &str = "show-toolbar";
@@ -957,7 +962,10 @@ mod tests {
         assert_eq!(toggles[0].detailed_action(), "app.show-toolbar");
         assert_eq!(toggles[0].group, ToolbarToggleGroup::WholeBar);
         let labels: Vec<&str> = toggles[1..].iter().map(|t| t.label.as_str()).collect();
-        assert_eq!(labels, ["File", "Edit", "Format", "View", "Split", "Zoom"]);
+        assert_eq!(
+            labels,
+            ["File", "Edit", "Format", "Annotate", "View", "Split", "Zoom"]
+        );
         for (toggle, id) in toggles[1..].iter().zip(TBTN_SECTION_IDS) {
             assert_eq!(toggle.group, ToolbarToggleGroup::Section);
             assert_eq!(toggle.detailed_action(), format!("app.show-tbtn-{id}"));

@@ -1,11 +1,11 @@
-//! Toolbar construction: file / edit / format / view / zoom / split command
+//! Toolbar construction: file / edit / format / annotate / view / split / zoom command
 //! buttons. Every button is action-driven (`set_action_name`), so sensitivity is
 //! managed by the GAction machinery — no manual click handlers here.
 //!
-//! The toolbar is organized into **six sections** (invariants I1–I8, see
+//! The toolbar is organized into **sections** (invariants I1–I8, see
 //! [`super::toolbarchrome`]), one per visually-delimited group, in the canonical
-//! [`crate::app::TBTN_SECTION_IDS`] order (`file, edit, format, view, split,
-//! zoom`). A section is no longer one GTK container widget, though: each
+//! [`crate::app::TBTN_SECTION_IDS`] order (`file, edit, format, annotate, view,
+//! split, zoom`). A section is no longer one GTK container widget, though: each
 //! section is a *list* of individually-wrappable pack items — its own leading
 //! vertical `Separator`, then either a single button or a small `cluster` box
 //! for 2–3 buttons that must never split across a wrap row (a directional
@@ -45,7 +45,7 @@ use crate::icons::Icon;
 type SectionItems = Vec<gtk::Widget>;
 
 /// What [`build_toolbar`] hands back for `build_window` to thread onward: the
-/// toolbar box; the six sections' item lists (canonical `TBTN_SECTION_IDS`
+/// toolbar box; the sections' item lists (canonical `TBTN_SECTION_IDS`
 /// order, so the section-visibility actions can toggle them); the Format
 /// command widgets, which the editor-focus gate tests membership against (a
 /// list, not a container — see the format section in `build_toolbar` for why
@@ -58,7 +58,7 @@ type SectionItems = Vec<gtk::Widget>;
 /// active theme + mode).
 type BuiltToolbar = (
     crate::widgets::wrapbox::ToolbarWrapBox,
-    [SectionItems; 6],
+    [SectionItems; crate::app::TBTN_SECTION_COUNT],
     Vec<gtk::Widget>,
     gtk::MenuButton,
     Vec<(FmtInsertKind, gtk::Button)>,
@@ -188,6 +188,28 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     push(&toolbar, &mut format_items, make_sep());
     for it in &fmt_items {
         push(&toolbar, &mut format_items, it.clone());
+    }
+
+    // ── annotate section ───────────────────────────────────────────────────────
+    // Comment, Add, Replace and Delete: the Edit ▸ Annotate submenu's items, built
+    // from the same `ANNOTATE_SUBMENU` table so the two surfaces cannot drift, each
+    // bound to that item's action and target (one GAction per command). Labelled
+    // text buttons, not icons: no theme icon reads as "suggest a replacement", and
+    // the labels are the words the selection popover and both menus use.
+    // `focus_on_click(false)`: a click must not take focus from the preview or
+    // editor, or it would take the selection the command acts on with it.
+    let mut annotate_items: SectionItems = Vec::new();
+    push(&toolbar, &mut annotate_items, make_sep());
+    for (label, action, target) in crate::app::ANNOTATE_SUBMENU {
+        let btn = gtk::Button::with_label(label);
+        crate::a11y::name(&btn, label);
+        btn.add_css_class("flat");
+        btn.set_focus_on_click(false);
+        btn.set_action_name(Some(action));
+        if let Some(target) = target {
+            btn.set_action_target_value(Some(&target.to_variant()));
+        }
+        push(&toolbar, &mut annotate_items, btn);
     }
 
     // ── view section ───────────────────────────────────────────────────────────
@@ -431,10 +453,11 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // was built, in canonical `TBTN_SECTION_IDS` order — so left-to-right,
     // top-to-bottom order is fixed regardless of later show/hide toggling
     // (invariant I7), exactly as when a section was one box.
-    let sections: [SectionItems; 6] = [
+    let sections: [SectionItems; crate::app::TBTN_SECTION_COUNT] = [
         file_items,
         edit_items,
         format_items,
+        annotate_items,
         view_items,
         split_items,
         zoom_items,

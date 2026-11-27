@@ -1594,7 +1594,7 @@
 ### 9.22 View ▸ Toolbar hides individual toolbar sections, remembers them, and never orphans a separator
 - **Given** a document window with the toolbar shown
 - **When** the user opens **View ▸ Toolbar** (now a submenu)
-- **Then** it lists **Show** (the whole-toolbar toggle) first, a separator, then six section checkboxes — **File, Edit, Format, View, Split, Zoom** — each ticked to reflect that section's current visibility
+- **Then** it lists **Show** (the whole-toolbar toggle) first, a separator, then seven section checkboxes — **File, Edit, Format, Annotate, View, Split, Zoom** — each ticked to reflect that section's current visibility
 - **And when** the user unticks one section (e.g. Zoom)
 - **Then** exactly that section's buttons **and its leading separator** disappear together, the remaining sections keep their canonical left-to-right order, and no doubled or orphaned separator ever appears — a re-shown section returns to its original slot, never the end
 - **And when** the user makes any of these changes with more than one window open
@@ -1602,7 +1602,7 @@
 - **And when** the user unticks the **last still-visible** section (so hiding it would leave the bar empty)
 - **Then** the whole bar hides instead (as if **Show** were unticked) — that section's tick is **left checked**, not cleared — so the app never shows a confusing empty ~2px strip, and re-ticking **Show** brings the bar back showing exactly that one section (a lossless round-trip); no empty-bar state is reachable interactively
 - **And when** the user unticks **Show** (hides the whole bar)
-- **Then** all six section checkboxes become **disabled/greyed but keep their ticks**, and re-ticking Show restores the exact per-section configuration that was in effect before — nothing dropped, nothing extra shown
+- **Then** all seven section checkboxes become **disabled/greyed but keep their ticks**, and re-ticking Show restores the exact per-section configuration that was in effect before — nothing dropped, nothing extra shown
 - **And given** any section (or the whole bar) is hidden
 - **Then** that section's *commands* stay live — its accelerators still work (a hidden Zoom section still zooms on Ctrl++), and every toolbar button's own enabled/greyed state is exactly what view mode / editor focus / the zoom ladder dictate, unchanged by any show/hide (visibility is orthogonal to command sensitivity)
 - **And given** sections have been hidden so the toolbar is narrower
@@ -1615,7 +1615,7 @@
 - **Then** the toolbar the reader was last looking at is restored — the most recently focused window's — rather than an arbitrary window's or a default
 - **And given** a fresh profile with no saved session (or a session file predating the per-section feature)
 - **When** a window opens
-- **Then** the toolbar shows **File, Edit, and View** and hides **Format, Split, and Zoom** (those three `View ▸ Toolbar` checkboxes start unticked) — a deliberately short default toolbar the user extends by ticking the sections their workflow needs; formatting stays fully available meanwhile via the Format menu and its accelerators even with the Format section hidden
+- **Then** the toolbar shows **File, Edit, and View** and hides **Format, Annotate, Split, and Zoom** (those four `View ▸ Toolbar` checkboxes start unticked) — a deliberately short default toolbar the user extends by ticking the sections their workflow needs; formatting stays fully available meanwhile via the Format menu and its accelerators even with the Format section hidden
 
 ### 9.38 The toolbar wraps onto more rows rather than stopping the window from getting narrower
 - **Given** a window whose toolbar is wider than the width the reader wants to drag it to — because several sections are shown, because the display itself is narrow (a remote session, a portrait client), or both
@@ -3310,6 +3310,12 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And when** the reader chooses Delete, the selection is wrapped `{--selection--}` at once, with no card; when they choose Replace, a card opens holding the selection as written in the file, and on Save it becomes `{~~selection~>typed~~}`; when they choose Add, an empty card opens, and on Save `{++typed++}` is written straight after the selection — each a suggested edit as in 17.71, with Undo removing it in one step
 - **And** a selection touching an inline construct (`**bold**`, a code span, a link) takes all of it, as a highlight does (17.39); what is typed cannot end the construct early (17.78), and an addition with nothing typed writes nothing
 - **But** a selection across blocks, into a code block, front matter, an HTML block or math, or touching an existing annotation, writes nothing, and the status bar says a suggested edit cannot go there — CriticMarkup does not nest
+
+### 17.80 The toolbar has an Annotate section
+- **Given** View ▸ Toolbar ▸ Annotate ticked (it starts unticked, 9.22)
+- **When** the reader looks at the toolbar
+- **Then** an Annotate section between Format and View holds four labelled buttons — **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79)
+- **And** each button is greyed exactly when its menu item is, and a click acts on the selection the reader made, as the menu item does: clicking does not take focus from the pane, so the selection survives the click
 
 ## 18. Preview reading themes
 

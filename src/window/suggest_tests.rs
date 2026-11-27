@@ -131,3 +131,84 @@ fn a_suggestion_is_written_from_the_editor() {
         crate::testpump::destroy_after_tooltip_delay(win.upcast_ref(), || {});
     });
 }
+
+/// The toolbar's Annotate section (TDD 17.80): hidden by default, its four buttons are the
+/// Edit ▸ Annotate items, grey without a selection, and a click writes the same thing the
+/// menu item does.
+#[gtktest::test]
+fn the_toolbar_annotate_section_drives_the_same_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let (win, view) = document_window("suggesttoolbar");
+        let at = crate::app::TBTN_SECTION_IDS
+            .iter()
+            .position(|id| *id == "annotate")
+            .expect("an annotate section");
+        let items = crate::winstate::chrome(&win)
+            .expect("chrome")
+            .toolbar_sections[at]
+            .clone();
+        assert!(
+            items.iter().all(|w| !w.is_visible()),
+            "the Annotate section is hidden on a fresh profile"
+        );
+        let buttons: Vec<gtk::Button> = items
+            .iter()
+            .filter_map(|w| w.clone().downcast::<gtk::Button>().ok())
+            .collect();
+        let bound: Vec<_> = buttons
+            .iter()
+            .map(|b| {
+                (
+                    b.label().map(|l| l.to_string()),
+                    b.action_name().map(|a| a.to_string()),
+                    b.action_target_value().and_then(|t| t.get::<String>()),
+                )
+            })
+            .collect();
+        let expected: Vec<_> = crate::app::ANNOTATE_SUBMENU
+            .iter()
+            .map(|(l, a, t)| {
+                (
+                    Some(l.to_string()),
+                    Some(a.to_string()),
+                    t.map(str::to_string),
+                )
+            })
+            .collect();
+        assert_eq!(
+            bound, expected,
+            "the section's buttons are the submenu's items"
+        );
+
+        let app = win.application().expect("an application");
+        app.change_action_state(
+            &toolbarchrome::section_action("annotate"),
+            &true.to_variant(),
+        );
+        drain_for(Clock::Frame, SETTLE);
+        assert!(
+            items.iter().all(|w| w.is_visible()),
+            "View ▸ Toolbar ▸ Annotate shows it"
+        );
+
+        crate::window::update_annotate_action_state(&win);
+        assert!(
+            buttons.iter().all(|b| !b.is_sensitive()),
+            "with nothing selected every Annotate button is grey"
+        );
+
+        select_in_preview(&view, "cat");
+        crate::window::update_annotate_action_state(&win);
+        let delete = buttons
+            .iter()
+            .find(|b| b.label().as_deref() == Some("Delete"))
+            .expect("a Delete button");
+        assert!(delete.is_sensitive(), "a selection enables the section");
+        delete.emit_clicked();
+        until(Clock::Frame, "the deletion", || {
+            source(&win).contains("{--cat--}")
+        });
+        crate::testpump::destroy_after_tooltip_delay(win.upcast_ref(), || {});
+    });
+}

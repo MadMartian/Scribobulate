@@ -22,7 +22,8 @@ mod shortcuts;
 
 pub(crate) use commands::{
     accel_hint, inline_accel, inline_cmd, tooltip_with_accel, Cmd, FmtCmd, EDITOR_KEYS, EDIT_CMDS,
-    FILE_CMDS, FORMAT_CMDS, INLINE_ACCEL_CMDS, TBTN_SECTION_IDS, VIEW_CMDS, WELCOME,
+    FILE_CMDS, FORMAT_CMDS, INLINE_ACCEL_CMDS, TBTN_SECTION_COUNT, TBTN_SECTION_IDS, VIEW_CMDS,
+    WELCOME,
 };
 pub(crate) use commands::{
     toolbar_section_action, toolbar_toggles, ToolbarToggle, TOOLBAR_SHOW_ACTION,
