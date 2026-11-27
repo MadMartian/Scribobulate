@@ -864,7 +864,10 @@ pub(crate) fn refresh_status_base(window: &ApplicationWindow) {
         st.live_reload_off.get(),
         st.is_dirty(),
     );
-    st.chrome().status.borrow_mut().set_base(&msg);
+    st.chrome()
+        .status
+        .borrow_mut()
+        .set_base_with_path(&msg, path.is_some());
 }
 
 /// Recompute the persistent status-bar line (TDD 4.4, 16.16) from the ACTIVE tab: a

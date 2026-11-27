@@ -215,7 +215,7 @@ fn copy_path_if_shown(window: &ApplicationWindow) -> bool {
     let Some(st) = state(window) else {
         return false;
     };
-    if !st.chrome().status.borrow().shows_base() {
+    if !st.chrome().status.borrow().shows_path() {
         return false;
     }
     let Some(path) = st.path.borrow().clone() else {
@@ -970,6 +970,13 @@ mod tests {
             chrome.statusbar.message.text()
         );
 
+        let cursor =
+            |label: &gtk::Label| label.cursor().and_then(|c| c.name()).map(|n| n.to_string());
+        assert_eq!(
+            cursor(&chrome.statusbar.message).as_deref(),
+            Some("pointer"),
+            "the hand says the path can be clicked"
+        );
         assert!(copy_path_if_shown(&window), "a click on the path copies it");
         let read: Rc<RefCell<Option<String>>> = Default::default();
         window
@@ -994,6 +1001,11 @@ mod tests {
             !copy_path_if_shown(&window),
             "over a notice nothing is copied"
         );
+        assert_eq!(
+            cursor(&chrome.statusbar.message),
+            None,
+            "no hand over a notice"
+        );
 
         // A document with no file shows no path.
         let untitled = new_window(&app, "u", "# New\n", None);
@@ -1004,6 +1016,11 @@ mod tests {
             .text()
             .is_empty()));
         assert!(!copy_path_if_shown(&untitled));
+        assert_eq!(
+            cursor(&untitled_chrome.statusbar.message),
+            None,
+            "no path, no hand"
+        );
 
         window.destroy();
         untitled.destroy();

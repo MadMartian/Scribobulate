@@ -1,5 +1,6 @@
 //! The footer status-message stack driving the single status label.
 
+use gtk::prelude::WidgetExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How long a transient *error* notice ("Link target not found", "File deleted on
@@ -181,6 +182,9 @@ impl MessageStack {
 pub(crate) struct StatusStack {
     label: gtk::Label,
     stack: MessageStack,
+    /// Whether the base message leads with the document's path, which a click copies
+    /// (TDD 16.19) — so the label shows the hand pointer while the base is what shows.
+    base_has_path: bool,
 }
 
 impl StatusStack {
@@ -188,6 +192,7 @@ impl StatusStack {
         Self {
             label,
             stack: MessageStack::new(),
+            base_has_path: false,
         }
     }
 
@@ -207,7 +212,18 @@ impl StatusStack {
 
     /// Set the persistent base message (the reserved [`BASE_SEQ`] entry). Empty
     /// string clears it.
+    ///
+    /// Gated to its only callers' cfg (`window::statusbar`'s gated tests): the app sets
+    /// its base through [`set_base_with_path`](Self::set_base_with_path).
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
     pub(crate) fn set_base(&mut self, msg: &str) {
+        self.set_base_with_path(msg, false);
+    }
+
+    /// [`set_base`](Self::set_base) for a base line that leads with the document's
+    /// path (TDD 16.18), which a click on the label copies (TDD 16.19).
+    pub(crate) fn set_base_with_path(&mut self, msg: &str, has_path: bool) {
+        self.base_has_path = has_path;
         self.stack.set_base(msg);
         self.sync();
     }
@@ -267,14 +283,19 @@ impl StatusStack {
         self.stack.base_on_top() || self.stack.top().is_empty()
     }
 
-    /// Whether the label reads the base message rather than a notice pushed over it —
-    /// so a click on it means the document's path (TDD 16.19), not a hovered link.
-    pub(crate) fn shows_base(&self) -> bool {
-        self.stack.base_on_top()
+    /// Whether the label reads the document's path — the base message, leading with it,
+    /// and no notice pushed over it — so a click there means the path (TDD 16.19).
+    pub(crate) fn shows_path(&self) -> bool {
+        self.base_has_path && self.stack.base_on_top()
     }
 
     fn sync(&self) {
         self.label.set_text(self.stack.top());
+        // The hand says the path can be clicked; over a notice it cannot (TDD 16.19).
+        // A widget's own cursor, set from state rather than from pointer motion, so
+        // nothing runs per motion event.
+        self.label
+            .set_cursor_from_name(self.shows_path().then_some("pointer"));
     }
 }
 

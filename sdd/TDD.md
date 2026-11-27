@@ -2813,6 +2813,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 16.19 Clicking the path copies it
 - **Given** the status bar showing the active document's path
+- **Then** the pointer over it is a hand, and over a passing message, or a status bar with no path, it is not
 - **When** the user clicks it
 - **Then** the clipboard holds the file's whole absolute path — never the `~` form or the shortened one — and "Path copied" acknowledges it (16.15)
 - **And given** a passing message covering the path, **Then** a click there copies nothing
