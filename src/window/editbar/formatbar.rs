@@ -87,21 +87,24 @@ pub(crate) fn format_items() -> (
             edit_btns.push((kind, btn));
         }
     }
-    // Annotate — a first-class command, NOT a `win.format`
-    // target, so it drives the parameterless `win.annotate` action. Placed here in the
-    // SHARED format row so the ONE button serves BOTH the toolbar Format section AND the
-    // editor caret/format overlay (SSOT). No standard "add comment" symbolic icon exists
-    // on the common themes (GTK4Rs/AP-48), so it uses the same 💬 glyph as the preview selection
-    // popover for a consistent mark; its enabled state is `win.annotate`'s (an editor or
-    // preview selection). `set_focus_on_click(false)` keeps editor focus so the action
-    // stays enabled at activation (same reasoning as `format_button`).
-    let annotate_btn = gtk::Button::with_label("\u{1f4ac}");
-    crate::a11y::name_from_action(&annotate_btn, "win.annotate");
-    annotate_btn.add_css_class("flat");
-    annotate_btn.set_focus_on_click(false);
-    annotate_btn.set_action_name(Some("win.annotate"));
-    items.push(annotate_btn.upcast());
     (items, heading_btn, edit_btns)
+}
+
+/// Comment — the caret overlay's one button that is not a format command. It drives
+/// the parameterless `win.annotate`, so its enabled state is that action's (an editor or
+/// preview selection). The overlay alone carries it: on the toolbar, Comment sits in the
+/// Annotate section with its siblings (`window::toolbar`), not in Format. No standard "add
+/// comment" symbolic icon exists on the common themes (GTK4Rs/AP-48), so it uses the
+/// same 💬 glyph as the preview selection popover. `set_focus_on_click(false)` keeps
+/// editor focus so the action stays enabled at activation (same reasoning as
+/// `format_button`).
+fn overlay_comment_button() -> gtk::Button {
+    let btn = gtk::Button::with_label("\u{1f4ac}");
+    crate::a11y::name_from_action(&btn, "win.annotate");
+    btn.add_css_class("flat");
+    btn.set_focus_on_click(false);
+    btn.set_action_name(Some("win.annotate"));
+    btn
 }
 
 /// [`format_items`] packed into one horizontal row — what the Stage-2 caret
@@ -112,7 +115,8 @@ pub(crate) fn build_format_bar() -> (
     gtk::MenuButton,
     Vec<(FmtInsertKind, gtk::Button)>,
 ) {
-    let (items, heading_btn, edit_btns) = format_items();
+    let (mut items, heading_btn, edit_btns) = format_items();
+    items.push(overlay_comment_button().upcast());
     // Wraps onto a second row in a pane narrower than the whole bar: the bar floats
     // inside the editor pane and is clipped to it, so a single row would leave its
     // last buttons unreachable in a narrow window or a split.

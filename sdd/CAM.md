@@ -1257,8 +1257,8 @@ rule.
   Action CAM is the command's presence in the **caret formatting overlay**, a
   Format surface an Edit action would not otherwise occupy. Justified because
   annotating a selection is ergonomically part of the same inline-editing gesture
-  as formatting. The overlay and the Format toolbar section share one button, and
-  every surface binds the single `win.annotate` action, whose enabled state
+  as formatting. The overlay alone carries the 💬 button; on the toolbar Comment is in
+  the Annotate section, not Format (operator, 2026-11-27). Every surface binds the single `win.annotate` action, whose enabled state
   remains the sole source of truth.
 
   Its siblings Add, Replace and Delete (`win.suggest`, targets `add` / `replace` /

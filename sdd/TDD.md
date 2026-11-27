@@ -2944,7 +2944,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 17.23 Annotate is a first-class command reachable from several surfaces, gated on a selection
 - **Given** a document open in the editor or preview
-- **When** the user consults the ways to annotate — the keyboard accelerator (Ctrl+Alt+M), the Edit menu's Annotate ▸ Comment item, the Annotate toolbar button, and the right-click context menu's Annotate ▸ Comment item
+- **When** the user consults the ways to annotate — the keyboard accelerator (Ctrl+Alt+M), the Edit menu's Annotate ▸ Comment item, the Comment button in the toolbar's Annotate section (17.80), and the right-click context menu's Annotate ▸ Comment item
 - **Then** all four drive the one `win.annotate` command and are enabled exactly when the active pane has a non-empty selection (disabled otherwise), never diverging from one another
 - **And** the Annotate submenu row, in the Edit menu and the context menu alike, is greyed exactly when its items are
 
@@ -3314,7 +3314,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.80 The toolbar has an Annotate section
 - **Given** View ▸ Toolbar ▸ Annotate ticked (it starts unticked, 9.22)
 - **When** the reader looks at the toolbar
-- **Then** an Annotate section between Format and View holds four labelled buttons — **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79)
+- **Then** an Annotate section between Format and View holds four labelled buttons — **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79); it is the only toolbar section with Comment, the Format section has none (the editor's formatting pop-up keeps its 💬)
 - **And** each button is greyed exactly when its menu item is, and a click acts on the selection the reader made, as the menu item does: clicking does not take focus from the pane, so the selection survives the click
 
 ## 18. Preview reading themes

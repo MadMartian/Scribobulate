@@ -180,6 +180,19 @@ fn the_toolbar_annotate_section_drives_the_same_commands() {
             bound, expected,
             "the section's buttons are the submenu's items"
         );
+        let format_at = crate::app::TBTN_SECTION_IDS
+            .iter()
+            .position(|id| *id == "format")
+            .expect("a format section");
+        assert!(
+            crate::winstate::chrome(&win)
+                .expect("chrome")
+                .toolbar_sections[format_at]
+                .iter()
+                .filter_map(|w| w.dynamic_cast_ref::<gtk::Actionable>())
+                .all(|a| a.action_name().as_deref() != Some("win.annotate")),
+            "Comment is in the Annotate section, not the Format section"
+        );
 
         let app = win.application().expect("an application");
         app.change_action_state(
