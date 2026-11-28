@@ -1285,9 +1285,13 @@ fn a_suggestion_in_a_table_cell_is_highlighted_and_has_a_marker() {
 #[gtktest::test]
 fn a_long_suggestion_still_shows_what_it_is_replaced_with() {
     use gtk::subclass::prelude::*;
+    // Long enough to overflow the cap at any card width: the card is as wide as its
+    // widest button row, which differs by platform font.
     let long = "We are hoping to maybe deliver the export feature sometime next week, \
                 or possibly the week after, depending on how the testing goes and \
-                whether anything else comes up in the meantime that needs attention";
+                whether anything else comes up in the meantime that needs attention, \
+                and then again it might slip further if the release notes, the installers \
+                or the final round of checks on every platform take longer than planned";
     let src = format!("{{~~{long}~>Friday~~}} it is.\n");
     let pane = crate::preview::render(
         None,
