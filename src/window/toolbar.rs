@@ -202,14 +202,8 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     push(&toolbar, &mut annotate_items, make_sep());
     for item in crate::app::ANNOTATE_SUBMENU {
         let btn = gtk::Button::from_icon_name(item.icon.name());
-        // Comment carries its shortcut in the tooltip, as its menu items show it;
-        // the three suggestions have none.
-        match item
-            .target
-            .is_none()
-            .then(|| crate::app::inline_accel(item.action))
-            .flatten()
-        {
+        // Each carries its shortcut in the tooltip, as its menu items show it.
+        match item.accel() {
             Some(accel) => crate::a11y::name_with_accel(&btn, item.label, accel),
             None => crate::a11y::name(&btn, item.label),
         }

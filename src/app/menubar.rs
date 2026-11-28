@@ -464,6 +464,21 @@ pub(crate) struct AnnotateItem {
     pub(crate) icon: crate::icons::Icon,
 }
 
+impl AnnotateItem {
+    /// The detailed action name (`win.suggest::add`), the key its shortcut is bound to.
+    pub(crate) fn detailed_action(&self) -> String {
+        match self.target {
+            Some(t) => format!("{}::{t}", self.action),
+            None => self.action.to_string(),
+        }
+    }
+
+    /// The shortcut every surface shows for this command, if it has one.
+    pub(crate) fn accel(&self) -> Option<&'static str> {
+        crate::app::inline_accel(&self.detailed_action())
+    }
+}
+
 /// The Annotate commands, shared by the Edit menu, the document context menu and the
 /// toolbar's Annotate section so all three list the same items in the same order.
 pub(crate) const ANNOTATE_SUBMENU: [AnnotateItem; 4] = [

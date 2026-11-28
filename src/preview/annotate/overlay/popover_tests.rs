@@ -65,26 +65,35 @@ fn the_popover_is_titled_annotate_and_offers_comment_add_replace_and_delete() {
         labels.iter().any(|l| l == POPOVER_TITLE),
         "titled: {labels:?}"
     );
-    let buttons: Vec<String> = all::<gtk::Button>(&root)
-        .iter()
-        .filter_map(|b| b.label().map(|l| l.to_string()))
-        .collect();
-    for (label, _) in POPOVER_ACTIONS {
-        assert!(
-            buttons.iter().any(|b| b == label),
-            "{label:?} in {buttons:?}"
+    // Each button shows the toolbar's icon for its command, then its name.
+    let button_of = |b: &gtk::Button| {
+        let w: gtk::Widget = b.clone().upcast();
+        let text = all::<gtk::Label>(&w).first().map(|l| l.text().to_string());
+        let icon = all::<gtk::Image>(&w)
+            .first()
+            .and_then(|i| i.icon_name())
+            .map(|n| n.to_string());
+        (text, icon)
+    };
+    let buttons: Vec<_> = all::<gtk::Button>(&root).iter().map(button_of).collect();
+    for (item, _) in POPOVER_ACTIONS {
+        let want = (
+            Some(item.label.to_string()),
+            Some(item.icon.name().to_string()),
         );
+        assert!(buttons.contains(&want), "{want:?} in {buttons:?}");
     }
-    assert!(buttons.iter().any(|b| b.ends_with("Comment")));
     assert!(
-        !buttons.iter().any(|b| b.contains("Annotate")),
-        "renamed: {buttons:?}"
+        !buttons.iter().any(|(t, _)| t
+            .as_deref()
+            .is_some_and(|t| t.contains("Annotate") || t.contains('\u{1f4ac}'))),
+        "renamed, no emoji: {buttons:?}"
     );
 
     // Delete writes at once, with no card.
     let delete = all::<gtk::Button>(&root)
         .into_iter()
-        .find(|b| b.label().as_deref() == Some("Delete"))
+        .find(|b| button_of(b).0.as_deref() == Some("Delete"))
         .unwrap();
     delete.emit_clicked();
     until(Clock::Frame, "the deletion to reach the sink", || {

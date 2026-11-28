@@ -95,11 +95,12 @@ pub(crate) fn format_items() -> (
 /// preview selection). The overlay alone carries it: on the toolbar, Comment sits in the
 /// Annotate section with its siblings (`window::toolbar`), not in Format. No standard "add
 /// comment" symbolic icon exists on the common themes (GTK4Rs/AP-48), so it uses the
-/// same 💬 glyph as the preview selection popover. `set_focus_on_click(false)` keeps
+/// app's own Comment icon, the same glyph as the toolbar and the preview selection
+/// popover. `set_focus_on_click(false)` keeps
 /// editor focus so the action stays enabled at activation (same reasoning as
 /// `format_button`).
 fn overlay_comment_button() -> gtk::Button {
-    let btn = gtk::Button::with_label("\u{1f4ac}");
+    let btn = gtk::Button::from_icon_name(crate::icons::Icon::AnnotateComment.name());
     crate::a11y::name_from_action(&btn, "win.annotate");
     btn.add_css_class("flat");
     btn.set_focus_on_click(false);

@@ -2714,7 +2714,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 16.2 The shortcuts window is accurate and complete
 - **Given** the keyboard-shortcuts window is open
 - **When** the user reads it
-- **Then** every command that has a keyboard shortcut is listed, grouped by area and paged in this order (File, Edit, Format, Blocks, Headings, Insert, View, Navigate, Zoom, Windows & Tabs), so File and Edit are on the first page, each showing its command name and its actual, platform-correct key combination — and a shortcut shown there really triggers that command
+- **Then** every command that has a keyboard shortcut is listed, grouped by area and paged in this order (File, Edit, Annotate, Format, Blocks, Headings, Insert, View, Navigate, Zoom, Windows & Tabs), so File and Edit are on the first page, each showing its command name and its actual, platform-correct key combination — and a shortcut shown there really triggers that command
 - **And** a pointer gesture the reader performs **under a held key** is listed in its area too — Ctrl+wheel zoom (13.12) — showing the modifier as a keycap and naming the motion in words, because GTK's accelerator vocabulary has none for a wheel. A gesture with **no** key in it stays out (the Back/Forward thumb buttons, 23.6): the key is what makes it this window's business
 - **And** the whole window, including the control that switches between its pages, fits on a laptop-sized screen, with no part of it off the bottom of the screen
 
@@ -2973,7 +2973,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.28 Annotating a table-cell selection creates CriticMarkup in the source
 - **Given** a document open in preview (or split) containing a table with selectable cell text
 - **When** the user selects text inside a table cell
-- **Then** the 💬 Annotate create pop-up appears over the cell selection on its own AND the `win.annotate` command is enabled on every surface — full parity with a body-text selection (§17.5, §17.23) — even though a cell selection is a selection island that fires no buffer signal (it is tracked via the primary clipboard's `changed`, GTK4Rs/AP-28)
+- **Then** the Annotate create pop-up appears over the cell selection on its own AND the `win.annotate` command is enabled on every surface — full parity with a body-text selection (§17.5, §17.23) — even though a cell selection is a selection island that fires no buffer signal (it is tracked via the primary clipboard's `changed`, GTK4Rs/AP-28)
 - **And when** the user invokes Annotate, types a comment, and Saves
 - **Then** the selected cell text is wrapped as `{==…==}{>>comment<<}` in the source (bold/code constructs included whole), the title shows unsaved, and the cell re-renders with an amber highlight over the claim **immediately, without any view-mode switch**, in every view mode (preview / edit / split) — the same undoable source splice as a body annotation. (The in-place tag refresh cannot repaint a cell highlight, which is Pango markup on the cell `GtkLabel` rather than a buffer tag, so a cell annotation forces a full re-render; a body annotation still refreshes in place.)
 
@@ -2988,7 +2988,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the right-margin comment-marker chip is vertically aligned with the annotated cell's row — not pinned to the table's top edge (cell-marker pairing)
 
 ### 17.31 A cell marker opens its comment popover, and the create overlay dismisses with the cell selection
-- **Given** a table containing an annotated cell (a margin marker chip) and, optionally, a live cell-text selection showing the 💬 create pop-up
+- **Given** a table containing an annotated cell (a margin marker chip) and, optionally, a live cell-text selection showing the Annotate create pop-up
 - **When** the user clicks the cell's margin marker chip
 - **Then** that marker's comment popover opens (claim + comment + Edit Note/Remove) — never the create card — and any showing create pop-up is dismissed rather than left stacked over the same table
 - **And when** the user clears the cell selection (clicks an empty area of the preview, which does not itself clear a `GtkLabel`'s sticky selection)
@@ -3266,7 +3266,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.72 A suggested edit's card shows the change and offers to accept it
 - **Given** the margin card of a suggested edit is open
 - **When** the reader reads it
-- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Remove — and Edit Suggestion for an addition or a replacement (17.78) — on one row, with Edit Note, which writes or edits the note like any comment (17.7, 17.67), on the row beneath
+- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Reject (never "Remove", which reads as removing the text) — and Edit Suggestion for an addition or a replacement (17.78) — on one row, with Edit Note, which writes or edits the note like any comment (17.7, 17.67), on the row beneath
 - **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
 
 ### 17.73 Accepting a suggested edit applies it
@@ -3274,9 +3274,9 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** the reader chooses Accept edit
 - **Then** the whole construct, with its note, is replaced in the file by what the edit leaves — a replacement's new text, an addition's text, nothing for a deletion — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
 
-### 17.74 Removing a suggested edit rejects it
+### 17.74 Rejecting a suggested edit discards it
 - **Given** a suggested edit's card is open
-- **When** the reader chooses Remove
+- **When** the reader chooses Reject
 - **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
 
 ### 17.75 An annotation with a comment offers Add Follow-up
@@ -3306,7 +3306,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.79 A selection can become a suggested addition, replacement or deletion
 - **Given** a selection in the preview or the editor
 - **When** the reader looks at the pop-up over a preview selection, or at Annotate in the Edit menu or the right-click menu
-- **Then** the pop-up is titled "Annotate" and offers Comment, Add, Replace and Delete; the Edit menu's and the right-click menu's Annotate is a submenu of the same four, each enabled exactly when Comment is (17.23)
+- **Then** the pop-up is titled "Annotate" and offers Comment, Add, Replace and Delete, each with its toolbar icon (17.80) beside its name; besides Comment's Ctrl+Alt+M, Add, Replace and Delete have the shortcuts Ctrl+Alt+Shift+A, R and D (⌘⌥⇧ on macOS), shown beside them in both menus; the Edit menu's and the right-click menu's Annotate is a submenu of the same four, each enabled exactly when Comment is (17.23)
 - **And when** the reader chooses Delete, the selection is wrapped `{--selection--}` at once, with no card; when they choose Replace, a card opens holding the selection as written in the file, and on Save it becomes `{~~selection~>typed~~}`; when they choose Add, an empty card opens, and on Save `{++typed++}` is written straight after the selection — each a suggested edit as in 17.71, with Undo removing it in one step
 - **And** a selection touching an inline construct (`**bold**`, a code span, a link) takes all of it, as a highlight does (17.39); what is typed cannot end the construct early (17.78), and an addition with nothing typed writes nothing
 - **But** a selection across blocks, into a code block, front matter, an HTML block or math, or touching an existing annotation, writes nothing, and the status bar says a suggested edit cannot go there — CriticMarkup does not nest
@@ -3314,7 +3314,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.80 The toolbar has an Annotate section
 - **Given** View ▸ Toolbar ▸ Annotate ticked (it starts unticked, 9.22)
 - **When** the reader looks at the toolbar
-- **Then** an Annotate section between Format and View holds four icon buttons, named in their tooltips **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79); it is the only toolbar section with Comment, the Format section has none (the editor's formatting pop-up keeps its 💬)
+- **Then** an Annotate section between Format and View holds four icon buttons, named in their tooltips **Comment, Add, Replace, Delete**, each with its shortcut (17.79) — the same four commands, in the same order, as Edit ▸ Annotate (17.79); it is the only toolbar section with Comment, the Format section has none (the editor's formatting pop-up keeps its own Comment button, with the same icon)
 - **And** the icons are the app's own: Comment is the Annotations viewer's speech bubble holding a plus, and Add, Replace and Delete are lines of text with a plus, two opposed arrows and a cross in the corner; each draws in the theme's foreground colour on a light and a dark desktop alike
 - **And** each button is greyed exactly when its menu item is, and a click acts on the selection the reader made, as the menu item does: clicking does not take focus from the pane, so the selection survives the click
 

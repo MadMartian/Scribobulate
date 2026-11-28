@@ -215,7 +215,7 @@ fn the_toolbar_annotate_section_drives_the_same_commands() {
         crate::window::update_annotate_action_state(&win);
         let delete = buttons
             .iter()
-            .find(|b| b.tooltip_text().as_deref() == Some("Delete"))
+            .find(|b| b.tooltip_text().is_some_and(|t| t.starts_with("Delete (")))
             .expect("a Delete button");
         assert!(delete.is_sensitive(), "a selection enables the section");
         delete.emit_clicked();

@@ -842,9 +842,31 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // Go To Line, it is keyboard- and (soon) menu-reachable without a toolbar button.
     InlineCmd {
         action: "win.annotate",
-        group: "Edit",
-        label: "Annotate",
+        group: "Annotate",
+        label: "Comment",
         accels: &["<Primary><Alt>m"],
+    },
+    // The three suggested edits (TDD 17.79), Comment's siblings: Ctrl+Alt+Shift with the
+    // command's initial. Shifted because the bare Primary+Alt letters clash on macOS
+    // (Cmd+Opt+D toggles the Dock) and on some Linux desktops (Ctrl+Alt+D shows the
+    // desktop). Detailed names: each is one target of the parameterised `win.suggest`.
+    InlineCmd {
+        action: "win.suggest::add",
+        group: "Annotate",
+        label: "Suggest Addition",
+        accels: &["<Primary><Alt><Shift>a"],
+    },
+    InlineCmd {
+        action: "win.suggest::replace",
+        group: "Annotate",
+        label: "Suggest Replacement",
+        accels: &["<Primary><Alt><Shift>r"],
+    },
+    InlineCmd {
+        action: "win.suggest::delete",
+        group: "Annotate",
+        label: "Suggest Deletion",
+        accels: &["<Primary><Alt><Shift>d"],
     },
     // Read the NEXT annotation's comment (the a11y read path for margin markers).
     // The margin marker is self-drawn, so it is not in the a11y tree and a pointer
@@ -855,7 +877,7 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // and of a ~/.config/kglobalshortcutsrc WM binding.
     InlineCmd {
         action: "win.next-annotation",
-        group: "Edit",
+        group: "Annotate",
         label: "Next Annotation",
         accels: &["<Primary><Alt>n"],
     },
@@ -868,7 +890,7 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // modifier set, so there is no WM collision.
     InlineCmd {
         action: "win.prev-annotation",
-        group: "Edit",
+        group: "Annotate",
         label: "Previous Annotation",
         accels: &["<Primary><Alt>p"],
     },

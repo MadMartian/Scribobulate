@@ -219,6 +219,9 @@ fn group_rows(
     vec![
         ("File", rows_for("File", file)),
         ("Edit", rows_for("Edit", edit)),
+        // Comment, the three suggested edits and the annotation walk: their own group, as
+        // the toolbar gives them their own section, and so Edit stays under the cap.
+        ("Annotate", rows_for("Annotate", &[])),
         ("Format", format_group(FormatGroup::Text)),
         ("Blocks", format_group(FormatGroup::Block)),
         ("Headings", headings),

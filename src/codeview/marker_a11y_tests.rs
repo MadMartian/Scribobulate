@@ -1176,7 +1176,7 @@ fn a_suggestion_card_shows_the_change_and_accepts_or_removes_it() {
         ),
     ];
     for (src, lines, accepted, removed) in cases {
-        for (button, expected) in [("Accept edit", accepted), ("Remove", removed)] {
+        for (button, expected) in [("Accept edit", accepted), ("Reject", removed)] {
             let pane = crate::preview::render(
                 None,
                 src,

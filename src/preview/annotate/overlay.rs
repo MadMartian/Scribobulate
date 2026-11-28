@@ -508,12 +508,23 @@ enum AnchorSel {
 /// The selection popover's title.
 pub(crate) const POPOVER_TITLE: &str = "Annotate";
 
-/// The selection popover's buttons, in order, and what each raises (TDD 17.79).
-pub(crate) const POPOVER_ACTIONS: [(&str, AnnotateKind); 4] = [
-    ("\u{1f4ac} Comment", AnnotateKind::Comment),
-    ("Add", AnnotateKind::Suggest(SuggestKind::Add)),
-    ("Replace", AnnotateKind::Suggest(SuggestKind::Replace)),
-    ("Delete", AnnotateKind::Suggest(SuggestKind::Delete)),
+/// The selection popover's buttons, in order, and what each raises (TDD 17.79). Label and
+/// icon come from the shared Annotate table, so the pop-up and the toolbar's Annotate
+/// section show the same four glyphs (TDD 17.80).
+pub(crate) const POPOVER_ACTIONS: [(&crate::app::AnnotateItem, AnnotateKind); 4] = [
+    (&crate::app::ANNOTATE_SUBMENU[0], AnnotateKind::Comment),
+    (
+        &crate::app::ANNOTATE_SUBMENU[1],
+        AnnotateKind::Suggest(SuggestKind::Add),
+    ),
+    (
+        &crate::app::ANNOTATE_SUBMENU[2],
+        AnnotateKind::Suggest(SuggestKind::Replace),
+    ),
+    (
+        &crate::app::ANNOTATE_SUBMENU[3],
+        AnnotateKind::Suggest(SuggestKind::Delete),
+    ),
 ];
 
 /// Hand a new annotation to `v`'s sink. The sink mutates the editor buffer and
@@ -596,8 +607,16 @@ pub(crate) fn wire_annotation_overlay(
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     let kind_buttons: Vec<(gtk::Button, AnnotateKind)> = POPOVER_ACTIONS
         .iter()
-        .map(|&(label, kind)| {
-            let button = gtk::Button::with_label(label);
+        .map(|&(item, kind)| {
+            // Icon then label, so the glyph matches the toolbar's and the word still says
+            // what it does. The label is the button's accessible name, as with_label's is.
+            let button = gtk::Button::new();
+            let inner = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            inner.append(&gtk::Image::from_icon_name(item.icon.name()));
+            let text = gtk::Label::new(Some(item.label));
+            inner.append(&text);
+            button.set_child(Some(&inner));
+            button.update_relation(&[gtk::accessible::Relation::LabelledBy(&[text.upcast_ref()])]);
             button.set_has_frame(false);
             actions.append(&button);
             (button, kind)

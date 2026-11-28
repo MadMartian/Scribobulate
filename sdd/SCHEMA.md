@@ -76,6 +76,7 @@ member. For a stateful action the work is driven by `change-state`, not
 | `win.pick-find-history` | `s` | — | Fill a find-bar field from that tab's history. The target is the chosen entry VERBATIM, prefixed by one character naming the field (`f` find, `r` replace) — a fixed-position marker rather than a separator, because an entry is arbitrary text and no separator is safe in it. A find entry is also searched for immediately; a replacement is not. |
 | `win.find-in-selection` | — | `b` | Whether the search is confined to a captured passage. Per active tab; **disabled** when there is no selection to capture and none already captured, which is the only find control whose availability depends on the document rather than on the query. Setting it true captures the current selection in whichever pane is visible; setting it false releases it. It can also untick ITSELF, when a re-render leaves the captured passage unresolvable. |
 | `win.annotate` | — | — | Attach a CriticMarkup comment to the selection. |
+| `win.suggest` | `s`: `add`, `replace` or `delete` | — | Turn the selection into a suggested addition, replacement or deletion (TDD 17.79). Enabled exactly when `win.annotate` is. |
 | `win.next-annotation` | — | — | Go to the next annotation in the document, wrapping at the end. |
 | `win.prev-annotation` | — | — | Go to the previous annotation in the document, wrapping at the start. |
 | `win.view-mode` | `s` | `s` | The window's view mode. Radio group; targets below. |
