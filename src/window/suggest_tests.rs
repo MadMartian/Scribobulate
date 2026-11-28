@@ -160,7 +160,7 @@ fn the_toolbar_annotate_section_drives_the_same_commands() {
             .iter()
             .map(|b| {
                 (
-                    b.label().map(|l| l.to_string()),
+                    b.icon_name().map(|l| l.to_string()),
                     b.action_name().map(|a| a.to_string()),
                     b.action_target_value().and_then(|t| t.get::<String>()),
                 )
@@ -168,11 +168,11 @@ fn the_toolbar_annotate_section_drives_the_same_commands() {
             .collect();
         let expected: Vec<_> = crate::app::ANNOTATE_SUBMENU
             .iter()
-            .map(|(l, a, t)| {
+            .map(|i| {
                 (
-                    Some(l.to_string()),
-                    Some(a.to_string()),
-                    t.map(str::to_string),
+                    Some(i.icon.name().to_string()),
+                    Some(i.action.to_string()),
+                    i.target.map(str::to_string),
                 )
             })
             .collect();
@@ -215,7 +215,7 @@ fn the_toolbar_annotate_section_drives_the_same_commands() {
         crate::window::update_annotate_action_state(&win);
         let delete = buttons
             .iter()
-            .find(|b| b.label().as_deref() == Some("Delete"))
+            .find(|b| b.tooltip_text().as_deref() == Some("Delete"))
             .expect("a Delete button");
         assert!(delete.is_sensitive(), "a selection enables the section");
         delete.emit_clicked();

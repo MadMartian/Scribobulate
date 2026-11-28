@@ -451,14 +451,46 @@ fn assemble_view_menu(parts: &ViewSections) -> (Menu, Menu) {
     (outer, documents_menu)
 }
 
+/// One Annotate command as every surface offering it shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AnnotateItem {
+    /// The plain label; `mnem` gives its access-key form.
+    pub(crate) label: &'static str,
+    /// The detailed action name (`win.suggest`).
+    pub(crate) action: &'static str,
+    /// The action's string target, if it takes one.
+    pub(crate) target: Option<&'static str>,
+    /// The toolbar button's glyph; the menus show the label alone.
+    pub(crate) icon: crate::icons::Icon,
+}
+
 /// The Annotate commands, shared by the Edit menu, the document context menu and the
-/// toolbar's Annotate section so all three list the same items in the same order: label,
-/// action, and the action's target.
-pub(crate) const ANNOTATE_SUBMENU: [(&str, &str, Option<&str>); 4] = [
-    ("Comment", "win.annotate", None),
-    ("Add", "win.suggest", Some("add")),
-    ("Replace", "win.suggest", Some("replace")),
-    ("Delete", "win.suggest", Some("delete")),
+/// toolbar's Annotate section so all three list the same items in the same order.
+pub(crate) const ANNOTATE_SUBMENU: [AnnotateItem; 4] = [
+    AnnotateItem {
+        label: "Comment",
+        action: "win.annotate",
+        target: None,
+        icon: crate::icons::Icon::AnnotateComment,
+    },
+    AnnotateItem {
+        label: "Add",
+        action: "win.suggest",
+        target: Some("add"),
+        icon: crate::icons::Icon::AnnotateAdd,
+    },
+    AnnotateItem {
+        label: "Replace",
+        action: "win.suggest",
+        target: Some("replace"),
+        icon: crate::icons::Icon::AnnotateReplace,
+    },
+    AnnotateItem {
+        label: "Delete",
+        action: "win.suggest",
+        target: Some("delete"),
+        icon: crate::icons::Icon::AnnotateDelete,
+    },
 ];
 
 /// Edit menu: the EDIT_CMDS commands and an editor section mirroring the GtkSourceView
@@ -476,7 +508,13 @@ fn build_edit_menu() -> Menu {
     // handler-less `win.annotate-available` so it greys with its items, as Change Case's
     // row does (see there).
     let annotate = Menu::new();
-    for (label, action, target) in ANNOTATE_SUBMENU {
+    for crate::app::AnnotateItem {
+        label,
+        action,
+        target,
+        ..
+    } in ANNOTATE_SUBMENU
+    {
         let menu_item = MenuItem::new(Some(&mnem(label)), None);
         menu_item
             .set_action_and_target_value(Some(action), target.map(|t| t.to_variant()).as_ref());
@@ -1199,7 +1237,13 @@ mod tests {
                     .collect();
                 let expected: Vec<_> = ANNOTATE_SUBMENU
                     .iter()
-                    .map(|(l, a, t)| (Some(mnem(l)), Some(a.to_string()), t.map(str::to_string)))
+                    .map(|i| {
+                        (
+                            Some(mnem(i.label)),
+                            Some(i.action.to_string()),
+                            i.target.map(str::to_string),
+                        )
+                    })
                     .collect();
                 assert_eq!(items, expected, "Comment, Add, Replace, Delete");
             }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+<!--
+  scribobulate-annotate-add-symbolic — the Annotate toolbar section's Add button
+  (suggest an addition): lines of text with a plus in the bottom-right corner.
+  One of a family of three (add, replace, delete) sharing the same text lines and
+  differing only in the corner badge.
+
+  Drawn to the rules spelled out in scribobulate-annotations-symbolic.svg: fills
+  only, integer edges, and this comment INSIDE <svg>.
+-->
+ <g fill="#2e3436">
+  <path d="M1 2 h14 v1 h-14 z"/>
+  <path d="M1 5 h14 v1 h-14 z"/>
+  <path d="M1 8 h5 v1 h-5 z"/>
+  <path d="M1 11 h5 v1 h-5 z"/>
+  <path d="M1 14 h5 v1 h-5 z"/>
+  <path d="M11 8 h2 v8 h-2 z"/>
+  <path d="M8 11 h8 v2 h-8 z"/>
+ </g>
+</svg>

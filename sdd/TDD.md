@@ -3314,7 +3314,8 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.80 The toolbar has an Annotate section
 - **Given** View ▸ Toolbar ▸ Annotate ticked (it starts unticked, 9.22)
 - **When** the reader looks at the toolbar
-- **Then** an Annotate section between Format and View holds four labelled buttons — **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79); it is the only toolbar section with Comment, the Format section has none (the editor's formatting pop-up keeps its 💬)
+- **Then** an Annotate section between Format and View holds four icon buttons, named in their tooltips **Comment, Add, Replace, Delete** — the same four commands, in the same order, as Edit ▸ Annotate (17.79); it is the only toolbar section with Comment, the Format section has none (the editor's formatting pop-up keeps its 💬)
+- **And** the icons are the app's own: Comment is the Annotations viewer's speech bubble holding a plus, and Add, Replace and Delete are lines of text with a plus, two opposed arrows and a cross in the corner; each draws in the theme's foreground colour on a light and a dark desktop alike
 - **And** each button is greyed exactly when its menu item is, and a click acts on the selection the reader made, as the menu item does: clicking does not take focus from the pane, so the selection survives the click
 
 ## 18. Preview reading themes

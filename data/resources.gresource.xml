@@ -82,6 +82,10 @@
     -->
     <file>scalable/emblems/scribobulate-unsafe-images-symbolic.svg</file>
     <file>scalable/actions/scribobulate-annotations-symbolic.svg</file>
+    <file>scalable/actions/scribobulate-annotate-comment-symbolic.svg</file>
+    <file>scalable/actions/scribobulate-annotate-add-symbolic.svg</file>
+    <file>scalable/actions/scribobulate-annotate-replace-symbolic.svg</file>
+    <file>scalable/actions/scribobulate-annotate-delete-symbolic.svg</file>
     <file>scalable/emblems/emblem-synchronizing-symbolic.svg</file>
     <!--
       The application icon. Sits at the freedesktop path an app icon belongs at,

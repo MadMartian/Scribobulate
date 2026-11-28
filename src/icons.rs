@@ -81,6 +81,19 @@ pub(crate) enum Icon {
     /// bundled icon of the same name. No host carries a `scribobulate-*` name, so
     /// the bundled speech-bubble art always wins.
     Annotations,
+    /// The toolbar Annotate section's Comment button. APP-OWNED and bundled, like
+    /// [`Icon::Annotations`], whose speech bubble it shares: no host theme names an
+    /// "add a comment" glyph.
+    AnnotateComment,
+    /// The toolbar Annotate section's Add button (suggest an addition). APP-OWNED and
+    /// bundled: no host theme names a "suggest an insertion" glyph.
+    AnnotateAdd,
+    /// The toolbar Annotate section's Replace button (suggest a replacement).
+    /// APP-OWNED and bundled, for the same reason as [`Icon::AnnotateAdd`].
+    AnnotateReplace,
+    /// The toolbar Annotate section's Delete button (suggest a deletion). APP-OWNED
+    /// and bundled, for the same reason as [`Icon::AnnotateAdd`].
+    AnnotateDelete,
     /// Toolbar "go to line".
     GoJump,
     /// Toolbar "show unsafe images" toggle. An APP-OWNED name (`scribobulate-*`),
@@ -225,6 +238,10 @@ impl Icon {
             Icon::SendTo => "send-to-symbolic",
             Icon::ViewList => "view-list-symbolic",
             Icon::Annotations => "scribobulate-annotations-symbolic",
+            Icon::AnnotateComment => "scribobulate-annotate-comment-symbolic",
+            Icon::AnnotateAdd => "scribobulate-annotate-add-symbolic",
+            Icon::AnnotateReplace => "scribobulate-annotate-replace-symbolic",
+            Icon::AnnotateDelete => "scribobulate-annotate-delete-symbolic",
             Icon::GoJump => "go-jump-symbolic",
             Icon::UnsafeImages => "scribobulate-unsafe-images-symbolic",
             Icon::ObjectFlipHorizontal => "object-flip-horizontal-symbolic",
@@ -324,7 +341,11 @@ impl Icon {
             Icon::DocumentSave => Some(Icon::SendTo),
             Icon::SendTo => Some(Icon::ViewList),
             Icon::ViewList => Some(Icon::Annotations),
-            Icon::Annotations => Some(Icon::GoJump),
+            Icon::Annotations => Some(Icon::AnnotateComment),
+            Icon::AnnotateComment => Some(Icon::AnnotateAdd),
+            Icon::AnnotateAdd => Some(Icon::AnnotateReplace),
+            Icon::AnnotateReplace => Some(Icon::AnnotateDelete),
+            Icon::AnnotateDelete => Some(Icon::GoJump),
             Icon::GoJump => Some(Icon::UnsafeImages),
             Icon::UnsafeImages => Some(Icon::ObjectFlipHorizontal),
             Icon::ObjectFlipHorizontal => Some(Icon::ObjectFlipVertical),
@@ -422,6 +443,10 @@ impl Icon {
             | Icon::SendTo
             | Icon::ViewList
             | Icon::Annotations
+            | Icon::AnnotateComment
+            | Icon::AnnotateAdd
+            | Icon::AnnotateReplace
+            | Icon::AnnotateDelete
             | Icon::GoJump
             | Icon::UnsafeImages
             | Icon::ObjectFlipHorizontal

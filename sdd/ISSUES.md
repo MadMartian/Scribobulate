@@ -71,7 +71,7 @@ in the other direction: a `CLSD-dd` number stays in the file and is never reused
 | J | Mac | Test | A macOS lifecycle test's positive control (`a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen`) intermittently finds GDK already reading the zoomed window as maximized — twice on 2026-11-26; green on re-run | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac, Linux | Test | The GTK suite on CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV or SIGABRT — four sightings (three macOS, one Linux), in four unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
-| L | Linux | Test | The XInclude screen's linear-time test intermittently fails under coverage instrumentation on CI: 10× the time for 4× the input, read as "grows faster than linear" | Low |
+| L | Linux | Test | The XInclude screen's linear-time test intermittently fails under coverage instrumentation, on CI and locally: 10× the time for 4× the input, read as "grows faster than linear" | Low |
 | M | Windows | Test | `verify-licenses.ps1` run on an installed tree always flags the three files the installer itself adds (`scribobulate.ico`, `unins000.dat`, `unins000.exe`), so its result there needs reading by hand | Low |
 | N | Mac | Production | The editor's syntax colours do not follow a live macOS light/dark switch: the title bar flips, the editor's colours stay as they were until relaunch | Low |
 | O | Any | Production | After pasting over a select-all, the status bar shows a stale selection count ("167 of 8 words") | Low |
@@ -612,7 +612,7 @@ holder; if it points at a closure or idle captured across a
 window teardown, that is an application defect (CAM § handlers on continuously firing
 signals) and this entry becomes Production scope.
 
-## L. The XInclude screen's linear-time test sometimes fails under coverage on CI
+## L. The XInclude screen's linear-time test sometimes fails under coverage
 
 **Severity**: Low (test-only; passes on re-run and in the plain test pass).
 
@@ -623,7 +623,11 @@ the cap — grows faster than linear`. The test allows `quarter × 9 + 0.5 s`; t
 10.5×. The failed job passed on re-run. Coverage runs on Linux only (`scripts/pipeline.steps`
 declares it non-applicable on Windows), so whether macOS would show it is unknowable today.
 
-**What is known**: one sighting, inside coverage instrumentation, which slows the code
+A second sighting, on the reference Linux host's local pipeline (2026-11-27, a branch adding
+toolbar icons and touching no image code): `758.892249ms at a quarter of the cap,
+8.31901741s at the cap`, about 11×. So it is not a property of CI's shared runners alone.
+
+**What is known**: two sightings, both inside coverage instrumentation, which slows the code
 unevenly and shares the runner with the rest of the suite. A real quadratic regression
 would fail the plain pass as well, and it did not.
 

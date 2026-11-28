@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+<!--
+  scribobulate-annotate-delete-symbolic — the Annotate toolbar section's Delete
+  button (suggest a deletion): lines of text with a cross in the bottom-right
+  corner. Same text lines as the add and replace icons.
+
+  Drawn to the rules spelled out in scribobulate-annotations-symbolic.svg: fills
+  only (the cross is one filled outline, not two stroked lines), and this comment
+  INSIDE <svg>.
+-->
+ <g fill="#2e3436">
+  <path d="M1 2 h14 v1 h-14 z"/>
+  <path d="M1 5 h14 v1 h-14 z"/>
+  <path d="M1 8 h5 v1 h-5 z"/>
+  <path d="M1 11 h5 v1 h-5 z"/>
+  <path d="M1 14 h5 v1 h-5 z"/>
+  <path d="M9.4 8 L12 10.6 L14.6 8 L16 9.4 L13.4 12 L16 14.6 L14.6 16 L12 13.4 L9.4 16 L8 14.6 L10.6 12 L8 9.4 Z"/>
+ </g>
+</svg>

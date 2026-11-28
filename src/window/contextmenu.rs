@@ -400,7 +400,13 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         ));
         annotate_box.append(&back_btn);
         annotate_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        for (label, action, target) in crate::app::ANNOTATE_SUBMENU {
+        for crate::app::AnnotateItem {
+            label,
+            action,
+            target,
+            ..
+        } in crate::app::ANNOTATE_SUBMENU
+        {
             let hint = target
                 .is_none()
                 .then(|| crate::app::inline_accel(action).and_then(crate::app::accel_hint))

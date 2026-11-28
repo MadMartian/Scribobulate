@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+<!--
+  scribobulate-annotate-replace-symbolic — the Annotate toolbar section's Replace
+  button (suggest a replacement): lines of text with two opposed arrows in the
+  bottom-right corner. Same text lines as the add and delete icons.
+
+  Drawn to the rules spelled out in scribobulate-annotations-symbolic.svg: fills
+  only, and this comment INSIDE <svg>.
+-->
+ <g fill="#2e3436">
+  <path d="M1 2 h14 v1 h-14 z"/>
+  <path d="M1 5 h14 v1 h-14 z"/>
+  <path d="M1 8 h5 v1 h-5 z"/>
+  <path d="M1 11 h5 v1 h-5 z"/>
+  <path d="M1 14 h5 v1 h-5 z"/>
+  <path d="M8 9 h5 v-2 l3 2.5 l-3 2.5 v-2 h-5 z"/>
+  <path d="M16 13 h-5 v-2 l-3 2.5 l3 2.5 v-2 h5 z"/>
+ </g>
+</svg>

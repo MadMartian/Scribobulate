@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+<!--
+  scribobulate-annotate-comment-symbolic — the Annotate toolbar section's Comment
+  button: the Annotations viewer's speech bubble (same outline) holding a plus,
+  so the two read as related but cannot be mistaken for each other.
+
+  Drawn to the rules spelled out in scribobulate-annotations-symbolic.svg: fills
+  only (GTK's symbolic stylesheet forces `fill` with `!important`, so a stroke
+  changes shape), the frame as one evenodd path, integer edges where the shape
+  allows, and this comment INSIDE <svg> so gdk-pixbuf's sniffer still finds `<svg`
+  in the file's first bytes.
+-->
+ <g fill="#2e3436">
+  <path fill-rule="evenodd" d="M3 1 H13 A2 2 0 0 1 15 3 V10 A2 2 0 0 1 13 12 H9 L5 15 V12 H3 A2 2 0 0 1 1 10 V3 A2 2 0 0 1 3 1 Z M3 2 A1 1 0 0 0 2 3 V10 A1 1 0 0 0 3 11 H13 A1 1 0 0 0 14 10 V3 A1 1 0 0 0 13 2 Z"/>
+  <path d="M7 3 h2 v7 h-2 z"/>
+  <path d="M4.5 5.5 h7 v2 h-7 z"/>
+ </g>
+</svg>

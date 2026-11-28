@@ -192,21 +192,31 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
 
     // ── annotate section ───────────────────────────────────────────────────────
     // Comment, Add, Replace and Delete: the Edit ▸ Annotate submenu's items, built
-    // from the same `ANNOTATE_SUBMENU` table so the two surfaces cannot drift, each
-    // bound to that item's action and target (one GAction per command). Labelled
-    // text buttons, not icons: no theme icon reads as "suggest a replacement", and
-    // the labels are the words the selection popover and both menus use.
+    // from the same `ANNOTATE_SUBMENU` table so the surfaces cannot drift, each bound
+    // to that item's action and target (one GAction per command). The glyphs are
+    // app-owned bundled icons (`Icon::Annotate*`), since no host theme names any of
+    // these four; the label is the button's accessible name and tooltip.
     // `focus_on_click(false)`: a click must not take focus from the preview or
     // editor, or it would take the selection the command acts on with it.
     let mut annotate_items: SectionItems = Vec::new();
     push(&toolbar, &mut annotate_items, make_sep());
-    for (label, action, target) in crate::app::ANNOTATE_SUBMENU {
-        let btn = gtk::Button::with_label(label);
-        crate::a11y::name(&btn, label);
+    for item in crate::app::ANNOTATE_SUBMENU {
+        let btn = gtk::Button::from_icon_name(item.icon.name());
+        // Comment carries its shortcut in the tooltip, as its menu items show it;
+        // the three suggestions have none.
+        match item
+            .target
+            .is_none()
+            .then(|| crate::app::inline_accel(item.action))
+            .flatten()
+        {
+            Some(accel) => crate::a11y::name_with_accel(&btn, item.label, accel),
+            None => crate::a11y::name(&btn, item.label),
+        }
         btn.add_css_class("flat");
         btn.set_focus_on_click(false);
-        btn.set_action_name(Some(action));
-        if let Some(target) = target {
+        btn.set_action_name(Some(item.action));
+        if let Some(target) = item.target {
             btn.set_action_target_value(Some(&target.to_variant()));
         }
         push(&toolbar, &mut annotate_items, btn);
