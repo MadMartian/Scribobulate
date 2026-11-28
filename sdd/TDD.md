@@ -3266,7 +3266,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 ### 17.72 A suggested edit's card shows the change and offers to accept it
 - **Given** the margin card of a suggested edit is open
 - **When** the reader reads it
-- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Reject (never "Remove", which reads as removing the text) — and Edit Suggestion for an addition or a replacement (17.78) — on one row, with Edit Note, which writes or edits the note like any comment (17.7, 17.67), on the row beneath
+- **Then** it spells the change out — a replacement as "Replace:" with the old text in quotes and struck through, then "With:" with the new text in quotes and in italics; an addition as "Added:" with its text in quotes and in italics; a deletion as "Removed:" with its text in quotes and struck through — followed by the note if there is one; it offers Accept edit and Reject edit (never "Remove", which reads as removing the text) — and Edit Suggestion for an addition or a replacement (17.78) — on one row, with Edit Note, which writes or edits the note like any comment (17.7, 17.67), on the row beneath
 - **And** however long the replaced text is, "With:" and the new text stay in view without scrolling the card
 
 ### 17.73 Accepting a suggested edit applies it
@@ -3276,7 +3276,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 
 ### 17.74 Rejecting a suggested edit discards it
 - **Given** a suggested edit's card is open
-- **When** the reader chooses Reject
+- **When** the reader chooses Reject edit
 - **Then** the whole construct, with its note, is replaced in the file by what was there before it — a replacement's old text, nothing for an addition, a deletion's text — so the annotation and its marker are gone and the page reads the result in the ordinary text colour; nothing else in the document changes, and Undo restores the construct
 
 ### 17.75 An annotation with a comment offers Add Follow-up

@@ -144,16 +144,16 @@ fn append_edit_remove_controls(
     let note_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let change_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let edit = gtk::Button::with_label(EDIT_NOTE);
-    // A suggestion's discard button reads "Reject": "Remove" there reads as "remove the
+    // A suggestion's discard button reads "Reject edit": "Remove" there reads as "remove the
     // text", which for a deletion is the opposite of what it does (TDD 17.74).
     let remove = gtk::Button::with_label(if m.suggestion.is_some() {
-        "Reject"
+        "Reject edit"
     } else {
         "Remove"
     });
     remove.add_css_class("destructive-action");
     note_row.append(&edit);
-    // A suggested edit can also be applied: Accept edit keeps its new side, as Reject
+    // A suggested edit can also be applied: Accept edit keeps its new side, as Reject edit
     // keeps its old (TDD 17.73, 17.74) — either may be nothing. Both are removals that differ only in
     // which side survives.
     if m.suggestion.is_some() {
